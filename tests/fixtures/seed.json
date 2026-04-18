@@ -1,0 +1,84 @@
+{
+  "trips": [
+    {
+      "name": "Japan 2026",
+      "start_date": "2026-03-15",
+      "end_date": "2026-03-29",
+      "status": "booked",
+      "destination_summary": "Tokyo, Kyoto, Osaka",
+      "travelers": [
+        {"name": "Ken", "passport_country": "CAN", "passport_expiry": "2031-06-01"},
+        {"name": "Sarah", "passport_country": "CAN", "passport_expiry": "2030-11-15"},
+        {"name": "Emma", "passport_country": "CAN", "passport_expiry": "2029-08-20"},
+        {"name": "Liam", "passport_country": "CAN", "passport_expiry": "2028-04-10"},
+        {"name": "Olivia", "passport_country": "CAN", "passport_expiry": "2028-04-10"}
+      ],
+      "legs": [
+        {
+          "leg_type": "flight",
+          "carrier": "Air Canada",
+          "flight_number": "AC003",
+          "origin": "YYZ",
+          "destination": "NRT",
+          "depart_at": "2026-03-15T13:30:00",
+          "arrive_at": "2026-03-16T16:45:00",
+          "cabin_class": "economy",
+          "cost_cad": 8500.0,
+          "confirmation_code": "ACJPN26"
+        }
+      ],
+      "stays": [
+        {
+          "stay_type": "hotel",
+          "property_name": "Shinjuku Granbell Hotel",
+          "city": "Tokyo",
+          "country": "Japan",
+          "check_in": "2026-03-16",
+          "check_out": "2026-03-22",
+          "cost_cad": 2800.0,
+          "confirmation_code": "SGH-4421"
+        }
+      ]
+    },
+    {
+      "name": "Costa Rica 2025",
+      "start_date": "2025-12-20",
+      "end_date": "2025-12-31",
+      "status": "lived",
+      "destination_summary": "San José, La Fortuna, Manuel Antonio",
+      "travelers": [
+        {"name": "Ken", "passport_country": "CAN", "passport_expiry": "2031-06-01"},
+        {"name": "Sarah", "passport_country": "CAN", "passport_expiry": "2030-11-15"},
+        {"name": "Emma", "passport_country": "CAN"},
+        {"name": "Liam", "passport_country": "CAN"},
+        {"name": "Olivia", "passport_country": "CAN"}
+      ],
+      "legs": [
+        {
+          "leg_type": "flight",
+          "carrier": "United",
+          "flight_number": "UA1842",
+          "origin": "YYZ",
+          "destination": "SJO",
+          "depart_at": "2025-12-20T07:15:00",
+          "arrive_at": "2025-12-20T14:30:00",
+          "cabin_class": "economy",
+          "cost_cad": 6200.0,
+          "confirmation_code": "UA-CR2025"
+        }
+      ],
+      "stays": [
+        {
+          "stay_type": "airbnb",
+          "property_name": "Jungle Villa La Fortuna",
+          "city": "La Fortuna",
+          "country": "Costa Rica",
+          "check_in": "2025-12-21",
+          "check_out": "2025-12-26",
+          "cost_cad": 1900.0,
+          "confirmation_code": "HMTA9BX2"
+        }
+      ]
+    }
+  ]
+}
