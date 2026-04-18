@@ -1,0 +1,45 @@
+{
+  "trips": [
+    {
+      "name": {"value": "Costa Rica Winter 2025", "confidence": 1.0},
+      "start_date": {"value": "2025-12-20", "confidence": 1.0},
+      "end_date": {"value": "2025-12-31", "confidence": 1.0},
+      "status": {"value": "lived", "confidence": 1.0},
+      "destination_summary": {"value": "San José / La Fortuna / Manuel Antonio", "confidence": 1.0},
+      "travelers": [
+        {"name": {"value": "Ken Chapman", "confidence": 1.0}, "passport_country": {"value": "CAN", "confidence": 1.0}, "passport_expiry": {"value": null, "confidence": 0.0}},
+        {"name": {"value": "Sarah Chapman", "confidence": 1.0}, "passport_country": {"value": "CAN", "confidence": 1.0}, "passport_expiry": {"value": null, "confidence": 0.0}},
+        {"name": {"value": "Emma Chapman", "confidence": 1.0}, "passport_country": {"value": "CAN", "confidence": 1.0}, "passport_expiry": {"value": null, "confidence": 0.0}},
+        {"name": {"value": "Liam Chapman", "confidence": 1.0}, "passport_country": {"value": "CAN", "confidence": 1.0}, "passport_expiry": {"value": null, "confidence": 0.0}},
+        {"name": {"value": "Olivia Chapman", "confidence": 1.0}, "passport_country": {"value": "CAN", "confidence": 1.0}, "passport_expiry": {"value": null, "confidence": 0.0}}
+      ],
+      "legs": [
+        {
+          "leg_type": {"value": "flight", "confidence": 1.0},
+          "carrier": {"value": "United Airlines", "confidence": 1.0},
+          "flight_number": {"value": "UA1842", "confidence": 1.0},
+          "origin": {"value": "YYZ", "confidence": 1.0},
+          "destination": {"value": "SJO", "confidence": 1.0},
+          "depart_at": {"value": "2025-12-20T07:15:00", "confidence": 1.0},
+          "arrive_at": {"value": "2025-12-20T14:30:00", "confidence": 1.0},
+          "cabin_class": {"value": "economy", "confidence": 1.0},
+          "cost_cad": {"value": "6200", "confidence": 1.0},
+          "confirmation_code": {"value": "UA-CR2025", "confidence": 1.0}
+        }
+      ],
+      "stays": [
+        {
+          "stay_type": {"value": "airbnb", "confidence": 1.0},
+          "property_name": {"value": "Jungle Villa La Fortuna", "confidence": 1.0},
+          "city": {"value": "La Fortuna", "confidence": 1.0},
+          "country": {"value": "Costa Rica", "confidence": 1.0},
+          "check_in": {"value": "2025-12-21", "confidence": 1.0},
+          "check_out": {"value": "2025-12-26", "confidence": 1.0},
+          "cost_cad": {"value": "1900", "confidence": 1.0},
+          "confirmation_code": {"value": "HMTA9BX2", "confidence": 1.0}
+        }
+      ]
+    }
+  ],
+  "parsing_notes": "Row-based format successfully parsed by reading label-value pairs."
+}

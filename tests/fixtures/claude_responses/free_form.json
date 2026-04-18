@@ -1,0 +1,77 @@
+{
+  "trips": [
+    {
+      "name": {"value": "Iceland Adventure July 2027", "confidence": 0.75},
+      "start_date": {"value": "2027-07-05", "confidence": 0.9},
+      "end_date": {"value": "2027-07-17", "confidence": 0.9},
+      "status": {"value": "planned", "confidence": 0.6},
+      "destination_summary": {"value": "Reykjavik, Selfoss, Husafell — ring road", "confidence": 0.85},
+      "travelers": [
+        {"name": {"value": "Ken", "confidence": 0.8}, "passport_country": {"value": "CAN", "confidence": 0.9}, "passport_expiry": {"value": "2031-06-01", "confidence": 0.65}},
+        {"name": {"value": "Sarah", "confidence": 0.8}, "passport_country": {"value": "CAN", "confidence": 0.9}, "passport_expiry": {"value": "2030-11-01", "confidence": 0.5}},
+        {"name": {"value": "Emma", "confidence": 0.8}, "passport_country": {"value": "CAN", "confidence": 0.9}, "passport_expiry": {"value": "2028-04-01", "confidence": 0.5}},
+        {"name": {"value": "Liam", "confidence": 0.8}, "passport_country": {"value": "CAN", "confidence": 0.9}, "passport_expiry": {"value": "2028-04-01", "confidence": 0.5}},
+        {"name": {"value": "Olivia", "confidence": 0.8}, "passport_country": {"value": "CAN", "confidence": 0.9}, "passport_expiry": {"value": "2028-04-01", "confidence": 0.5}}
+      ],
+      "legs": [
+        {
+          "leg_type": {"value": "flight", "confidence": 1.0},
+          "carrier": {"value": "Air Canada", "confidence": 0.9},
+          "flight_number": {"value": "AC849", "confidence": 0.95},
+          "origin": {"value": "YYZ", "confidence": 1.0},
+          "destination": {"value": "KEF", "confidence": 1.0},
+          "depart_at": {"value": "2027-07-05T18:00:00", "confidence": 0.8},
+          "arrive_at": {"value": "2027-07-06T06:00:00", "confidence": 0.75},
+          "cabin_class": {"value": null, "confidence": 0.0},
+          "cost_cad": {"value": "11000", "confidence": 0.6},
+          "confirmation_code": {"value": null, "confidence": 0.0}
+        },
+        {
+          "leg_type": {"value": "flight", "confidence": 1.0},
+          "carrier": {"value": "Air Canada", "confidence": 0.9},
+          "flight_number": {"value": "AC850", "confidence": 0.95},
+          "origin": {"value": "KEF", "confidence": 1.0},
+          "destination": {"value": "YYZ", "confidence": 1.0},
+          "depart_at": {"value": "2027-07-17T10:30:00", "confidence": 0.9},
+          "arrive_at": {"value": null, "confidence": 0.0},
+          "cabin_class": {"value": null, "confidence": 0.0},
+          "cost_cad": {"value": null, "confidence": 0.0},
+          "confirmation_code": {"value": null, "confidence": 0.0}
+        }
+      ],
+      "stays": [
+        {
+          "stay_type": {"value": "hotel", "confidence": 0.9},
+          "property_name": {"value": "Ion Adventure Hotel", "confidence": 0.95},
+          "city": {"value": "Selfoss", "confidence": 0.75},
+          "country": {"value": "Iceland", "confidence": 0.95},
+          "check_in": {"value": "2027-07-06", "confidence": 0.9},
+          "check_out": {"value": "2027-07-10", "confidence": 0.9},
+          "cost_cad": {"value": "3200", "confidence": 0.9},
+          "confirmation_code": {"value": "IONADV77", "confidence": 0.95}
+        },
+        {
+          "stay_type": {"value": "house", "confidence": 0.85},
+          "property_name": {"value": "Husafell Mountain Bungalows", "confidence": 0.9},
+          "city": {"value": "Husafell", "confidence": 0.85},
+          "country": {"value": "Iceland", "confidence": 0.9},
+          "check_in": {"value": "2027-07-10", "confidence": 0.85},
+          "check_out": {"value": "2027-07-13", "confidence": 0.8},
+          "cost_cad": {"value": "1800", "confidence": 0.9},
+          "confirmation_code": {"value": null, "confidence": 0.0}
+        },
+        {
+          "stay_type": {"value": "hotel", "confidence": 0.9},
+          "property_name": {"value": "Reykjavik Lights Hotel", "confidence": 0.95},
+          "city": {"value": "Reykjavik", "confidence": 1.0},
+          "country": {"value": "Iceland", "confidence": 0.95},
+          "check_in": {"value": "2027-07-13", "confidence": 0.85},
+          "check_out": {"value": "2027-07-17", "confidence": 0.85},
+          "cost_cad": {"value": "2600", "confidence": 0.9},
+          "confirmation_code": {"value": "RLH-5519", "confidence": 0.95}
+        }
+      ]
+    }
+  ],
+  "parsing_notes": "Free-form prose required inference for dates and costs. Flight cost of CAD 11000 appears to be total for 5 passengers. Passport expiry dates for kids are approximate (April 2028 from text). Trip name constructed from prose."
+}

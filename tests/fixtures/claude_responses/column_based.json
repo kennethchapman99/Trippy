@@ -1,0 +1,67 @@
+{
+  "trips": [
+    {
+      "name": {"value": "Japan 2026", "confidence": 1.0},
+      "start_date": {"value": "2026-03-15", "confidence": 1.0},
+      "end_date": {"value": "2026-03-29", "confidence": 1.0},
+      "status": {"value": "booked", "confidence": 1.0},
+      "destination_summary": {"value": "Tokyo, Kyoto, Osaka", "confidence": 1.0},
+      "travelers": [
+        {"name": {"value": "Ken Chapman", "confidence": 1.0}, "passport_country": {"value": "CAN", "confidence": 1.0}, "passport_expiry": {"value": "2031-06-01", "confidence": 1.0}},
+        {"name": {"value": "Sarah Chapman", "confidence": 1.0}, "passport_country": {"value": "CAN", "confidence": 1.0}, "passport_expiry": {"value": "2030-11-15", "confidence": 1.0}},
+        {"name": {"value": "Emma Chapman", "confidence": 1.0}, "passport_country": {"value": "CAN", "confidence": 1.0}, "passport_expiry": {"value": "2029-08-20", "confidence": 1.0}},
+        {"name": {"value": "Liam Chapman", "confidence": 1.0}, "passport_country": {"value": "CAN", "confidence": 1.0}, "passport_expiry": {"value": "2028-04-10", "confidence": 1.0}},
+        {"name": {"value": "Olivia Chapman", "confidence": 1.0}, "passport_country": {"value": "CAN", "confidence": 1.0}, "passport_expiry": {"value": "2028-04-10", "confidence": 1.0}}
+      ],
+      "legs": [
+        {
+          "leg_type": {"value": "flight", "confidence": 1.0},
+          "carrier": {"value": "Air Canada", "confidence": 1.0},
+          "flight_number": {"value": "AC003", "confidence": 1.0},
+          "origin": {"value": "YYZ", "confidence": 1.0},
+          "destination": {"value": "NRT", "confidence": 1.0},
+          "depart_at": {"value": "2026-03-15T13:30:00", "confidence": 1.0},
+          "arrive_at": {"value": "2026-03-16T16:45:00", "confidence": 1.0},
+          "cabin_class": {"value": "economy", "confidence": 1.0},
+          "cost_cad": {"value": "8500", "confidence": 1.0},
+          "confirmation_code": {"value": "ACJPN26", "confidence": 1.0}
+        },
+        {
+          "leg_type": {"value": "flight", "confidence": 1.0},
+          "carrier": {"value": "Air Canada", "confidence": 1.0},
+          "flight_number": {"value": "AC004", "confidence": 1.0},
+          "origin": {"value": "NRT", "confidence": 1.0},
+          "destination": {"value": "YYZ", "confidence": 1.0},
+          "depart_at": {"value": "2026-03-29T18:00:00", "confidence": 1.0},
+          "arrive_at": {"value": "2026-03-29T16:30:00", "confidence": 1.0},
+          "cabin_class": {"value": "economy", "confidence": 1.0},
+          "cost_cad": {"value": null, "confidence": 0.0},
+          "confirmation_code": {"value": "ACJPN26R", "confidence": 1.0}
+        }
+      ],
+      "stays": [
+        {
+          "stay_type": {"value": "hotel", "confidence": 1.0},
+          "property_name": {"value": "Shinjuku Granbell Hotel", "confidence": 1.0},
+          "city": {"value": "Tokyo", "confidence": 1.0},
+          "country": {"value": "Japan", "confidence": 1.0},
+          "check_in": {"value": "2026-03-16", "confidence": 1.0},
+          "check_out": {"value": "2026-03-22", "confidence": 1.0},
+          "cost_cad": {"value": "2800", "confidence": 1.0},
+          "confirmation_code": {"value": "SGH-4421", "confidence": 1.0}
+        },
+        {
+          "stay_type": {"value": "hotel", "confidence": 1.0},
+          "property_name": {"value": "The Westin Miyako Kyoto", "confidence": 1.0},
+          "city": {"value": "Kyoto", "confidence": 1.0},
+          "country": {"value": "Japan", "confidence": 1.0},
+          "check_in": {"value": "2026-03-22", "confidence": 1.0},
+          "check_out": {"value": "2026-03-25", "confidence": 1.0},
+          "cost_cad": {"value": "2100", "confidence": 1.0},
+          "confirmation_code": {"value": "WMK-8832", "confidence": 1.0}
+        }
+      ]
+    }
+  ],
+  "parsing_notes": "Clean column-based sheet. All fields extracted with high confidence."
+}

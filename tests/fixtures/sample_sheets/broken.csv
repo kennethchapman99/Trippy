@@ -1,0 +1,13 @@
+Trip,,,,
+,2026
+Travelers,,,,
+Name,,,
+"Ken, ""the traveler""",bad date,???
+,,,missing fields
+Flights
+From,To
+YYZ
+,,,,,,,,,,,,,,
+Status,UNKNOWN_STATUS_VALUE
+Cost,not-a-number
+Date,32/13/2026

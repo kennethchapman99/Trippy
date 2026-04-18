@@ -1,0 +1,35 @@
+Field,Value
+Trip Name,Costa Rica Winter 2025
+Start Date,2025-12-20
+End Date,2025-12-31
+Status,lived
+Destination,San José / La Fortuna / Manuel Antonio
+,
+Travelers,
+Name,Passport
+Ken Chapman,CAN
+Sarah Chapman,CAN
+Emma Chapman,CAN
+Liam Chapman,CAN
+Olivia Chapman,CAN
+,
+Flight,
+Carrier,United Airlines
+Flight Number,UA1842
+From,YYZ
+To,SJO
+Departure,2025-12-20T07:15:00
+Arrival,2025-12-20T14:30:00
+Cabin,economy
+Cost CAD,6200
+Confirmation,UA-CR2025
+,
+Accommodation,
+Property,Jungle Villa La Fortuna
+Type,airbnb
+City,La Fortuna
+Country,Costa Rica
+Check In,2025-12-21
+Check Out,2025-12-26
+Cost CAD,1900
+Confirmation,HMTA9BX2

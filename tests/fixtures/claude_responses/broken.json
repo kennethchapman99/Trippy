@@ -1,0 +1,30 @@
+{
+  "trips": [
+    {
+      "name": {"value": "Trip", "confidence": 0.3},
+      "start_date": {"value": null, "confidence": 0.0},
+      "end_date": {"value": null, "confidence": 0.0},
+      "status": {"value": "planned", "confidence": 0.2},
+      "destination_summary": {"value": null, "confidence": 0.0},
+      "travelers": [
+        {"name": {"value": "Ken", "confidence": 0.4}, "passport_country": {"value": null, "confidence": 0.0}, "passport_expiry": {"value": null, "confidence": 0.0}}
+      ],
+      "legs": [
+        {
+          "leg_type": {"value": "flight", "confidence": 0.4},
+          "carrier": {"value": null, "confidence": 0.0},
+          "flight_number": {"value": null, "confidence": 0.0},
+          "origin": {"value": "YYZ", "confidence": 0.5},
+          "destination": {"value": null, "confidence": 0.0},
+          "depart_at": {"value": null, "confidence": 0.0},
+          "arrive_at": {"value": null, "confidence": 0.0},
+          "cabin_class": {"value": null, "confidence": 0.0},
+          "cost_cad": {"value": null, "confidence": 0.0},
+          "confirmation_code": {"value": null, "confidence": 0.0}
+        }
+      ],
+      "stays": []
+    }
+  ],
+  "parsing_notes": "Severely malformed sheet: missing trip name, invalid date formats (32/13/2026), non-numeric cost, unknown status value. Extracted minimal data with very low confidence. Human review required for all fields."
+}

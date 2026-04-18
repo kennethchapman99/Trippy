@@ -1,0 +1,67 @@
+{
+  "trips": [
+    {
+      "name": {"value": "Portugal 2027", "confidence": 1.0},
+      "start_date": {"value": "2027-06-10", "confidence": 1.0},
+      "end_date": {"value": "2027-06-24", "confidence": 1.0},
+      "status": {"value": "planned", "confidence": 1.0},
+      "destination_summary": {"value": "Lisbon, Porto, Douro Valley", "confidence": 1.0},
+      "travelers": [
+        {"name": {"value": "Ken", "confidence": 0.8}, "passport_country": {"value": "CAN", "confidence": 0.7}, "passport_expiry": {"value": null, "confidence": 0.0}},
+        {"name": {"value": "Sarah", "confidence": 0.8}, "passport_country": {"value": "CAN", "confidence": 0.7}, "passport_expiry": {"value": null, "confidence": 0.0}},
+        {"name": {"value": "Emma", "confidence": 0.8}, "passport_country": {"value": "CAN", "confidence": 0.7}, "passport_expiry": {"value": null, "confidence": 0.0}},
+        {"name": {"value": "Liam", "confidence": 0.8}, "passport_country": {"value": "CAN", "confidence": 0.7}, "passport_expiry": {"value": null, "confidence": 0.0}},
+        {"name": {"value": "Olivia", "confidence": 0.8}, "passport_country": {"value": "CAN", "confidence": 0.7}, "passport_expiry": {"value": null, "confidence": 0.0}}
+      ],
+      "legs": [
+        {
+          "leg_type": {"value": "flight", "confidence": 1.0},
+          "carrier": {"value": "TAP Air Portugal", "confidence": 1.0},
+          "flight_number": {"value": "TP253", "confidence": 1.0},
+          "origin": {"value": "YYZ", "confidence": 1.0},
+          "destination": {"value": "LIS", "confidence": 1.0},
+          "depart_at": {"value": "2027-06-10T19:45:00", "confidence": 1.0},
+          "arrive_at": {"value": "2027-06-11T07:30:00", "confidence": 1.0},
+          "cabin_class": {"value": null, "confidence": 0.0},
+          "cost_cad": {"value": "9500", "confidence": 1.0},
+          "confirmation_code": {"value": null, "confidence": 0.0}
+        },
+        {
+          "leg_type": {"value": "flight", "confidence": 1.0},
+          "carrier": {"value": "TAP Air Portugal", "confidence": 1.0},
+          "flight_number": {"value": "TP254", "confidence": 1.0},
+          "origin": {"value": "LIS", "confidence": 1.0},
+          "destination": {"value": "YYZ", "confidence": 1.0},
+          "depart_at": {"value": "2027-06-24T10:00:00", "confidence": 1.0},
+          "arrive_at": {"value": "2027-06-24T13:15:00", "confidence": 1.0},
+          "cabin_class": {"value": null, "confidence": 0.0},
+          "cost_cad": {"value": null, "confidence": 0.0},
+          "confirmation_code": {"value": null, "confidence": 0.0}
+        }
+      ],
+      "stays": [
+        {
+          "stay_type": {"value": "hotel", "confidence": 1.0},
+          "property_name": {"value": "Bairro Alto Hotel", "confidence": 1.0},
+          "city": {"value": "Lisbon", "confidence": 1.0},
+          "country": {"value": "Portugal", "confidence": 0.9},
+          "check_in": {"value": "2027-06-11", "confidence": 1.0},
+          "check_out": {"value": "2027-06-17", "confidence": 1.0},
+          "cost_cad": {"value": "4200", "confidence": 1.0},
+          "confirmation_code": {"value": null, "confidence": 0.0}
+        },
+        {
+          "stay_type": {"value": "hotel", "confidence": 1.0},
+          "property_name": {"value": "Yeatman Hotel", "confidence": 1.0},
+          "city": {"value": "Porto", "confidence": 1.0},
+          "country": {"value": "Portugal", "confidence": 0.9},
+          "check_in": {"value": "2027-06-17", "confidence": 1.0},
+          "check_out": {"value": "2027-06-21", "confidence": 1.0},
+          "cost_cad": {"value": "3100", "confidence": 1.0},
+          "confirmation_code": {"value": null, "confidence": 0.0}
+        }
+      ]
+    }
+  ],
+  "parsing_notes": "Multi-tab workbook: Trip Overview, Flights, and Hotels sheets combined. Traveler first names extracted from comma-separated list in Overview tab; passport details not provided."
+}
