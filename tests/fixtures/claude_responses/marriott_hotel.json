@@ -1,0 +1,20 @@
+{
+  "confirmation_type": "hotel",
+  "confirmation_code": "MRRT-20260316-00451",
+  "vendor": "Marriott",
+  "origin": null,
+  "destination": null,
+  "depart_at": null,
+  "arrive_at": null,
+  "flight_number": null,
+  "cabin_class": null,
+  "property_name": "Tokyo Marriott Hotel",
+  "city": "Tokyo",
+  "country": "Japan",
+  "check_in": "2026-03-18",
+  "check_out": "2026-03-20",
+  "cost_cad": 640.0,
+  "traveler_names": ["Kenneth Chapman"],
+  "notes": "King Deluxe Room, 2 nights",
+  "confidence": 0.99
+}

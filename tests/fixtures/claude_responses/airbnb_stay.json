@@ -1,0 +1,20 @@
+{
+  "confirmation_type": "hotel",
+  "confirmation_code": "HMXK234567",
+  "vendor": "Airbnb",
+  "origin": null,
+  "destination": null,
+  "depart_at": null,
+  "arrive_at": null,
+  "flight_number": null,
+  "cabin_class": null,
+  "property_name": "Casa del Sol",
+  "city": "Nosara",
+  "country": "Costa Rica",
+  "check_in": "2025-01-12",
+  "check_out": "2025-01-19",
+  "cost_cad": 1890.0,
+  "traveler_names": ["Kenneth Chapman"],
+  "notes": "No smoking, no parties. Host: Maria",
+  "confidence": 0.97
+}

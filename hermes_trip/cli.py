@@ -163,6 +163,64 @@ def show_trip(
         _print_trip_detail(trip)
 
 
+@app.command("ingest-emails")
+def ingest_emails(
+    max_results: int = typer.Option(50, "--max", help="Max emails to fetch"),
+    label: str = typer.Option("INBOX", "--label", help="Gmail label to fetch from"),
+) -> None:
+    """Fetch new booking confirmation emails from Gmail and ingest them."""
+    from hermes_trip import config
+    from hermes_trip.db import make_session_factory
+    from hermes_trip.ingest.gmail_watcher import GmailWatcher
+    from hermes_trip.ingest.linker import ingest_email
+    from hermes_trip.ingest.parser import ConfirmationParser
+
+    watcher = GmailWatcher()
+    watcher.authenticate()
+
+    console.print(f"[bold]Fetching[/bold] up to {max_results} messages from {label}…")
+    emails = watcher.fetch_new_messages(label=label, max_results=max_results)
+    console.print(f"Found {len(emails)} message(s) from trusted senders.")
+
+    parser = ConfirmationParser()
+    factory = make_session_factory()
+    linked = unlinked = skipped = 0
+
+    for email_content in emails:
+        eml_path = watcher.save_to_vault(email_content, config.VAULT_PATH)
+        atts = [
+            (a.filename, a.content_type, a.data) for a in email_content.attachments
+        ]
+        result = parser.parse(
+            body_text=email_content.body_text,
+            body_html=email_content.body_html,
+            attachments=atts,
+            eml_path=eml_path,
+        )
+        if not result.ok or result.confirmation is None:
+            console.print(f"  [yellow]skipped[/yellow] {email_content.subject!r}: {result.error}")
+            skipped += 1
+            continue
+
+        with factory() as session:
+            link = ingest_email(result.confirmation, session, raw_email_path=str(eml_path))
+
+        icon = "[green]✓[/green]" if link.linked else "[yellow]?[/yellow]"
+        trip_label = f"trip {link.trip_id}" if link.linked else "unlinked inbox"
+        console.print(
+            f"  {icon} {result.confirmation.confirmation_code!r} "
+            f"({result.confirmation.vendor}) → {trip_label} [{link.method}]"
+        )
+        if link.linked:
+            linked += 1
+        else:
+            unlinked += 1
+
+    console.print(
+        f"\n[bold]Done.[/bold] {linked} linked · {unlinked} unlinked · {skipped} skipped"
+    )
+
+
 @app.command("review")
 def review_trip(
     trip_id: int = typer.Argument(..., help="Trip ID to review"),

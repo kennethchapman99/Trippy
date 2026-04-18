@@ -1,0 +1,30 @@
+From: noreply@aircanada.com
+Subject: Your Air Canada booking confirmation — AC003
+Date: Mon, 10 Feb 2026 09:15:00 -0500
+
+Dear Kenneth Chapman,
+
+Your booking is confirmed!
+
+Booking Reference: ABC123
+
+FLIGHT DETAILS
+--------------
+Air Canada Flight AC003
+Toronto (YYZ) → Tokyo Narita (NRT)
+Departure: Monday, March 15, 2026 at 13:30
+Arrival: Tuesday, March 16, 2026 at 17:45 (next day)
+Cabin: Economy
+
+Passengers:
+- Kenneth Chapman
+- Melissa Chapman
+- Emma Chapman
+- Liam Chapman
+- Sophie Chapman
+
+Total Cost: CAD $8,500.00
+
+Manage your booking at aircanada.com/manage
+
+Thank you for choosing Air Canada.

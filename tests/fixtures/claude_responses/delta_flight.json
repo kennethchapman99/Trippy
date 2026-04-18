@@ -1,0 +1,20 @@
+{
+  "confirmation_type": "flight",
+  "confirmation_code": "DL4422PQ",
+  "vendor": "Delta Air Lines",
+  "origin": "ATL",
+  "destination": "CDG",
+  "depart_at": "2026-04-07T17:05:00",
+  "arrive_at": "2026-04-08T07:25:00",
+  "flight_number": "DL441",
+  "cabin_class": "Comfort+",
+  "property_name": null,
+  "city": null,
+  "country": null,
+  "check_in": null,
+  "check_out": null,
+  "cost_cad": null,
+  "traveler_names": ["Kenneth Chapman"],
+  "notes": "USD $987.50",
+  "confidence": 0.95
+}

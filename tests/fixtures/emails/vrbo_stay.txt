@@ -1,0 +1,22 @@
+From: no-reply@vrbo.com
+Subject: VRBO Booking Confirmation
+Date: Sat, 14 Mar 2026 08:00:00 +0000
+
+Hi Kenneth,
+
+Your VRBO booking is confirmed.
+
+Booking ID: VRBO-8812345
+
+Property: Luxury Villa Reykjavik
+Reykjavik, Iceland
+
+Check-In: Friday, July 10, 2026
+Check-Out: Friday, July 17, 2026
+Guests: 5
+
+Total: USD $2,100.00 (approx. CAD $2,875.00)
+
+Host: Gudrun Sigurdardottir will contact you with access instructions.
+
+vrbo.com/bookings

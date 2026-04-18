@@ -1,0 +1,20 @@
+{
+  "confirmation_type": "hotel",
+  "confirmation_code": "BK-99887766",
+  "vendor": "Booking.com",
+  "origin": null,
+  "destination": null,
+  "depart_at": null,
+  "arrive_at": null,
+  "flight_number": null,
+  "cabin_class": null,
+  "property_name": "Shinjuku Granbell Hotel",
+  "city": "Tokyo",
+  "country": "Japan",
+  "check_in": "2026-03-16",
+  "check_out": "2026-03-23",
+  "cost_cad": 2450.0,
+  "traveler_names": ["Kenneth Chapman"],
+  "notes": "7 nights, 2 rooms, breakfast not included",
+  "confidence": 0.95
+}

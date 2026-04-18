@@ -1,0 +1,25 @@
+From: unitedairlines@united.com
+Subject: United Airlines Confirmation — UA1842
+Date: Thu, 5 Dec 2024 14:22:00 -0600
+
+Hi Kenneth,
+
+Your trip is confirmed. Here are your flight details.
+
+Confirmation Number: XY7890
+
+Outbound Flight
+UA1842 | Toronto (YYZ) → San Jose (SJO)
+Date: Saturday, January 11, 2025
+Departs: 08:45 AM EST
+Arrives: 01:30 PM CST
+Class: Economy
+
+Travelers: Kenneth Chapman, Melissa Chapman, Emma Chapman, Liam Chapman, Sophie Chapman
+
+Fare Summary
+Base Fare: USD $3,200.00
+Taxes & Fees: USD $412.50
+Total: USD $3,612.50
+
+Thank you for choosing United Airlines.

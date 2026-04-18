@@ -1,0 +1,20 @@
+{
+  "confirmation_type": "hotel",
+  "confirmation_code": "VRBO-8812345",
+  "vendor": "VRBO",
+  "origin": null,
+  "destination": null,
+  "depart_at": null,
+  "arrive_at": null,
+  "flight_number": null,
+  "cabin_class": null,
+  "property_name": "Luxury Villa Reykjavik",
+  "city": "Reykjavik",
+  "country": "Iceland",
+  "check_in": "2026-07-10",
+  "check_out": "2026-07-17",
+  "cost_cad": 2875.0,
+  "traveler_names": ["Kenneth Chapman"],
+  "notes": "5 guests, host Gudrun Sigurdardottir",
+  "confidence": 0.94
+}

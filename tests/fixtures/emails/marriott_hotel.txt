@@ -1,0 +1,26 @@
+From: marriott@marriott.com
+Subject: Marriott Reservation Confirmation
+Date: Wed, 18 Feb 2026 16:45:00 +0000
+
+Dear Mr. Chapman,
+
+Thank you for choosing Marriott. Your reservation is confirmed.
+
+Confirmation #: MRRT-20260316-00451
+
+Property: Tokyo Marriott Hotel
+4-7-36 Kitashinagawa, Shinagawa-ku
+Tokyo, 140-0001, Japan
+
+Arrival: Wednesday, March 18, 2026
+Departure: Friday, March 20, 2026
+Room Type: King Deluxe Room
+Number of Guests: 2
+
+Rate: CAD $320.00 per night
+Total: CAD $640.00
+
+Marriott Bonvoy Member: Kenneth Chapman (#987654321)
+
+For assistance: 1-888-236-2427
+marriott.com/reservation

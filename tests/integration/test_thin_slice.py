@@ -50,9 +50,76 @@ def test_import_sheet_creates_trip() -> None:
         assert str(trip.start_date) == "2026-03-15"
 
 
-@pytest.mark.skip(reason="Phase 2 not yet implemented")
 def test_confirmation_email_links_to_leg() -> None:
     """Phase 2: Feed mock confirmation email → leg linked."""
+    import json
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from sqlalchemy import create_engine
+
+    from hermes_trip.db import make_session_factory
+    from hermes_trip.db.models import Base, Leg, Trip
+    from hermes_trip.ingest.linker import ingest_email
+    from hermes_trip.ingest.parser import ConfirmationParser
+
+    fixtures = Path(__file__).parent.parent / "fixtures"
+
+    # --- set up DB with Japan 2026 trip + leg ---
+    with tempfile.TemporaryDirectory() as tmp:
+        db_url = f"sqlite:///{tmp}/thin2.db"
+        engine = create_engine(db_url)
+        Base.metadata.create_all(engine)
+        engine.dispose()
+
+        from datetime import date, datetime
+
+        factory = make_session_factory(db_url)
+        with factory() as session:
+            trip = Trip(
+                name="Japan 2026",
+                start_date=date(2026, 3, 15),
+                end_date=date(2026, 3, 29),
+                status="booked",
+            )
+            session.add(trip)
+            session.flush()
+            leg = Leg(
+                trip_id=trip.id,
+                leg_type="flight",
+                carrier="Air Canada",
+                flight_number="AC003",
+                origin="YYZ",
+                destination="NRT",
+                depart_at=datetime(2026, 3, 15, 13, 30),
+                arrive_at=datetime(2026, 3, 16, 17, 45),
+            )
+            session.add(leg)
+            session.commit()
+            trip_id = trip.id
+
+        # --- mock parser ---
+        raw = json.loads((fixtures / "claude_responses" / "aircanada_flight.json").read_text())
+        block = MagicMock()
+        block.type = "tool_use"
+        block.name = "extract_confirmation"
+        block.input = raw
+        msg = MagicMock()
+        msg.content = [block]
+        client = MagicMock()
+        client.messages.create.return_value = msg
+
+        email_text = (fixtures / "emails" / "aircanada_flight.txt").read_text()
+        parser = ConfirmationParser(anthropic_client=client)
+        result = parser.parse(body_text=email_text)
+        assert result.ok and result.confirmation is not None
+
+        with factory() as session:
+            link = ingest_email(result.confirmation, session)
+
+        assert link.linked
+        assert link.trip_id == trip_id
 
 
 @pytest.mark.skip(reason="Phase 3 not yet implemented")
