@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,14 @@ class ParsedConfirmation(BaseModel):
     confirmation_type: str  # flight | hotel | rental | tour | transfer | other
     confirmation_code: str
     vendor: str
+
+    @field_validator("confirmation_code", mode="before")
+    @classmethod
+    def _normalise_code(cls, v: object) -> str:
+        from html import unescape
+
+        s = unescape(str(v)).strip().strip("<>").strip()
+        return s or "UNKNOWN"
     # Flight-specific
     origin: str | None = None
     destination: str | None = None
@@ -170,7 +178,10 @@ class ConfirmationParser:
             # Strip tags crudely for context; not perfect but helps Claude
             import re
 
-            clean = re.sub(r"<[^>]+>", " ", body_html)
+            from html import unescape
+
+            clean = unescape(body_html)
+            clean = re.sub(r"<[^>]+>", " ", clean)
             clean = re.sub(r"\s{2,}", " ", clean).strip()
             content_parts.append(f"=== EMAIL BODY (HTML, tags stripped) ===\n{clean}")
 

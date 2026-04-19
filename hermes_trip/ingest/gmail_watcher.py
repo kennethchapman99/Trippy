@@ -32,6 +32,18 @@ SENDER_ALLOWLIST: frozenset[str] = frozenset(
         "jetblue.com",
         "porter.com",
         "flyporter.com",
+        "airtransat.com",
+        "transat.com",
+        "sunwing.com",
+        "flair.ca",
+        "flyflair.com",
+        "cathaypacific.com",
+        "airindia.com",
+        "emirates.com",
+        "etihad.com",
+        "turkishairlines.com",
+        "singaporeair.com",
+        "qatarairways.com",
         # Accommodation platforms
         "booking.com",
         "airbnb.com",
@@ -237,10 +249,15 @@ class GmailWatcher:
             self.authenticate()
         service: Any = self._service
 
+        # Narrow to booking-confirmation-like emails to avoid wasting fetch budget
+        query = (
+            "subject:(confirmation OR booking OR reservation OR itinerary OR "
+            "\"your trip\" OR \"order confirmed\" OR \"e-ticket\")"
+        )
         results: dict[str, Any] = (
             service.users()
             .messages()
-            .list(userId="me", labelIds=[label], maxResults=max_results)
+            .list(userId="me", labelIds=[label], maxResults=max_results, q=query)
             .execute()
         )
         messages_meta = results.get("messages", [])

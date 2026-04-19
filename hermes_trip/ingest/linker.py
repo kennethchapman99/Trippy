@@ -86,9 +86,39 @@ class TripLinker:
     ) -> LinkResult:
         """Persist the confirmation and attempt to link it to a trip.
 
+        Deduplicates on (confirmation_code, vendor): if a non-UNKNOWN code
+        already exists, skip re-insert but upgrade trip_id if it was unlinked.
         Returns a LinkResult describing what happened.
         """
         trip_id, method = self._find_trip(parsed)
+
+        # Deduplicate: check for existing record with same code + vendor
+        is_unknown = parsed.confirmation_code.upper().startswith("UNKNOWN")
+        existing: Confirmation | None = None
+        if not is_unknown:
+            from sqlalchemy import func, select
+
+            existing = self._session.execute(
+                select(Confirmation).where(
+                    func.upper(Confirmation.confirmation_code)
+                    == parsed.confirmation_code.upper(),
+                    Confirmation.vendor == parsed.vendor,
+                )
+            ).scalar_one_or_none()
+
+        if existing is not None:
+            # Upgrade trip_id if we now have a match but didn't before
+            if existing.trip_id is None and trip_id is not None:
+                existing.trip_id = trip_id
+                existing.linked_at = datetime.utcnow()
+                self._session.flush()
+            logger.debug("Duplicate confirmation %s — skipped", parsed.confirmation_code)
+            return LinkResult(
+                confirmation_id=existing.id,
+                trip_id=existing.trip_id,
+                linked=existing.trip_id is not None,
+                method="duplicate",
+            )
 
         conf = Confirmation(
             trip_id=trip_id,
