@@ -256,33 +256,68 @@ def _read_csv(path: Path) -> str:
     raise ValueError(f"Could not decode {path} with utf-8-sig, utf-8, or latin-1")
 
 
-def _read_google_sheets(url: str) -> str:
-    """Export Google Sheets URL to CSV text (requires public sharing or API key)."""
-    import urllib.request
-
-    # Convert edit/view URL to CSV export URL
-    csv_url = re.sub(r"/edit.*$", "/export?format=csv", url)
-    csv_url = re.sub(r"/view.*$", "/export?format=csv", csv_url)
-    if "export" not in csv_url:
-        csv_url = url.rstrip("/") + "/export?format=csv"
-    try:
-        with urllib.request.urlopen(csv_url, timeout=30) as resp:  # noqa: S310
-            raw = resp.read().decode("utf-8-sig")
-        reader = csv.reader(io.StringIO(raw))
-        return "\n".join("\t".join(row) for row in reader)
-    except Exception as exc:
-        raise ValueError(
-            f"Could not fetch Google Sheets URL. "
-            f"Make sure the sheet is publicly shared (Anyone with link → Viewer). "
-            f"Error: {exc}"
-        ) from exc
+def _spreadsheet_id_from_url_or_id(url_or_id: str) -> str:
+    """Extract spreadsheet ID from a Google Sheets URL, or return a bare ID unchanged."""
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url_or_id)
+    if m:
+        return m.group(1)
+    if re.fullmatch(r"[a-zA-Z0-9_-]+", url_or_id):
+        return url_or_id
+    raise ValueError(f"Cannot extract spreadsheet ID from: {url_or_id!r}")
 
 
-def read_sheet_to_text(source: str | Path) -> str:
-    """Read any supported source (path or URL) into plain text for Claude."""
+def _read_google_sheets_api(
+    spreadsheet_id: str,
+    sheets_service: Any | None = None,
+    auth_manager: Any | None = None,
+) -> str:
+    """Read all tabs of a Google Sheet via the Sheets API v4.
+
+    Works for private sheets (requires OAuth2 via auth_manager or sheets_service).
+    """
+    if sheets_service is None:
+        if auth_manager is None:
+            from hermes_trip.ingest.google_auth import GoogleAuthManager
+
+            auth_manager = GoogleAuthManager()
+        sheets_service = auth_manager.build_service("sheets", "v4")
+
+    response = (
+        sheets_service.spreadsheets()
+        .get(spreadsheetId=spreadsheet_id, includeGridData=True)
+        .execute()
+    )
+
+    parts: list[str] = []
+    for sheet in response.get("sheets", []):
+        title = sheet.get("properties", {}).get("title", "Sheet")
+        rows: list[str] = []
+        for row_data in (sheet.get("data") or [{}])[0].get("rowData", []):
+            cells = [
+                cell.get("formattedValue", "")
+                for cell in (row_data.get("values") or [])
+            ]
+            rows.append("\t".join(cells))
+            if len(rows) >= MAX_ROWS_PER_SHEET:
+                break
+        parts.append(f"=== Sheet: {title} ===\n" + "\n".join(rows))
+
+    return "\n\n".join(parts)
+
+
+def read_sheet_to_text(
+    source: str | Path,
+    sheets_service: Any | None = None,
+    auth_manager: Any | None = None,
+) -> str:
+    """Read any supported source (path, URL, or spreadsheet ID) into plain text for Claude."""
     s = str(source)
     if s.startswith("https://docs.google.com/spreadsheets"):
-        return _read_google_sheets(s)
+        spreadsheet_id = _spreadsheet_id_from_url_or_id(s)
+        return _read_google_sheets_api(spreadsheet_id, sheets_service, auth_manager)
+    # Bare spreadsheet ID (no slashes, alphanumeric + _ -)
+    if re.fullmatch(r"[a-zA-Z0-9_-]{20,}", s):
+        return _read_google_sheets_api(s, sheets_service, auth_manager)
     path = Path(s)
     if not path.exists():
         raise FileNotFoundError(f"Sheet file not found: {path}")
@@ -486,9 +521,13 @@ class SheetImporter:
         self,
         db_url: str | None = None,
         anthropic_client: anthropic.Anthropic | None = None,
+        auth_manager: Any | None = None,
+        sheets_service: Any | None = None,
     ) -> None:
         self._db_url = db_url
         self._client = anthropic_client or anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        self._auth_manager = auth_manager
+        self._sheets_service = sheets_service
 
     # ------------------------------------------------------------------
     # Public API
@@ -498,7 +537,11 @@ class SheetImporter:
         """Import a single xlsx/csv file or Google Sheets URL."""
         result = ImportResult(source=str(source))
         try:
-            sheet_text = read_sheet_to_text(source)
+            sheet_text = read_sheet_to_text(
+                source,
+                sheets_service=self._sheets_service,
+                auth_manager=self._auth_manager,
+            )
         except Exception as exc:
             result.errors.append(f"Could not read file: {exc}")
             return result
@@ -568,7 +611,7 @@ class SheetImporter:
 
         message = self._client.messages.create(
             model="claude-opus-4-7",
-            max_tokens=4096,
+            max_tokens=8192,
             system=SYSTEM_PROMPT,
             tools=[tool],
             tool_choice=tool_choice,

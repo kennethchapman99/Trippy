@@ -16,6 +16,8 @@ from hermes_trip.importers.sheet_importer import (
     _parse_date,
     _parse_datetime,
     _parse_float,
+    _read_google_sheets_api,
+    _spreadsheet_id_from_url_or_id,
     read_sheet_to_text,
 )
 
@@ -331,3 +333,82 @@ class TestCollectFlags:
             f for f in flags if f.value is not None and f.confidence >= CONFIDENCE_THRESHOLD
         ]
         assert len(high_conf_with_value) == 0
+
+
+# ---------------------------------------------------------------------------
+# Google Sheets API tests
+# ---------------------------------------------------------------------------
+
+
+class TestSpreadsheetIdFromUrl:
+    def test_full_edit_url(self) -> None:
+        url = "https://docs.google.com/spreadsheets/d/1ABC123xyz/edit#gid=0"
+        assert _spreadsheet_id_from_url_or_id(url) == "1ABC123xyz"
+
+    def test_url_with_usp_sharing(self) -> None:
+        url = "https://docs.google.com/spreadsheets/d/1brg_D0qM_UCLI/edit?usp=sharing"
+        assert _spreadsheet_id_from_url_or_id(url) == "1brg_D0qM_UCLI"
+
+    def test_bare_id_passthrough(self) -> None:
+        assert _spreadsheet_id_from_url_or_id("1ABC123xyz") == "1ABC123xyz"
+
+    def test_invalid_raises(self) -> None:
+        with pytest.raises(ValueError, match="Cannot extract"):
+            _spreadsheet_id_from_url_or_id("not a valid id!")
+
+
+class TestReadGoogleSheetsApi:
+    def _make_sheets_service(self, sheets_data: list[dict[str, object]]) -> MagicMock:
+        service = MagicMock()
+        service.spreadsheets().get().execute.return_value = {"sheets": sheets_data}
+        return service
+
+    def test_multi_tab_output_has_headers(self) -> None:
+        service = self._make_sheets_service([
+            {"properties": {"title": "Flights"}, "data": [{"rowData": [
+                {"values": [{"formattedValue": "Origin"}, {"formattedValue": "Dest"}]},
+                {"values": [{"formattedValue": "YYZ"}, {"formattedValue": "NRT"}]},
+            ]}]},
+            {"properties": {"title": "Hotels"}, "data": [{"rowData": [
+                {"values": [{"formattedValue": "Hotel"}, {"formattedValue": "City"}]},
+            ]}]},
+        ])
+        text = _read_google_sheets_api("FAKE_ID", sheets_service=service)
+        assert "=== Sheet: Flights ===" in text
+        assert "=== Sheet: Hotels ===" in text
+        assert "YYZ" in text
+
+    def test_empty_sheet_returns_header_only(self) -> None:
+        service = self._make_sheets_service([
+            {"properties": {"title": "Empty"}, "data": [{"rowData": []}]},
+        ])
+        text = _read_google_sheets_api("FAKE_ID", sheets_service=service)
+        assert "=== Sheet: Empty ===" in text
+
+    def test_no_sheets_returns_empty_string(self) -> None:
+        service = MagicMock()
+        service.spreadsheets().get().execute.return_value = {"sheets": []}
+        text = _read_google_sheets_api("FAKE_ID", sheets_service=service)
+        assert text == ""
+
+    def test_read_sheet_to_text_dispatches_to_api(self) -> None:
+        service = self._make_sheets_service([
+            {"properties": {"title": "Trip"}, "data": [{"rowData": [
+                {"values": [{"formattedValue": "Japan 2026"}]},
+            ]}]},
+        ])
+        text = read_sheet_to_text(
+            "https://docs.google.com/spreadsheets/d/FAKE_ID/edit",
+            sheets_service=service,
+        )
+        assert "Japan 2026" in text
+
+    def test_bare_spreadsheet_id_dispatches_to_api(self) -> None:
+        service = self._make_sheets_service([
+            {"properties": {"title": "Sheet1"}, "data": [{"rowData": [
+                {"values": [{"formattedValue": "hello"}]},
+            ]}]},
+        ])
+        # 20+ char alphanumeric ID triggers the bare-ID path
+        text = read_sheet_to_text("1brg_D0qM_UCLI2qedDzmnwfRZii", sheets_service=service)
+        assert "hello" in text

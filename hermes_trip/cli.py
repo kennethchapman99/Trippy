@@ -49,8 +49,9 @@ def import_sheet(
 ) -> None:
     """Import a single trip sheet into the database."""
     from hermes_trip.importers.sheet_importer import SheetImporter
+    from hermes_trip.ingest.google_auth import GoogleAuthManager
 
-    importer = SheetImporter()
+    importer = SheetImporter(auth_manager=GoogleAuthManager())
     console.print(f"[bold]Importing:[/bold] {source}")
     result = importer.import_file(source)
     _print_import_result(result)
@@ -163,6 +164,48 @@ def show_trip(
         _print_trip_detail(trip)
 
 
+@app.command("import-drive-folder")
+def import_drive_folder_cmd(
+    folder: str = typer.Argument(..., help="Google Drive folder URL or folder ID"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="List files without importing"),
+) -> None:
+    """Import all Google Sheets from a Drive folder."""
+    from hermes_trip.importers.drive_importer import DriveFolderImporter, _folder_id_from_url_or_id
+
+    try:
+        folder_id = _folder_id_from_url_or_id(folder)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    from hermes_trip.ingest.google_auth import GoogleAuthManager
+
+    importer = DriveFolderImporter(auth_manager=GoogleAuthManager())
+
+    if dry_run:
+        console.print(f"[yellow](dry-run)[/yellow] [bold]Listing sheets in:[/bold] {folder_id}")
+        files = importer.list_files(folder_id)
+        if not files:
+            console.print("[yellow]No Google Sheets found in this folder.[/yellow]")
+        for f in files:
+            console.print(f"  · {f.get('name', '?')}  [dim]{f['id']}[/dim]")
+        console.print(f"\nFound {len(files)} sheet(s). Run without --dry-run to import.")
+        return
+
+    console.print(f"[bold]Importing Drive folder:[/bold] {folder_id}")
+    result = importer.import_folder(folder_id)
+    console.print(f"Found {result.files_found} sheet(s).")
+
+    for r in result.results:
+        _print_import_result(r)
+
+    console.print(
+        f"\n[bold]Total:[/bold] {result.total_created} created · {result.total_updated} updated"
+    )
+    if result.errors:
+        raise typer.Exit(1)
+
+
 @app.command("ingest-emails")
 def ingest_emails(
     max_results: int = typer.Option(50, "--max", help="Max emails to fetch"),
@@ -172,10 +215,12 @@ def ingest_emails(
     from hermes_trip import config
     from hermes_trip.db import make_session_factory
     from hermes_trip.ingest.gmail_watcher import GmailWatcher
+    from hermes_trip.ingest.google_auth import GoogleAuthManager
     from hermes_trip.ingest.linker import ingest_email
     from hermes_trip.ingest.parser import ConfirmationParser
 
-    watcher = GmailWatcher()
+    auth = GoogleAuthManager()
+    watcher = GmailWatcher(auth_manager=auth)
     watcher.authenticate()
 
     console.print(f"[bold]Fetching[/bold] up to {max_results} messages from {label}…")

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 def _expand(key: str, default: str) -> Path:
@@ -24,6 +24,7 @@ GMAIL_CREDENTIALS_PATH: Path = _expand(
     "GMAIL_CREDENTIALS_PATH", "~/.hermes_trip/gmail_credentials.json"
 )
 GMAIL_TOKEN_PATH: Path = _expand("GMAIL_TOKEN_PATH", "~/.hermes_trip/gmail_token.json")
+GOOGLE_TOKEN_PATH: Path = _expand("GOOGLE_TOKEN_PATH", "~/.hermes_trip/google_token.json")
 SHERPA_API_KEY: str = os.environ.get("SHERPA_API_KEY", "")
 DUFFEL_ACCESS_TOKEN: str = os.environ.get("DUFFEL_ACCESS_TOKEN", "")
 TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")

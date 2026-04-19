@@ -14,6 +14,15 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+# Override URL from app config so migrations always target the real DB,
+# not the alembic.ini dev default.
+try:
+    from hermes_trip import config as app_config
+
+    config.set_main_option("sqlalchemy.url", app_config.DATABASE_URL)
+except Exception:
+    pass
+
 target_metadata = Base.metadata
 
 

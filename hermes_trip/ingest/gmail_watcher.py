@@ -180,10 +180,12 @@ class GmailWatcher:
         credentials_path: Path | None = None,
         token_path: Path | None = None,
         gmail_service: Any | None = None,
+        auth_manager: Any | None = None,
     ) -> None:
         self._creds_path = credentials_path or config.GMAIL_CREDENTIALS_PATH
         self._token_path = token_path or config.GMAIL_TOKEN_PATH
         self._service = gmail_service  # injected for tests
+        self._auth_manager = auth_manager
 
     # ------------------------------------------------------------------
     # Public API
@@ -193,6 +195,10 @@ class GmailWatcher:
         """Build the Gmail API service using OAuth2 credentials."""
         if self._service is not None:
             return  # already injected
+
+        if self._auth_manager is not None:
+            self._service = self._auth_manager.build_service("gmail", "v1")
+            return
 
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
