@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from hermes_trip.db.models import (
+from trippy.db.models import (
     Confirmation,
     ConfirmationType,
     Document,

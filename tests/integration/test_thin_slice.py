@@ -17,9 +17,9 @@ def test_import_sheet_creates_trip() -> None:
 
     from sqlalchemy import create_engine, select
 
-    from hermes_trip.db import make_session_factory
-    from hermes_trip.db.models import Base, Trip
-    from hermes_trip.importers.sheet_importer import SheetImporter
+    from trippy.db import make_session_factory
+    from trippy.db.models import Base, Trip
+    from trippy.importers.sheet_importer import SheetImporter
 
     fixtures = Path(__file__).parent.parent / "fixtures"
     raw = json.loads((fixtures / "claude_responses" / "column_based.json").read_text())
@@ -59,10 +59,10 @@ def test_confirmation_email_links_to_leg() -> None:
 
     from sqlalchemy import create_engine
 
-    from hermes_trip.db import make_session_factory
-    from hermes_trip.db.models import Base, Leg, Trip
-    from hermes_trip.ingest.linker import ingest_email
-    from hermes_trip.ingest.parser import ConfirmationParser
+    from trippy.db import make_session_factory
+    from trippy.db.models import Base, Leg, Trip
+    from trippy.ingest.linker import ingest_email
+    from trippy.ingest.parser import ConfirmationParser
 
     fixtures = Path(__file__).parent.parent / "fixtures"
 

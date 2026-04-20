@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from hermes_trip.db.models import (
+from trippy.db.models import (
     Base,
     Leg,
     LegType,

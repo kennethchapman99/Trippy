@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hermes_trip.importers.sheet_importer import (
+from trippy.importers.sheet_importer import (
     CONFIDENCE_THRESHOLD,
     ImportResult,
     SheetImporter,
@@ -54,7 +54,7 @@ def _make_importer(fixture_name: str, db_url: str | None = None) -> SheetImporte
 
     from sqlalchemy import create_engine
 
-    from hermes_trip.db.models import Base
+    from trippy.db.models import Base
 
     if db_url is None:
         _, db_path = tempfile.mkstemp(suffix=".db")
@@ -266,8 +266,8 @@ class TestIdempotency:
             file_db = f"sqlite:///{tmp_db}"
             from sqlalchemy import create_engine
 
-            from hermes_trip.db import make_session_factory
-            from hermes_trip.db.models import Base
+            from trippy.db import make_session_factory
+            from trippy.db.models import Base
 
             eng = create_engine(file_db)
             Base.metadata.create_all(eng)
@@ -286,7 +286,7 @@ class TestIdempotency:
             # Confirm only 1 trip in DB
             from sqlalchemy import select
 
-            from hermes_trip.db.models import Trip
+            from trippy.db.models import Trip
 
             factory = make_session_factory(file_db)
             with factory() as session:
@@ -303,7 +303,7 @@ class TestIdempotency:
 
 class TestCollectFlags:
     def test_flags_low_confidence_fields(self) -> None:
-        from hermes_trip.importers.sheet_importer import FieldValue, ParsedTrip
+        from trippy.importers.sheet_importer import FieldValue, ParsedTrip
 
         parsed = ParsedTrip(
             name=FieldValue(value="Test Trip", confidence=1.0),
@@ -318,7 +318,7 @@ class TestCollectFlags:
         assert "status" not in flag_fields  # 0.9 >= threshold
 
     def test_no_flags_for_high_confidence_fields_with_values(self) -> None:
-        from hermes_trip.importers.sheet_importer import FieldValue, ParsedTrip
+        from trippy.importers.sheet_importer import FieldValue, ParsedTrip
 
         parsed = ParsedTrip(
             name=FieldValue(value="Test Trip", confidence=1.0),

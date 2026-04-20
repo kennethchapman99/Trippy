@@ -9,9 +9,9 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy import create_engine, select
 
-from hermes_trip.db import make_session_factory
-from hermes_trip.db.models import Base, Leg, Stay, Traveler, Trip, TripStatus
-from hermes_trip.importers.sheet_importer import SheetImporter
+from trippy.db import make_session_factory
+from trippy.db.models import Base, Leg, Stay, Traveler, Trip, TripStatus
+from trippy.importers.sheet_importer import SheetImporter
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 SAMPLE_SHEETS = FIXTURES_DIR / "sample_sheets"
@@ -136,7 +136,7 @@ class TestBrokenSheetIntegration:
     """Broken sheet must not raise and must return flagged report."""
 
     def test_returns_result_with_flags(self, file_db: str) -> None:
-        from hermes_trip.importers.sheet_importer import ImportResult
+        from trippy.importers.sheet_importer import ImportResult
 
         importer = SheetImporter(db_url=file_db, anthropic_client=_mock_client("broken"))
         result = importer.import_file(SAMPLE_SHEETS / "broken.csv")

@@ -6,12 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hermes_trip.importers.drive_importer import (
+from trippy.importers.drive_importer import (
     DriveFolderImporter,
     DriveFolderResult,
     _folder_id_from_url_or_id,
 )
-from hermes_trip.importers.sheet_importer import ImportResult
+from trippy.importers.sheet_importer import ImportResult
 
 # ---------------------------------------------------------------------------
 # URL / ID parsing
@@ -133,7 +133,7 @@ class TestImportFolder:
         sheets_service = MagicMock()
 
         with patch(
-            "hermes_trip.importers.drive_importer.SheetImporter.import_file",
+            "trippy.importers.drive_importer.SheetImporter.import_file",
             return_value=_make_import_result(1),
         ):
             importer = DriveFolderImporter(
