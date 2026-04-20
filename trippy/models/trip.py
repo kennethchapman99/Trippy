@@ -103,6 +103,15 @@ class Segment(BaseModel):
     seat_assignments: dict[str, str] = Field(default_factory=dict)  # traveler → seat
     baggage_included: bool | None = None
     check_in_opens_at: datetime | None = None
+    terminal_depart: str | None = None
+    terminal_arrive: str | None = None
+    gate_depart: str | None = None
+    gate_arrive: str | None = None
+    boarding_time: datetime | None = None
+    boarding_group: str | None = None
+    seat_map_url: str | None = None
+    baggage_claim_belt: str | None = None
+    pnr: str | None = None
     notes: str | None = None
 
     @property
@@ -138,7 +147,25 @@ class Stay(BaseModel):
     confirmation_code: str | None = None
     num_rooms: int | None = None
     room_type: str | None = None
+    host_name: str | None = None
+    host_contact: str | None = None
+    access_code: str | None = None
+    check_in_instructions: str | None = None
+    wifi_name: str | None = None
+    wifi_password: str | None = None
+    parking_instructions: str | None = None
+    late_checkin_confirmed: bool = False
+    late_checkin_notes: str | None = None
     notes: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_defaults(cls, values: dict[str, Any] | Any) -> dict[str, Any] | Any:
+        if not isinstance(values, dict):
+            return values
+        if values.get("late_checkin_confirmed") is None:
+            values["late_checkin_confirmed"] = False
+        return values
 
     @property
     def nights(self) -> int | None:
@@ -174,6 +201,21 @@ class Confirmation(BaseModel):
     @property
     def is_linked(self) -> bool:
         return bool(self.linked_segment_id or self.linked_stay_id)
+
+
+# ---------------------------------------------------------------------------
+# Transfer (airport pickup/drop logistics)
+# ---------------------------------------------------------------------------
+
+
+class Transfer(BaseModel):
+    transfer_id: str
+    provider: str | None = None
+    driver_contact: str | None = None
+    pickup_point: str | None = None
+    pickup_window: str | None = None
+    vehicle_details: str | None = None
+    notes: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +306,7 @@ class Trip(BaseModel):
     travelers: list[Traveler] = Field(default_factory=list)
     segments: list[Segment] = Field(default_factory=list)
     stays: list[Stay] = Field(default_factory=list)
+    transfers: list[Transfer] = Field(default_factory=list)
     confirmations: list[Confirmation] = Field(default_factory=list)
     risk_flags: list[RiskFlag] = Field(default_factory=list)
     checklist: list[ChecklistItem] = Field(default_factory=list)
@@ -276,6 +319,12 @@ class Trip(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _auto_trip_id(cls, values: dict[str, Any]) -> dict[str, Any]:
+        if values.get("segments") is None and values.get("legs") is not None:
+            values["segments"] = values.pop("legs")
+        if values.get("stays") is None and values.get("hotels") is not None:
+            values["stays"] = values.pop("hotels")
+        if values.get("transfers") is None:
+            values["transfers"] = []
         if not values.get("trip_id") and values.get("name"):
             values["trip_id"] = _make_trip_id(str(values["name"]))
         return values

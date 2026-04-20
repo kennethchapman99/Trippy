@@ -48,6 +48,15 @@ _HOTELS_COLS = [
 ]
 _CHECKLIST_COLS = ["ID", "Category", "Task", "Due", "Assigned", "Done"]
 _BUDGET_COLS = ["Category", "Budgeted", "Booked", "Actual", "Variance"]
+_TRANSFERS_COLS = [
+    "Transfer ID",
+    "Provider",
+    "Driver Contact",
+    "Pickup Point",
+    "Pickup Window",
+    "Vehicle Details",
+    "Notes",
+]
 
 
 class SheetSyncService:
@@ -87,7 +96,14 @@ class SheetSyncService:
                         "properties": {"title": title},
                         "sheets": [
                             {"properties": {"title": tab}}
-                            for tab in ["Overview", "Flights", "Hotels", "Checklist", "Budget"]
+                            for tab in [
+                                "Overview",
+                                "Flights",
+                                "Hotels",
+                                "Transfers",
+                                "Checklist",
+                                "Budget",
+                            ]
                         ],
                     }
                 )
@@ -149,6 +165,7 @@ class SheetSyncService:
         updates.extend(self._build_overview_update(trip))
         updates.extend(self._build_flights_update(trip))
         updates.extend(self._build_hotels_update(trip))
+        updates.extend(self._build_transfers_update(trip))
         updates.extend(self._build_checklist_update(trip))
         updates.extend(self._build_budget_update(trip))
 
@@ -241,6 +258,24 @@ class SheetSyncService:
             )
         if len(rows) > 1:
             return [{"range": "Checklist!A1", "values": rows}]
+        return []
+
+    def _build_transfers_update(self, trip: Trip) -> list[dict[str, Any]]:
+        rows: list[list[Any]] = [_TRANSFERS_COLS]
+        for transfer in trip.transfers:
+            rows.append(
+                [
+                    transfer.transfer_id,
+                    transfer.provider or "",
+                    transfer.driver_contact or "",
+                    transfer.pickup_point or "",
+                    transfer.pickup_window or "",
+                    transfer.vehicle_details or "",
+                    transfer.notes or "",
+                ]
+            )
+        if len(rows) > 1:
+            return [{"range": "Transfers!A1", "values": rows}]
         return []
 
     def _build_budget_update(self, trip: Trip) -> list[dict[str, Any]]:
