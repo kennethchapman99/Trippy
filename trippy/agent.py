@@ -278,7 +278,7 @@ class TrIppyAgent:
                 max_tokens=_MAX_TOKENS,
                 system=system_prompt,
                 tools=tools,  # type: ignore[arg-type]
-                messages=self._history,
+                messages=self._history,  # type: ignore[arg-type]
             )
 
             # Collect text and tool uses
@@ -291,7 +291,7 @@ class TrIppyAgent:
                 elif block.type == "tool_use":
                     result = _execute_tool(
                         block.name,
-                        dict(block.input),  # type: ignore[arg-type]
+                        dict(block.input),
                         self._memory,
                         self._trip_svc,
                     )

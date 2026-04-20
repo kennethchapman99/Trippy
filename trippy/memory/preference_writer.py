@@ -10,6 +10,7 @@ Design principles:
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from trippy.memory.store import MemoryStore
 from trippy.models.preferences import FamilyTravelPreferences
@@ -151,7 +152,7 @@ class PreferenceWriter:
                         avoided += 1  # acceptable departure; family chose not-early
         return {"avoided_count": avoided}
 
-    def _analyse_connections(self, trips: list[Trip]) -> dict[str, object]:
+    def _analyse_connections(self, trips: list[Trip]) -> dict[str, Any]:
         connection_minutes: list[int] = []
         for trip in trips:
             segs = sorted(
@@ -175,7 +176,7 @@ class PreferenceWriter:
             "avg_minutes": sum(connection_minutes) / len(connection_minutes),
         }
 
-    def _analyse_stays(self, trips: list[Trip]) -> dict[str, object]:
+    def _analyse_stays(self, trips: list[Trip]) -> dict[str, Any]:
         nights_per_dest: list[float] = []
         for trip in trips:
             for stay in trip.stays:

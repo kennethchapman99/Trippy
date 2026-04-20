@@ -193,13 +193,12 @@ def _parse_trip_idea(
 
     # Extract duration
     dur_match = re.search(r"(\d+)\s*(?:day|night|week)", idea.lower())
-    duration_days = (
-        int(dur_match.group(1)) * 7
-        if "week" in (idea.lower())
-        else (int(dur_match.group(1)) if dur_match else 14)
-    )
-    if "week" in idea.lower() and dur_match:
+    if dur_match and "week" in idea.lower():
         duration_days = int(dur_match.group(1)) * 7
+    elif dur_match:
+        duration_days = int(dur_match.group(1))
+    else:
+        duration_days = 14
 
     start_date = date(year, month, 10)
     from datetime import timedelta

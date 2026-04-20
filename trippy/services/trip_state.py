@@ -108,7 +108,7 @@ class TripStateService:
         """Return a compact multi-trip summary for agent context injection."""
         trips = sorted(
             self.find_active(),
-            key=lambda t: t.start_date or datetime.max.date(),  # type: ignore[arg-type]
+            key=lambda t: t.start_date or datetime.max.date(),
         )
         if not trips:
             return "No active trips found."

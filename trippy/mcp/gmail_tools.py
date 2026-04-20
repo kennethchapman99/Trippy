@@ -163,7 +163,7 @@ def register_gmail_tools(mcp: FastMCP) -> None:
         Returns message summaries. Use gmail_get_email to read full content.
         """
         keyword_query = " OR ".join(f'"{kw}"' for kw in _BOOKING_KEYWORDS)
-        return gmail_search(keyword_query, max_results=max_results)  # type: ignore[operator]
+        return gmail_search(keyword_query, max_results=max_results)  # type: ignore[no-any-return]
 
     @mcp.tool()
     def gmail_get_email(message_id: str) -> dict[str, Any]:

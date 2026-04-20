@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ class PastTripMinerRunner:
             )
             .execute()
         )
-        return resp.get("files", [])
+        return cast(list[dict[str, Any]], resp.get("files", []))
 
     def _import_sheet(self, sheet: dict[str, Any]) -> dict[str, Any]:
         from trippy.importers.sheet_importer import SheetImporter
@@ -126,7 +126,7 @@ class PastTripMinerRunner:
 
         # Also persist as canonical JSON
         state_svc = TripStateService(trips_dir=self._trips_dir)
-        for trip_id in (t.name for t in []):  # trips created by importer come from DB
+        for trip_id in (t["name"] for t in cast(list[dict[str, Any]], [])):
             state_svc.load_or_create(trip_id)
 
         created = result.trips_created > 0
