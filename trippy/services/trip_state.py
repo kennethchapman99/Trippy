@@ -129,6 +129,7 @@ class TripStateService:
             SegmentType,
             Stay,
             StayType,
+            Transfer,
             Traveler,
             TripStatus,
         )
@@ -177,6 +178,19 @@ class TripStateService:
             for i, stay in enumerate(getattr(db_trip, "stays", []))
         ]
 
+        transfers = [
+            Transfer(
+                transfer_id=f"transfer-{i + 1}",
+                provider=getattr(transfer, "provider", None),
+                driver_contact=getattr(transfer, "driver_contact", None),
+                pickup_point=getattr(transfer, "pickup_point", None),
+                pickup_window=getattr(transfer, "pickup_window", None),
+                vehicle_details=getattr(transfer, "vehicle_details", None),
+                notes=getattr(transfer, "notes", None),
+            )
+            for i, transfer in enumerate(getattr(db_trip, "transfers", []))
+        ]
+
         return Trip(
             trip_id=db_trip.name.lower().replace(" ", "-"),
             name=db_trip.name,
@@ -187,6 +201,7 @@ class TripStateService:
             travelers=travelers,
             segments=segments,
             stays=stays,
+            transfers=transfers,
             notes=db_trip.notes,
             created_at=db_trip.created_at,
             updated_at=db_trip.updated_at,

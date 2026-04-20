@@ -19,6 +19,7 @@ from trippy.models.trip import (
     Segment,
     SegmentType,
     Stay,
+    Transfer,
     Traveler,
     Trip,
     TripStatus,
@@ -143,6 +144,25 @@ class TestSegment:
         seg = Segment(segment_id="s1", origin="YYZ", destination="NRT")
         assert not seg.is_confirmed
 
+    def test_operational_fields(self) -> None:
+        seg = Segment(
+            segment_id="s1",
+            origin="YYZ",
+            destination="NRT",
+            terminal_depart="1",
+            gate_depart="E77",
+            terminal_arrive="2",
+            gate_arrive="22",
+            boarding_time=datetime(2026, 3, 10, 8, 15),
+            boarding_group="3",
+            seat_map_url="https://example.com/seat-map",
+            baggage_claim_belt="B12",
+            pnr="PNR123",
+        )
+        assert seg.terminal_depart == "1"
+        assert seg.gate_arrive == "22"
+        assert seg.pnr == "PNR123"
+
 
 class TestStay:
     def test_nights(self) -> None:
@@ -165,6 +185,77 @@ class TestStay:
             confirmation_code="HT-12345",
         )
         assert stay.is_confirmed
+
+    def test_operational_fields(self) -> None:
+        stay = Stay(
+            stay_id="stay-1",
+            property_name="Family Apartment",
+            city="Tokyo",
+            country="Japan",
+            host_name="Aiko",
+            host_contact="+81-111-2222",
+            access_code="7788#",
+            check_in_instructions="Use side entrance after 10pm",
+            wifi_name="Apt-Wifi",
+            wifi_password="secret-pass",
+            parking_instructions="Level P2 spot 15",
+            late_checkin_confirmed=True,
+            late_checkin_notes="Host approved in-app",
+        )
+        assert stay.host_name == "Aiko"
+        assert stay.late_checkin_confirmed is True
+
+
+class TestTransfer:
+    def test_transfer_fields(self) -> None:
+        transfer = Transfer(
+            transfer_id="t1",
+            provider="Klook",
+            driver_contact="WhatsApp +81-123",
+            pickup_point="NRT Terminal 1 Exit C",
+            pickup_window="18:00-18:30",
+            vehicle_details="Toyota Alphard, black",
+        )
+        assert transfer.provider == "Klook"
+        assert transfer.pickup_window == "18:00-18:30"
+
+
+class TestBackwardsCompatibility:
+    def test_existing_json_loads_with_defaults(self) -> None:
+        legacy_payload = {
+            "trip_id": "legacy-trip",
+            "name": "Legacy Trip",
+            "segments": [{"segment_id": "s1", "origin": "YYZ", "destination": "NRT"}],
+            "stays": [
+                {
+                    "stay_id": "stay-1",
+                    "property_name": "Old Hotel",
+                    "city": "Tokyo",
+                    "country": "Japan",
+                }
+            ],
+        }
+        trip = Trip.model_validate(legacy_payload)
+        assert trip.transfers == []
+        assert trip.segments[0].terminal_depart is None
+        assert trip.stays[0].late_checkin_confirmed is False
+
+    def test_legacy_import_aliases_are_migrated(self) -> None:
+        legacy_payload = {
+            "name": "Alias Trip",
+            "legs": [{"segment_id": "s1", "origin": "YYZ", "destination": "YVR"}],
+            "hotels": [
+                {
+                    "stay_id": "stay-1",
+                    "property_name": "Alias Hotel",
+                    "city": "Vancouver",
+                    "country": "Canada",
+                }
+            ],
+        }
+        trip = Trip.model_validate(legacy_payload)
+        assert len(trip.segments) == 1
+        assert len(trip.stays) == 1
 
 
 class TestBudget:
