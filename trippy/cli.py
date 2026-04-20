@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
+from rich.json import JSON
 from rich.table import Table
 
 if TYPE_CHECKING:
@@ -328,6 +329,83 @@ def friction_audit(
             (r.recommended_fix or "")[:60],
         )
     console.print(t)
+
+
+@app.command("phase-status")
+def phase_status() -> None:
+    """Show roadmap phases 2-6 and what is blocked next."""
+    from trippy.services.phase_planner import PhasePlannerService
+
+    planner = PhasePlannerService()
+    phases = planner.status()
+
+    table = Table(title="Trippy Roadmap Status", show_lines=True)
+    table.add_column("Phase", style="bold")
+    table.add_column("Title")
+    table.add_column("Status")
+    table.add_column("Blockers")
+    table.add_column("Next Step")
+
+    for phase in phases:
+        status = "[green]Complete[/green]" if phase.complete else "[yellow]Pending[/yellow]"
+        blockers = "None" if not phase.blockers else " • ".join(phase.blockers)
+        table.add_row(
+            f"{phase.phase}",
+            phase.title,
+            status,
+            blockers,
+            phase.next_step,
+        )
+
+    console.print(table)
+
+    pending = [p for p in phases if not p.complete]
+    if pending:
+        next_phase = pending[0]
+        console.print(
+            f"\n[bold]Next actionable phase:[/bold] Phase {next_phase.phase} — {next_phase.title}"
+        )
+
+
+@app.command("phase-run")
+def phase_run(
+    phase: int = typer.Argument(..., help="Roadmap phase number (2-6)"),
+    folder_id: str = typer.Option("", "--folder-id", help="Drive folder ID (phase 3/4)"),
+    query: str = typer.Option("trip", "--query", help="Drive search query (phase 3)"),
+    max_sheets: int = typer.Option(50, "--max-sheets", help="Max sheets to scan (phase 3)"),
+    min_evidence_trips: int = typer.Option(
+        2, "--min-evidence-trips", help="Trips required for preference extraction (phase 3)"
+    ),
+    trip_idea: str = typer.Option("", "--trip-idea", help="Trip idea text (phase 4)"),
+    template_sheet_id: str = typer.Option("", "--template-sheet-id", help="Sheet template ID"),
+    max_emails: int = typer.Option(50, "--max-emails", help="Max emails to reconcile (phase 5)"),
+    trip_id: str = typer.Option("", "--trip-id", help="Trip ID for friction audit (phase 6)"),
+) -> None:
+    """Run one roadmap phase workflow and print structured output."""
+    from trippy.services.phase_planner import PhasePlannerService
+
+    if phase < 2 or phase > 6:
+        console.print("[red]Phase must be between 2 and 6.[/red]")
+        raise typer.Exit(1)
+
+    planner = PhasePlannerService()
+    result = planner.run_phase(
+        phase=phase,
+        folder_id=folder_id or None,
+        query=query,
+        max_sheets=max_sheets,
+        min_evidence_trips=min_evidence_trips,
+        trip_idea=trip_idea,
+        template_sheet_id=template_sheet_id or None,
+        max_emails=max_emails,
+        trip_id=trip_id or None,
+    )
+
+    if result.get("error"):
+        console.print(f"[red]{result['error']}[/red]")
+        raise typer.Exit(1)
+
+    console.print(JSON.from_data(result))
 
 
 # ---------------------------------------------------------------------------

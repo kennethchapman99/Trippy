@@ -112,6 +112,24 @@ CI runs all four checks on every push (GitHub Actions).
 
 ---
 
+## Roadmap execution commands
+
+You can inspect and run roadmap phases directly from the CLI:
+
+```bash
+# Show phase 2-6 completion, blockers, and the next suggested action
+uv run trippy phase-status
+
+# Run a specific phase workflow
+uv run trippy phase-run 2
+uv run trippy phase-run 3 --folder-id <drive_folder_id>
+uv run trippy phase-run 4 --trip-idea "Japan next March"
+uv run trippy phase-run 5 --max-emails 50
+uv run trippy phase-run 6 --trip-id japan-2027
+```
+
+---
+
 ## Current Status
 
 **Phase 1 — Hermes-native foundation: complete.**
