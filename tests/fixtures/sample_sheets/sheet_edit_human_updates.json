@@ -1,0 +1,28 @@
+{
+  "overview": {
+    "Trip Name": "Japan 2027 Updated",
+    "Destinations": "Tokyo, Kyoto"
+  },
+  "flights": [
+    {
+      "Segment ID": "seg-1",
+      "Carrier": "Air Canada",
+      "Confirmation": "AC-NEW123",
+      "Notes": "Seat preference captured"
+    }
+  ],
+  "hotels": [
+    {
+      "Stay ID": "stay-1",
+      "Confirmation": "HOTEL-123",
+      "Notes": "Early check-in requested"
+    }
+  ],
+  "checklist": [
+    {
+      "ID": "chk-1",
+      "Done": "Yes"
+    }
+  ],
+  "budget": []
+}
