@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,7 @@ from rich.panel import Panel
 from trippy import config
 from trippy.memory.profile_manager import ProfileManager
 from trippy.memory.store import MemoryStore
+from trippy.models.trip import Trip, TripStatus
 from trippy.services.trip_state import TripStateService
 from trippy.skills import get_all_skill_summaries
 
@@ -37,13 +40,41 @@ console = Console()
 _MODEL = "claude-sonnet-4-6"
 _MAX_TOKENS = 4096
 
+_OPERATIONS_MODE_PROMPT = """
+## Operations Mode (During-Trip)
+
+The user is likely in-trip and needs immediate operational help.
+Prioritize practical, step-by-step guidance for:
+- gate and terminal navigation
+- transfer instructions (family-friendly, luggage-safe routes)
+- check-in/check-out timing constraints
+- today's concrete day plan and contingencies
+
+Be concise, actionable, and risk-aware. Flag any high-friction timing or transfer issue.
+"""
+
+
+class UserIntent(StrEnum):
+    PLAN_TRIP = "plan_trip"
+    RECONCILE_BOOKINGS = "reconcile_bookings"
+    AUDIT_FRICTION = "audit_friction"
+    IN_TRIP_OPS = "in_trip_ops"
+    GENERAL = "general"
+
 
 # ---------------------------------------------------------------------------
 # System prompt builder
 # ---------------------------------------------------------------------------
 
 
-def _build_system_prompt(memory: MemoryStore, trip_svc: TripStateService) -> str:
+def _build_system_prompt(
+    memory: MemoryStore,
+    trip_svc: TripStateService,
+    *,
+    operations_mode: bool = False,
+    active_trip_context: str | None = None,
+    orchestration_context: str | None = None,
+) -> str:
     parts: list[str] = []
 
     # Load AGENTS.md
@@ -68,6 +99,15 @@ def _build_system_prompt(memory: MemoryStore, trip_svc: TripStateService) -> str
 
     # Skills summary
     parts.append(get_all_skill_summaries())
+
+    if operations_mode:
+        parts.append(_OPERATIONS_MODE_PROMPT.strip())
+
+    if active_trip_context:
+        parts.append(active_trip_context)
+
+    if orchestration_context:
+        parts.append(orchestration_context)
 
     return "\n\n---\n\n".join(parts)
 
@@ -264,11 +304,150 @@ class TrIppyAgent:
         self._trip_svc = TripStateService(trips_dir=trips_dir or config.TRIPS_PATH)
         self._history: list[dict[str, Any]] = []
 
+    def _classify_intent(self, user_message: str) -> UserIntent:
+        msg = user_message.lower()
+        if any(k in msg for k in ("reconcile", "gmail", "booking email", "confirmation email")):
+            return UserIntent.RECONCILE_BOOKINGS
+        if any(k in msg for k in ("audit", "friction", "risk", "tight layover")):
+            return UserIntent.AUDIT_FRICTION
+        if any(
+            k in msg
+            for k in (
+                "gate",
+                "terminal",
+                "transfer",
+                "check in",
+                "check-in",
+                "today plan",
+                "today's plan",
+                "on the way",
+                "we landed",
+                "we are at",
+            )
+        ):
+            return UserIntent.IN_TRIP_OPS
+        if any(k in msg for k in ("plan trip", "plan a trip", "itinerary", "where should we go")):
+            return UserIntent.PLAN_TRIP
+        return UserIntent.GENERAL
+
+    def _extract_explicit_trip(self, user_message: str) -> Trip | None:
+        msg = user_message.lower()
+        for trip in self._trip_svc.load_all():
+            if trip.trip_id.lower() in msg or trip.name.lower() in msg:
+                return trip
+        return None
+
+    def _nearest_upcoming_booked_trip(self) -> Trip | None:
+        today = date.today()
+        booked = [t for t in self._trip_svc.find_by_status(TripStatus.BOOKED) if t.start_date]
+        upcoming = [t for t in booked if t.start_date and t.start_date >= today]
+        if not upcoming:
+            return None
+        return sorted(upcoming, key=lambda t: t.start_date or datetime.max.date())[0]
+
+    def _select_active_trip(self, user_message: str) -> tuple[Trip | None, str]:
+        explicit = self._extract_explicit_trip(user_message)
+        if explicit:
+            return explicit, "explicit"
+
+        upcoming = self._nearest_upcoming_booked_trip()
+        if upcoming:
+            return upcoming, "nearest_upcoming_booked"
+
+        return None, "none"
+
+    def _refresh_sheet_sync(self, trip: Trip) -> dict[str, Any]:
+        if not trip.sync.google_sheet_id:
+            return {"ok": False, "reason": "no_google_sheet_id"}
+        try:
+            from trippy.services.sheet_sync import SheetSyncService
+
+            SheetSyncService().push_trip_to_sheet(trip, trip.sync.google_sheet_id)
+            return {"ok": True, "sheet_id": trip.sync.google_sheet_id}
+        except Exception as exc:
+            logger.exception("Sheet sync refresh failed for trip %s", trip.trip_id)
+            return {"ok": False, "error": str(exc)}
+
     def chat(self, user_message: str) -> str:
         """Process a single user message and return the agent's response."""
+        intent = self._classify_intent(user_message)
+        trip_scoped_intents = {
+            UserIntent.RECONCILE_BOOKINGS,
+            UserIntent.AUDIT_FRICTION,
+            UserIntent.IN_TRIP_OPS,
+        }
+
+        active_trip = None
+        trip_selection_reason = "not_required"
+        if intent in trip_scoped_intents:
+            active_trip, trip_selection_reason = self._select_active_trip(user_message)
+            if active_trip is None:
+                return (
+                    "I need the trip first. Which trip should I use? "
+                    "Please share the trip name or trip ID."
+                )
+
+        orchestration_events: list[dict[str, Any]] = []
+        if intent == UserIntent.RECONCILE_BOOKINGS:
+            orchestration_events.append(
+                {
+                    "action": "invoke_skill",
+                    "skill_name": "trippy-gmail-reconciler",
+                    "result": json.loads(
+                        _run_skill("trippy-gmail-reconciler", {"trip_id": active_trip.trip_id})
+                    ),
+                }
+            )
+        elif intent == UserIntent.IN_TRIP_OPS and active_trip is not None:
+            orchestration_events.append(
+                {"action": "get_trip", "trip_id": active_trip.trip_id, "result": active_trip.model_dump()}
+            )
+            orchestration_events.append(
+                {
+                    "action": "run_friction_audit",
+                    "trip_id": active_trip.trip_id,
+                    "result": json.loads(
+                        _execute_tool(
+                            "run_friction_audit",
+                            {"trip_id": active_trip.trip_id, "check_preferences": True},
+                            self._memory,
+                            self._trip_svc,
+                        )
+                    ),
+                }
+            )
+            orchestration_events.append(
+                {
+                    "action": "sheet_sync_refresh",
+                    "trip_id": active_trip.trip_id,
+                    "result": self._refresh_sheet_sync(active_trip),
+                }
+            )
+
         self._history.append({"role": "user", "content": user_message})
 
-        system_prompt = _build_system_prompt(self._memory, self._trip_svc)
+        active_trip_context = None
+        if active_trip is not None:
+            active_trip_context = (
+                "## Active Trip Selection\n"
+                f"Selected trip: {active_trip.trip_id} ({active_trip.name})\n"
+                f"Selection policy result: {trip_selection_reason}"
+            )
+        orchestration_context = None
+        if orchestration_events:
+            orchestration_context = (
+                "## Deterministic Orchestration\n"
+                f"intent={intent.value}\n"
+                + json.dumps(orchestration_events, indent=2, default=str)
+            )
+
+        system_prompt = _build_system_prompt(
+            self._memory,
+            self._trip_svc,
+            operations_mode=intent == UserIntent.IN_TRIP_OPS,
+            active_trip_context=active_trip_context,
+            orchestration_context=orchestration_context,
+        )
         tools = _skill_tools()
 
         # Agentic loop — keep running until no more tool calls
