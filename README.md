@@ -117,7 +117,7 @@ CI runs all four checks on every push (GitHub Actions).
 You can inspect and run roadmap phases directly from the CLI:
 
 ```bash
-# Show phase 2-6 completion, blockers, and the next suggested action
+# Show phase 2-8 completion, blockers, and the next suggested action
 uv run trippy phase-status
 
 # Run a specific phase workflow
@@ -126,6 +126,11 @@ uv run trippy phase-run 3 --folder-id <drive_folder_id>
 uv run trippy phase-run 4 --trip-idea "Japan next March"
 uv run trippy phase-run 5 --max-emails 50
 uv run trippy phase-run 6 --trip-id japan-2027
+uv run trippy phase-run 7 --trip-id japan-2027
+uv run trippy phase-run 8 --trip-id japan-2027
+
+# Check if Trippy is ready to test by creating a new trip
+uv run trippy phase-ready-new-trip
 ```
 
 ---
@@ -170,6 +175,16 @@ them with Claude, link them to the correct trip, update both JSON state and the 
 ### Phase 6 — Self-improving skills
 After each successful workflow, have the agent assess whether a skill definition should
 be updated based on what it learned. Persist the updated `.md` and track skill versions.
+
+
+### Phase 7 — Choice intelligence (specific flight + stay recommendations)
+Persist explicit selection criteria for flights and stays (including Airbnb + boutique hotels),
+plus trip-specific overrides. This allows high-resolution recommendation ranking instead of
+generic sorting.
+
+### Phase 8 — Dual-surface concierge output
+Guarantee that recommendations and decisions stay synchronized across canonical trip state and
+the Google Sheet human view, so both the family and the agent can query the same truth.
 
 ---
 

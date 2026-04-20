@@ -333,7 +333,7 @@ def friction_audit(
 
 @app.command("phase-status")
 def phase_status() -> None:
-    """Show roadmap phases 2-6 and what is blocked next."""
+    """Show roadmap phases 2-8 and what is blocked next."""
     from trippy.services.phase_planner import PhasePlannerService
 
     planner = PhasePlannerService()
@@ -367,9 +367,29 @@ def phase_status() -> None:
         )
 
 
+
+
+@app.command("phase-ready-new-trip")
+def phase_ready_new_trip() -> None:
+    """Check if Trippy is ready for a high-quality new trip test."""
+    from trippy.services.phase_planner import PhasePlannerService
+
+    planner = PhasePlannerService()
+    readiness = planner.new_trip_test_readiness()
+    console.print(JSON.from_data(readiness))
+
+    if readiness.get("ready"):
+        console.print("\n[green]Ready: run trippy phase-run 4 --trip-idea \"<your trip idea>\"[/green]")
+    else:
+        failing = readiness.get("failing") or []
+        if failing:
+            next_phase = failing[0]
+            console.print(
+                f"\n[yellow]Not ready yet.[/yellow] Next: Phase {next_phase['phase']} — {next_phase['title']}"
+            )
 @app.command("phase-run")
 def phase_run(
-    phase: int = typer.Argument(..., help="Roadmap phase number (2-6)"),
+    phase: int = typer.Argument(..., help="Roadmap phase number (2-8)"),
     folder_id: str = typer.Option("", "--folder-id", help="Drive folder ID (phase 3/4)"),
     query: str = typer.Option("trip", "--query", help="Drive search query (phase 3)"),
     max_sheets: int = typer.Option(50, "--max-sheets", help="Max sheets to scan (phase 3)"),
@@ -384,8 +404,8 @@ def phase_run(
     """Run one roadmap phase workflow and print structured output."""
     from trippy.services.phase_planner import PhasePlannerService
 
-    if phase < 2 or phase > 6:
-        console.print("[red]Phase must be between 2 and 6.[/red]")
+    if phase < 2 or phase > 8:
+        console.print("[red]Phase must be between 2 and 8.[/red]")
         raise typer.Exit(1)
 
     planner = PhasePlannerService()

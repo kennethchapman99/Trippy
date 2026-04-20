@@ -17,7 +17,7 @@ class PhaseStatus:
 
 
 class PhasePlannerService:
-    """Determines readiness/completion of roadmap phases 2-6.
+    """Determines readiness/completion of roadmap phases 2-8.
 
     The checks are intentionally deterministic and lightweight, so teams can
     quickly see what to do next without running a full agent session.
@@ -47,6 +47,18 @@ class PhasePlannerService:
         has_sheeted_trip = any(bool(t.sync.google_sheet_id) for t in trips)
         has_confirmation = any(bool(t.confirmations) for t in trips)
         has_risks = any(bool(t.risk_flags) for t in trips)
+
+        # New intelligence checks for precise recommendation quality
+        has_flight_choice_criteria = memory.get_value("pref:flight_choice_criteria") is not None
+        has_stay_choice_criteria = memory.get_value("pref:stay_choice_criteria") is not None
+        has_trip_override = any(
+            (memory.get_value(f"trip_pref:{t.trip_id}:flight") is not None)
+            or (memory.get_value(f"trip_pref:{t.trip_id}:stay") is not None)
+            for t in trips
+        )
+
+        has_trip_and_global_context = has_preferences and has_trips
+        has_human_surface_sync = has_sheeted_trip
 
         phases: list[PhaseStatus] = []
         phases.append(
@@ -97,7 +109,69 @@ class PhasePlannerService:
                 next_step="Run: trippy phase-run 6 --trip-id <trip_id>",
             )
         )
+        phases.append(
+            PhaseStatus(
+                phase=7,
+                title="Choice intelligence (flights + stays)",
+                complete=has_flight_choice_criteria and has_stay_choice_criteria and has_trip_override,
+                blockers=[
+                    *(
+                        []
+                        if has_flight_choice_criteria
+                        else ["Missing global preference key: pref:flight_choice_criteria"]
+                    ),
+                    *(
+                        []
+                        if has_stay_choice_criteria
+                        else ["Missing global preference key: pref:stay_choice_criteria"]
+                    ),
+                    *(
+                        []
+                        if has_trip_override
+                        else ["No trip-specific override found (trip_pref:<trip_id>:flight/stay)"]
+                    ),
+                ],
+                next_step="Run: trippy phase-run 7 --trip-id <trip_id>",
+            )
+        )
+        phases.append(
+            PhaseStatus(
+                phase=8,
+                title="Dual-surface concierge output",
+                complete=has_trip_and_global_context and has_human_surface_sync,
+                blockers=[
+                    *(
+                        []
+                        if has_trip_and_global_context
+                        else ["Trip context or global preferences are incomplete"]
+                    ),
+                    *([] if has_human_surface_sync else ["Sheet sync surface is not populated"]),
+                ],
+                next_step="Run: trippy phase-run 8 --trip-id <trip_id>",
+            )
+        )
         return phases
+
+    def new_trip_test_readiness(self) -> dict[str, Any]:
+        """Return whether Trippy is ready for a realistic new-trip test."""
+        phases = self.status()
+        required = {2, 3, 4, 7, 8}
+        phase_map = {p.phase: p for p in phases}
+        failing = [phase_map[p] for p in sorted(required) if not phase_map[p].complete]
+
+        return {
+            "ready": len(failing) == 0,
+            "required_phases": sorted(required),
+            "failing": [
+                {
+                    "phase": p.phase,
+                    "title": p.title,
+                    "blockers": p.blockers,
+                    "next_step": p.next_step,
+                }
+                for p in failing
+            ],
+        }
 
     def run_phase(self, phase: int, **kwargs: Any) -> dict[str, Any]:
         """Execute the main workflow for one roadmap phase."""
@@ -111,6 +185,10 @@ class PhasePlannerService:
             return self._run_phase_5(**kwargs)
         if phase == 6:
             return self._run_phase_6(**kwargs)
+        if phase == 7:
+            return self._run_phase_7(**kwargs)
+        if phase == 8:
+            return self._run_phase_8(**kwargs)
         return {"error": f"Unsupported phase: {phase}"}
 
     def _run_phase_2(self) -> dict[str, Any]:
@@ -198,3 +276,80 @@ class PhasePlannerService:
             )
 
         return {"phase": 6, "audit": audit_result}
+
+    def _run_phase_7(self, **kwargs: Any) -> dict[str, Any]:
+        from trippy import config
+        from trippy.memory.store import MemoryStore
+
+        trip_id = kwargs.get("trip_id")
+        memory = MemoryStore(self._memory_path or config.MEMORY_PATH)
+
+        # Seed explicit recommendation criteria keys if missing.
+        if memory.get_value("pref:flight_choice_criteria") is None:
+            memory.set(
+                key="pref:flight_choice_criteria",
+                value={
+                    "prefer_nonstop": True,
+                    "avoid_departure_before": "07:00",
+                    "preferred_cabin_long_haul": "premium_economy",
+                    "connection_buffer_minutes_international": 120,
+                },
+                category="preference",
+                confidence=0.6,
+                source="phase-runner",
+                notes="Initial explicit flight choice criteria for recommendation ranking.",
+            )
+
+        if memory.get_value("pref:stay_choice_criteria") is None:
+            memory.set(
+                key="pref:stay_choice_criteria",
+                value={
+                    "allow_stay_types": ["airbnb", "hotel", "boutique_hotel"],
+                    "min_family_capacity": 5,
+                    "required_bedroom_strategy": "2_queens_or_suite",
+                    "max_transfer_minutes_from_arrival": 60,
+                },
+                category="preference",
+                confidence=0.6,
+                source="phase-runner",
+                notes="Initial explicit stay choice criteria including Airbnb/boutique filters.",
+            )
+
+        if trip_id and memory.get_value(f"trip_pref:{trip_id}:stay") is None:
+            memory.set(
+                key=f"trip_pref:{trip_id}:stay",
+                value={"neighborhood_style": "walkable", "vibe": "family-friendly"},
+                category="trip_insight",
+                confidence=0.5,
+                source="phase-runner",
+                notes="Trip-specific stay override; keep global defaults unchanged.",
+            )
+
+        return {
+            "phase": 7,
+            "flight_choice_criteria": memory.get_value("pref:flight_choice_criteria"),
+            "stay_choice_criteria": memory.get_value("pref:stay_choice_criteria"),
+            "trip_override": memory.get_value(f"trip_pref:{trip_id}:stay") if trip_id else None,
+        }
+
+    def _run_phase_8(self, **kwargs: Any) -> dict[str, Any]:
+        from trippy.memory.store import MemoryStore
+        from trippy.services.trip_state import TripStateService
+
+        memory = MemoryStore(self._memory_path)
+        trip_svc = TripStateService(self._trips_dir)
+
+        trip_id = kwargs.get("trip_id")
+        trip = trip_svc.load(trip_id) if trip_id else None
+        if trip is None:
+            active = trip_svc.find_active()
+            trip = active[0] if active else None
+
+        return {
+            "phase": 8,
+            "has_global_preferences": memory.get_value("pref:preferences_object") is not None,
+            "has_trip_specific_context": bool(trip),
+            "trip_id": trip.trip_id if trip else "",
+            "has_sheet_sync": bool(trip and trip.sync.google_sheet_id),
+            "readiness": self.new_trip_test_readiness(),
+        }
