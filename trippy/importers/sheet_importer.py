@@ -99,6 +99,7 @@ class ImportResult:
     source: str = ""
     trips_created: int = 0
     trips_updated: int = 0
+    db_trip_ids: list[int] = field(default_factory=list)
     flagged_fields: list[FlaggedField] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     parsing_notes: str = ""
@@ -558,7 +559,8 @@ class SheetImporter:
                     result.errors.append("Skipped a trip with no name")
                     continue
                 try:
-                    _, created = _upsert_trip(session, parsed_trip)
+                    trip, created = _upsert_trip(session, parsed_trip)
+                    result.db_trip_ids.append(trip.id)
                     if created:
                         result.trips_created += 1
                     else:

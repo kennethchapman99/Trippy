@@ -113,6 +113,8 @@ class PastTripMinerRunner:
         return cast(list[dict[str, Any]], resp.get("files", []))
 
     def _import_sheet(self, sheet: dict[str, Any]) -> dict[str, Any]:
+        from trippy.db import make_session_factory
+        from trippy.db.models import Trip as DbTrip
         from trippy.importers.sheet_importer import SheetImporter
         from trippy.ingest.google_auth import GoogleAuthManager
         from trippy.services.trip_state import TripStateService
@@ -124,14 +126,27 @@ class PastTripMinerRunner:
         if not result.ok:
             return {"ok": False, "error": str(result.errors)}
 
-        # Also persist as canonical JSON
+        # Persist imported DB trips as canonical JSON
         state_svc = TripStateService(trips_dir=self._trips_dir)
-        for trip_id in (t["name"] for t in cast(list[dict[str, Any]], [])):
-            state_svc.load_or_create(trip_id)
+        trip_ids: list[str] = []
+        factory = make_session_factory()
+        with factory() as session:
+            for db_trip_id in result.db_trip_ids:
+                db_trip = session.get(DbTrip, db_trip_id)
+                if db_trip is None:
+                    logger.warning(
+                        "Sheet import reported db trip id %s but it was not found",
+                        db_trip_id,
+                    )
+                    continue
+                canonical_trip = state_svc.from_db_trip(db_trip)
+                state_svc.save(canonical_trip)
+                trip_ids.append(canonical_trip.trip_id)
 
         created = result.trips_created > 0
         return {
             "ok": True,
             "created": created,
-            "trip_id": sheet["name"].lower().replace(" ", "-"),
+            "trip_id": trip_ids[0] if trip_ids else "",
+            "trip_ids": trip_ids,
         }
