@@ -18,13 +18,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _BOOKING_KEYWORDS = [
-    "confirmation", "booking", "reservation", "itinerary",
-    "e-ticket", "receipt", "check-in", "your trip",
+    "confirmation",
+    "booking",
+    "reservation",
+    "itinerary",
+    "e-ticket",
+    "receipt",
+    "check-in",
+    "your trip",
 ]
 
 
 def _get_auth() -> GoogleAuthManager:
     from trippy.ingest.google_auth import GoogleAuthManager
+
     return GoogleAuthManager()
 
 
@@ -58,12 +65,14 @@ def _extract_parts(payload: dict[str, Any]) -> tuple[str, str, list[dict[str, An
     elif payload.get("filename"):
         # Attachment
         body_obj = payload.get("body", {})
-        attachments.append({
-            "filename": payload["filename"],
-            "mime_type": mime,
-            "attachment_id": body_obj.get("attachmentId"),
-            "size": body_obj.get("size", 0),
-        })
+        attachments.append(
+            {
+                "filename": payload["filename"],
+                "mime_type": mime,
+                "attachment_id": body_obj.get("attachmentId"),
+                "size": body_obj.get("size", 0),
+            }
+        )
     else:
         for part in parts:
             t, h, a = _extract_parts(part)
@@ -95,12 +104,17 @@ def register_gmail_tools(mcp: FastMCP) -> None:
         """
         service = _gmail_service()
         try:
-            resp = service.users().messages().list(
-                userId="me",
-                q=query,
-                labelIds=[label],
-                maxResults=min(max_results, 100),
-            ).execute()
+            resp = (
+                service.users()
+                .messages()
+                .list(
+                    userId="me",
+                    q=query,
+                    labelIds=[label],
+                    maxResults=min(max_results, 100),
+                )
+                .execute()
+            )
         except Exception as exc:
             logger.error("gmail_search failed: %s", exc)
             return []
@@ -112,21 +126,30 @@ def register_gmail_tools(mcp: FastMCP) -> None:
         results: list[dict[str, Any]] = []
         for msg in messages:
             try:
-                detail = service.users().messages().get(
-                    userId="me", id=msg["id"], format="metadata",
-                    metadataHeaders=["Subject", "From", "Date"],
-                ).execute()
+                detail = (
+                    service.users()
+                    .messages()
+                    .get(
+                        userId="me",
+                        id=msg["id"],
+                        format="metadata",
+                        metadataHeaders=["Subject", "From", "Date"],
+                    )
+                    .execute()
+                )
                 headers = {
                     h["name"].lower(): h["value"]
                     for h in detail.get("payload", {}).get("headers", [])
                 }
-                results.append({
-                    "id": msg["id"],
-                    "subject": headers.get("subject", "(no subject)"),
-                    "from": headers.get("from", ""),
-                    "date": headers.get("date", ""),
-                    "snippet": detail.get("snippet", ""),
-                })
+                results.append(
+                    {
+                        "id": msg["id"],
+                        "subject": headers.get("subject", "(no subject)"),
+                        "from": headers.get("from", ""),
+                        "date": headers.get("date", ""),
+                        "snippet": detail.get("snippet", ""),
+                    }
+                )
             except Exception as exc:
                 logger.warning("Failed to fetch message %s metadata: %s", msg["id"], exc)
 
@@ -154,18 +177,15 @@ def register_gmail_tools(mcp: FastMCP) -> None:
         """
         service = _gmail_service()
         try:
-            detail = service.users().messages().get(
-                userId="me", id=message_id, format="full"
-            ).execute()
+            detail = (
+                service.users().messages().get(userId="me", id=message_id, format="full").execute()
+            )
         except Exception as exc:
             logger.error("gmail_get_email(%s) failed: %s", message_id, exc)
             return {"error": str(exc)}
 
         payload = detail.get("payload", {})
-        headers = {
-            h["name"].lower(): h["value"]
-            for h in payload.get("headers", [])
-        }
+        headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
         body_text, body_html, attachments = _extract_parts(payload)
 
         return {
@@ -191,9 +211,13 @@ def register_gmail_tools(mcp: FastMCP) -> None:
         """
         service = _gmail_service()
         try:
-            resp = service.users().messages().attachments().get(
-                userId="me", messageId=message_id, id=attachment_id
-            ).execute()
+            resp = (
+                service.users()
+                .messages()
+                .attachments()
+                .get(userId="me", messageId=message_id, id=attachment_id)
+                .execute()
+            )
             data = resp.get("data", "")
             return {
                 "attachment_id": attachment_id,

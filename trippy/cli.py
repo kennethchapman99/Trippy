@@ -48,6 +48,7 @@ def db_init() -> None:
 def run_agent() -> None:
     """Start an interactive Trippy agent session."""
     from trippy.agent import main as agent_main
+
     agent_main()
 
 
@@ -57,6 +58,7 @@ def thin_slice(
 ) -> None:
     """Run the end-to-end thin slice demo."""
     from trippy.thin_slice import run_thin_slice
+
     run_thin_slice(real_google=real_google)
 
 

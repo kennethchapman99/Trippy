@@ -26,8 +26,8 @@ class MemoryEntry(BaseModel):
     key: str
     value: Any
     category: str
-    confidence: float = 1.0   # 0.0–1.0; increases as evidence accumulates
-    source: str = "agent"      # How this was learned
+    confidence: float = 1.0  # 0.0–1.0; increases as evidence accumulates
+    source: str = "agent"  # How this was learned
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     version: int = 1
@@ -130,9 +130,7 @@ class MemoryStore:
 
     def to_context_string(self, category: str | None = None) -> str:
         """Render memory entries as readable text for agent context injection."""
-        entries = (
-            self.list_by_category(category) if category else self.all_entries()
-        )
+        entries = self.list_by_category(category) if category else self.all_entries()
         if not entries:
             return ""
 

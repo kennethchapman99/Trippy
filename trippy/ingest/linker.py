@@ -100,8 +100,7 @@ class TripLinker:
 
             existing = self._session.execute(
                 select(Confirmation).where(
-                    func.upper(Confirmation.confirmation_code)
-                    == parsed.confirmation_code.upper(),
+                    func.upper(Confirmation.confirmation_code) == parsed.confirmation_code.upper(),
                     Confirmation.vendor == parsed.vendor,
                 )
             ).scalar_one_or_none()
@@ -133,9 +132,7 @@ class TripLinker:
         self._session.flush()  # get the PK
 
         linked = trip_id is not None
-        logger.info(
-            "Confirmation %s → trip_id=%s (%s)", parsed.confirmation_code, trip_id, method
-        )
+        logger.info("Confirmation %s → trip_id=%s (%s)", parsed.confirmation_code, trip_id, method)
         return LinkResult(
             confirmation_id=conf.id,
             trip_id=trip_id,
@@ -174,9 +171,7 @@ class TripLinker:
 
         return None, "unlinked"
 
-    def _match_by_flight_code(
-        self, parsed: ParsedConfirmation, trips: list[Trip]
-    ) -> int | None:
+    def _match_by_flight_code(self, parsed: ParsedConfirmation, trips: list[Trip]) -> int | None:
         code = parsed.confirmation_code.upper()
         for trip in trips:
             legs: list[Leg] = self._session.query(Leg).filter_by(trip_id=trip.id).all()
@@ -220,9 +215,7 @@ class TripLinker:
                     return trip.id
         return None
 
-    def _match_by_trip_window(
-        self, parsed: ParsedConfirmation, trips: list[Trip]
-    ) -> int | None:
+    def _match_by_trip_window(self, parsed: ParsedConfirmation, trips: list[Trip]) -> int | None:
         """Fall back: confirmation date within trip start–end window."""
         ref_date = _parse_date(parsed.depart_at or parsed.check_in)
         if not ref_date:

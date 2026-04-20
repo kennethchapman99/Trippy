@@ -233,9 +233,7 @@ def ingest_emails(
 
     for email_content in emails:
         eml_path = watcher.save_to_vault(email_content, config.VAULT_PATH)
-        atts = [
-            (a.filename, a.content_type, a.data) for a in email_content.attachments
-        ]
+        atts = [(a.filename, a.content_type, a.data) for a in email_content.attachments]
         result = parser.parse(
             body_text=email_content.body_text,
             body_html=email_content.body_html,
@@ -261,9 +259,7 @@ def ingest_emails(
         else:
             unlinked += 1
 
-    console.print(
-        f"\n[bold]Done.[/bold] {linked} linked · {unlinked} unlinked · {skipped} skipped"
-    )
+    console.print(f"\n[bold]Done.[/bold] {linked} linked · {unlinked} unlinked · {skipped} skipped")
 
 
 @app.command("review")

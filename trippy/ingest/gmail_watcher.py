@@ -161,9 +161,9 @@ def _parse_gmail_message(raw_msg: dict[str, Any]) -> EmailContent | None:
 
         _walk(payload)
 
-        raw_bytes = base64.urlsafe_b64decode(
-            raw_msg.get("raw", "") + "=="
-        ) if "raw" in raw_msg else b""
+        raw_bytes = (
+            base64.urlsafe_b64decode(raw_msg.get("raw", "") + "==") if "raw" in raw_msg else b""
+        )
 
         return EmailContent(
             message_id=raw_msg.get("id", ""),
@@ -232,18 +232,14 @@ class GmailWatcher:
                         f"Gmail credentials not found at {self._creds_path}. "
                         "Download OAuth client secrets from Google Cloud Console."
                     )
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    str(self._creds_path), SCOPES
-                )
+                flow = InstalledAppFlow.from_client_secrets_file(str(self._creds_path), SCOPES)
                 creds = flow.run_local_server(port=0)
             self._token_path.parent.mkdir(parents=True, exist_ok=True)
             self._token_path.write_text(creds.to_json())
 
         self._service = build("gmail", "v1", credentials=creds)
 
-    def fetch_new_messages(
-        self, label: str = "INBOX", max_results: int = 50
-    ) -> list[EmailContent]:
+    def fetch_new_messages(self, label: str = "INBOX", max_results: int = 50) -> list[EmailContent]:
         """Fetch recent messages from Gmail, filtered to allowed senders."""
         if self._service is None:
             self.authenticate()
@@ -252,7 +248,7 @@ class GmailWatcher:
         # Narrow to booking-confirmation-like emails to avoid wasting fetch budget
         query = (
             "subject:(confirmation OR booking OR reservation OR itinerary OR "
-            "\"your trip\" OR \"order confirmed\" OR \"e-ticket\")"
+            '"your trip" OR "order confirmed" OR "e-ticket")'
         )
         results: dict[str, Any] = (
             service.users()
@@ -266,18 +262,13 @@ class GmailWatcher:
         for meta in messages_meta:
             msg_id: str = meta["id"]
             raw_msg: dict[str, Any] = (
-                service.users()
-                .messages()
-                .get(userId="me", id=msg_id, format="full")
-                .execute()
+                service.users().messages().get(userId="me", id=msg_id, format="full").execute()
             )
             content = _parse_gmail_message(raw_msg)
             if content and _is_allowed_sender(content):
                 emails.append(content)
             else:
-                logger.debug(
-                    "Skipped message %s (sender not in allowlist or parse failed)", msg_id
-                )
+                logger.debug("Skipped message %s (sender not in allowlist or parse failed)", msg_id)
 
         return emails
 

@@ -61,15 +61,14 @@ class PastTripMinerRunner:
                         trip_ids.append(tid)
                 else:
                     failed += 1
-                    logger.warning("Failed to import sheet %r: %s", sheet["name"], result.get("error"))
+                    logger.warning(
+                        "Failed to import sheet %r: %s", sheet["name"], result.get("error")
+                    )
             except Exception as exc:
                 failed += 1
                 logger.error("Unhandled error importing %r: %s", sheet["name"], exc)
 
-        logger.info(
-            "PastTripMiner: %d imported, %d updated, %d failed",
-            imported, updated, failed
-        )
+        logger.info("PastTripMiner: %d imported, %d updated, %d failed", imported, updated, failed)
 
         return {
             "sheets_scanned": len(sheets),
@@ -92,20 +91,25 @@ class PastTripMinerRunner:
 
         if folder_id:
             from trippy.importers.drive_importer import DriveFolderImporter
+
             importer = DriveFolderImporter(auth_manager=auth)
             return importer.list_files(folder_id)[:max_sheets]
 
         # Search Drive
         drive = auth.build_service("drive", "v3")
-        resp = drive.files().list(
-            q=(
-                f"name contains '{query}' "
-                "and mimeType = 'application/vnd.google-apps.spreadsheet' "
-                "and trashed = false"
-            ),
-            fields="files(id,name)",
-            pageSize=min(max_sheets, 100),
-        ).execute()
+        resp = (
+            drive.files()
+            .list(
+                q=(
+                    f"name contains '{query}' "
+                    "and mimeType = 'application/vnd.google-apps.spreadsheet' "
+                    "and trashed = false"
+                ),
+                fields="files(id,name)",
+                pageSize=min(max_sheets, 100),
+            )
+            .execute()
+        )
         return resp.get("files", [])
 
     def _import_sheet(self, sheet: dict[str, Any]) -> dict[str, Any]:
@@ -114,9 +118,7 @@ class PastTripMinerRunner:
         from trippy.services.trip_state import TripStateService
 
         auth = self._auth_manager or GoogleAuthManager()
-        importer = SheetImporter(
-            auth_manager=auth, anthropic_client=self._anthropic_client
-        )
+        importer = SheetImporter(auth_manager=auth, anthropic_client=self._anthropic_client)
 
         result = importer.import_file(sheet["id"])
         if not result.ok:

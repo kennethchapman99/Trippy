@@ -23,9 +23,7 @@ VAULT_PATH: Path = _expand("TRIPPY_VAULT_PATH", "~/.trippy/vault")
 EXPORT_PATH: Path = _expand("TRIPPY_EXPORT_PATH", "~/.trippy/export")
 
 # Google OAuth
-GMAIL_CREDENTIALS_PATH: Path = _expand(
-    "GMAIL_CREDENTIALS_PATH", "~/.trippy/gmail_credentials.json"
-)
+GMAIL_CREDENTIALS_PATH: Path = _expand("GMAIL_CREDENTIALS_PATH", "~/.trippy/gmail_credentials.json")
 GMAIL_TOKEN_PATH: Path = _expand("GMAIL_TOKEN_PATH", "~/.trippy/gmail_token.json")
 GOOGLE_TOKEN_PATH: Path = _expand("GOOGLE_TOKEN_PATH", "~/.trippy/google_token.json")
 

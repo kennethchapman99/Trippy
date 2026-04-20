@@ -65,6 +65,7 @@ class TripSheetCreatorRunner:
 
         # Build canonical trip record
         from trippy.models.trip import Traveler
+
         travelers = [
             Traveler(
                 name=t.name,
@@ -78,7 +79,7 @@ class TripSheetCreatorRunner:
         # Build checklist
         checklist = [
             ChecklistItem(
-                item_id=f"chk-{i+1:02d}",
+                item_id=f"chk-{i + 1:02d}",
                 category=cat,
                 title=title,
             )
@@ -107,6 +108,7 @@ class TripSheetCreatorRunner:
         if auth is None:
             try:
                 from trippy.ingest.google_auth import GoogleAuthManager
+
                 auth = GoogleAuthManager()
             except Exception:
                 logger.warning("Google auth unavailable — skipping sheet creation")
@@ -162,30 +164,55 @@ def _parse_trip_idea(
 
     # Extract month
     months = {
-        "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-        "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
-        "january": 1, "february": 2, "march": 3, "april": 4, "june": 6,
-        "july": 7, "august": 8, "september": 9, "october": 10,
-        "november": 11, "december": 12,
+        "jan": 1,
+        "feb": 2,
+        "mar": 3,
+        "apr": 4,
+        "may": 5,
+        "jun": 6,
+        "jul": 7,
+        "aug": 8,
+        "sep": 9,
+        "oct": 10,
+        "nov": 11,
+        "dec": 12,
+        "january": 1,
+        "february": 2,
+        "march": 3,
+        "april": 4,
+        "june": 6,
+        "july": 7,
+        "august": 8,
+        "september": 9,
+        "october": 10,
+        "november": 11,
+        "december": 12,
     }
     month_match = re.search(r"\b(" + "|".join(months.keys()) + r")\b", idea.lower())
     month = months.get(month_match.group(), 3) if month_match else 3
 
     # Extract duration
     dur_match = re.search(r"(\d+)\s*(?:day|night|week)", idea.lower())
-    duration_days = int(dur_match.group(1)) * 7 if "week" in (idea.lower()) else (
-        int(dur_match.group(1)) if dur_match else 14
+    duration_days = (
+        int(dur_match.group(1)) * 7
+        if "week" in (idea.lower())
+        else (int(dur_match.group(1)) if dur_match else 14)
     )
     if "week" in idea.lower() and dur_match:
         duration_days = int(dur_match.group(1)) * 7
 
     start_date = date(year, month, 10)
     from datetime import timedelta
+
     end_date = start_date + timedelta(days=duration_days)
 
     # Extract destination(s)
     clean = re.sub(r"\b(trip|travel|next|in|for|days|nights|weeks?|months?)\b", " ", idea.lower())
-    clean = re.sub(r"\b(20\d\d|jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*)\b", " ", clean)
+    clean = re.sub(
+        r"\b(20\d\d|jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*)\b",
+        " ",
+        clean,
+    )
     clean = re.sub(r"\d+", " ", clean)
     words = [w.strip().capitalize() for w in clean.split() if len(w.strip()) > 2]
     destinations = words[:3] if words else ["Unknown"]

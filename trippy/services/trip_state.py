@@ -99,10 +99,7 @@ class TripStateService:
 
     def find_active(self) -> list[Trip]:
         """Return planned and booked trips."""
-        return [
-            t for t in self.load_all()
-            if t.status in (TripStatus.PLANNED, TripStatus.BOOKED)
-        ]
+        return [t for t in self.load_all() if t.status in (TripStatus.PLANNED, TripStatus.BOOKED)]
 
     def find_lived(self) -> list[Trip]:
         return [t for t in self.load_all() if t.status == TripStatus.LIVED]
@@ -148,7 +145,7 @@ class TripStateService:
 
         segments = [
             Segment(
-                segment_id=f"leg-{i+1}",
+                segment_id=f"leg-{i + 1}",
                 segment_type=SegmentType(leg.leg_type.value),
                 carrier=leg.carrier,
                 flight_number=leg.flight_number,
@@ -166,7 +163,7 @@ class TripStateService:
 
         stays = [
             Stay(
-                stay_id=f"stay-{i+1}",
+                stay_id=f"stay-{i + 1}",
                 stay_type=StayType(stay.stay_type.value),
                 property_name=stay.property_name,
                 city=stay.city or "",

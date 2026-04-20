@@ -31,6 +31,7 @@ class TravelerProfile(BaseModel):
         if not self.passport_expiry:
             return False
         from datetime import timedelta
+
         required_expiry = trip_end + timedelta(days=buffer_months * 30)
         return self.passport_expiry >= required_expiry
 
@@ -66,10 +67,7 @@ class FamilyProfile(BaseModel):
         return next((t for t in self.travelers if t.name.lower() == name_lower), None)
 
     def passports_expiring_before(self, check_date: date) -> list[TravelerProfile]:
-        return [
-            t for t in self.travelers
-            if t.passport_expiry and t.passport_expiry < check_date
-        ]
+        return [t for t in self.travelers if t.passport_expiry and t.passport_expiry < check_date]
 
     def to_context_string(self) -> str:
         lines = [

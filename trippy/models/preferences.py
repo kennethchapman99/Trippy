@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class OptimizationPriority(str, Enum):
+class OptimizationPriority(StrEnum):
     COMFORT = "comfort"
     SCHEDULE = "schedule"
     DIRECT_FLIGHT = "direct_flight"
@@ -17,9 +17,9 @@ class OptimizationPriority(str, Enum):
 
 
 class DepartureTimePreference(BaseModel):
-    earliest_acceptable: str = "07:00"   # Will accept this departure time
-    preferred_earliest: str = "08:30"    # Prefers no earlier than this
-    hard_no_before: str = "05:30"        # Never book before this (exceptions below)
+    earliest_acceptable: str = "07:00"  # Will accept this departure time
+    preferred_earliest: str = "08:30"  # Prefers no earlier than this
+    hard_no_before: str = "05:30"  # Never book before this (exceptions below)
     early_exception_savings_cad: float | None = None  # Accept earlier if saves ≥ X/person
 
     def is_acceptable(self, departure_time: str) -> bool:
@@ -53,23 +53,21 @@ class LayoverPreference(BaseModel):
 class TransferPreference(BaseModel):
     prefer_direct_shuttle: bool = True
     max_transfer_minutes: int = 60
-    avoid_metro_with_luggage: bool = True   # Family + bags + metro = friction
+    avoid_metro_with_luggage: bool = True  # Family + bags + metro = friction
     avoid_bus_at_night: bool = True
-    pre_book_preferred: bool = True         # Pre-book transfers rather than taxi queue
+    pre_book_preferred: bool = True  # Pre-book transfers rather than taxi queue
 
 
 class StayPreference(BaseModel):
-    min_checkin_hour: int = 15       # 3 PM minimum expected check-in
+    min_checkin_hour: int = 15  # 3 PM minimum expected check-in
     preferred_checkin_hour: int = 15
     checkout_hour: int = 11
-    require_family_room_setup: bool = True   # Must fit 5 people
+    require_family_room_setup: bool = True  # Must fit 5 people
     preferred_room_configs: list[str] = Field(
         default_factory=lambda: ["2_queens", "2_doubles", "suite", "2_rooms"]
     )
-    preferred_stay_types: list[str] = Field(
-        default_factory=lambda: ["hotel", "house", "vrbo"]
-    )
-    min_nights_per_destination: int = 2   # Avoid single-night hotel stops
+    preferred_stay_types: list[str] = Field(default_factory=lambda: ["hotel", "house", "vrbo"])
+    min_nights_per_destination: int = 2  # Avoid single-night hotel stops
     preferred_nights_per_destination: int = 3
 
 
@@ -83,9 +81,7 @@ class FlightPreference(BaseModel):
 
 
 class FamilyTravelPreferences(BaseModel):
-    departure_time: DepartureTimePreference = Field(
-        default_factory=DepartureTimePreference
-    )
+    departure_time: DepartureTimePreference = Field(default_factory=DepartureTimePreference)
     layover: LayoverPreference = Field(default_factory=LayoverPreference)
     transfer: TransferPreference = Field(default_factory=TransferPreference)
     stay: StayPreference = Field(default_factory=StayPreference)
@@ -97,7 +93,7 @@ class FamilyTravelPreferences(BaseModel):
 
     # Pacing
     max_destinations_per_week: int = 3
-    prefer_slow_travel: bool = True   # Depth > breadth
+    prefer_slow_travel: bool = True  # Depth > breadth
 
     # Optimization
     priority_order: list[OptimizationPriority] = Field(
@@ -111,7 +107,7 @@ class FamilyTravelPreferences(BaseModel):
     )
 
     # Self-improvement metadata
-    confidence: float = 0.5    # Starts low; increases as evidence accumulates
+    confidence: float = 0.5  # Starts low; increases as evidence accumulates
     last_updated: datetime = Field(default_factory=datetime.utcnow)
     source_trips: list[str] = Field(default_factory=list)  # trip_ids that informed this
     notes: str | None = None

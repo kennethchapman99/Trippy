@@ -18,9 +18,9 @@ from trippy.models.trip import (
     Stay,
     StayType,
     SyncMetadata,
+    Traveler,
     Trip,
     TripStatus,
-    Traveler,
 )
 
 __all__ = [

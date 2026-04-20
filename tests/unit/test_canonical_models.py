@@ -14,21 +14,15 @@ from trippy.models.preferences import (
 from trippy.models.profile import FamilyProfile, TravelerProfile
 from trippy.models.trip import (
     Budget,
-    ChecklistItem,
-    Confirmation,
-    ConfirmationType,
     RiskFlag,
     RiskSeverity,
     Segment,
     SegmentType,
     Stay,
-    StayType,
-    SyncMetadata,
     Traveler,
     Trip,
     TripStatus,
 )
-
 
 # ---------------------------------------------------------------------------
 # Trip model

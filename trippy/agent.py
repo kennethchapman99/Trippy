@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -116,7 +115,10 @@ def _skill_tools() -> list[dict[str, Any]]:
                 "type": "object",
                 "required": ["trip_id"],
                 "properties": {
-                    "trip_id": {"type": "string", "description": "Trip ID slug (e.g. 'japan-2026')"},
+                    "trip_id": {
+                        "type": "string",
+                        "description": "Trip ID slug (e.g. 'japan-2026')",
+                    },
                 },
             },
         },
@@ -198,6 +200,7 @@ def _execute_tool(
 
     if name == "run_friction_audit":
         from trippy.skills.runners.friction_audit import FrictionAuditRunner
+
         runner = FrictionAuditRunner(memory_store=memory)
         return json.dumps(runner.run(inputs))
 
@@ -209,21 +212,27 @@ def _run_skill(skill_name: str, inputs: dict[str, Any]) -> str:
 
     if skill_name == "trippy-past-trip-miner":
         from trippy.skills.runners.past_trip_miner import PastTripMinerRunner
+
         runners["runner"] = PastTripMinerRunner()
     elif skill_name == "trippy-preference-extractor":
         from trippy.skills.runners.preference_extractor import PreferenceExtractorRunner
+
         runners["runner"] = PreferenceExtractorRunner()
     elif skill_name == "trippy-trip-sheet-creator":
         from trippy.skills.runners.trip_sheet_creator import TripSheetCreatorRunner
+
         runners["runner"] = TripSheetCreatorRunner()
     elif skill_name == "trippy-gmail-reconciler":
         from trippy.skills.runners.gmail_reconciler import GmailReconcilerRunner
+
         runners["runner"] = GmailReconcilerRunner()
     elif skill_name == "trippy-flight-friction-audit":
         from trippy.skills.runners.friction_audit import FrictionAuditRunner
+
         runners["runner"] = FrictionAuditRunner()
     elif skill_name == "trippy-family-itinerary-builder":
         from trippy.skills.runners.itinerary_builder import ItineraryBuilderRunner
+
         runners["runner"] = ItineraryBuilderRunner()
     else:
         return json.dumps({"error": f"Unknown skill: {skill_name}"})
@@ -250,9 +259,7 @@ class TrIppyAgent:
         memory_path: Path | None = None,
         trips_dir: Path | None = None,
     ) -> None:
-        self._client = anthropic_client or anthropic.Anthropic(
-            api_key=config.ANTHROPIC_API_KEY
-        )
+        self._client = anthropic_client or anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
         self._memory = MemoryStore(memory_path or config.MEMORY_PATH)
         self._trip_svc = TripStateService(trips_dir=trips_dir or config.TRIPS_PATH)
         self._history: list[dict[str, Any]] = []
@@ -288,11 +295,13 @@ class TrIppyAgent:
                         self._memory,
                         self._trip_svc,
                     )
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result,
-                    })
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        }
+                    )
 
             # Add assistant turn to history
             self._history.append({"role": "assistant", "content": response.content})
@@ -308,11 +317,13 @@ class TrIppyAgent:
 
     def run_interactive(self) -> None:
         """Start an interactive REPL session."""
-        console.print(Panel.fit(
-            "[bold cyan]Trippy[/bold cyan] — Chapman Family Travel Concierge\n"
-            "[dim]Type your request. Ctrl+C or 'quit' to exit.[/dim]",
-            border_style="cyan",
-        ))
+        console.print(
+            Panel.fit(
+                "[bold cyan]Trippy[/bold cyan] — Chapman Family Travel Concierge\n"
+                "[dim]Type your request. Ctrl+C or 'quit' to exit.[/dim]",
+                border_style="cyan",
+            )
+        )
 
         # Load and display context summary
         profile_mgr = ProfileManager(memory=self._memory)
@@ -326,9 +337,7 @@ class TrIppyAgent:
 
         active_trips = self._trip_svc.find_active()
         if active_trips:
-            console.print(
-                f"[dim]Active trips: {', '.join(t.name for t in active_trips)}[/dim]\n"
-            )
+            console.print(f"[dim]Active trips: {', '.join(t.name for t in active_trips)}[/dim]\n")
 
         while True:
             try:

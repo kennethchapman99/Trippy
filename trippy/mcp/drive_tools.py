@@ -14,6 +14,7 @@ _SHEET_MIME = "application/vnd.google-apps.spreadsheet"
 
 def _drive_service() -> Any:
     from trippy.ingest.google_auth import GoogleAuthManager
+
     return GoogleAuthManager().build_service("drive", "v3")
 
 
@@ -56,18 +57,24 @@ def register_drive_tools(mcp: FastMCP) -> None:
 
         full_query = " and ".join(q_parts)
         try:
-            resp = service.files().list(
-                q=full_query,
-                fields="files(id,name,modifiedTime,webViewLink)",
-                pageSize=min(max_results, 100),
-                orderBy="modifiedTime desc",
-            ).execute()
+            resp = (
+                service.files()
+                .list(
+                    q=full_query,
+                    fields="files(id,name,modifiedTime,webViewLink)",
+                    pageSize=min(max_results, 100),
+                    orderBy="modifiedTime desc",
+                )
+                .execute()
+            )
             return [
                 {
                     "id": f["id"],
                     "name": f["name"],
                     "modified_time": f.get("modifiedTime", ""),
-                    "url": f.get("webViewLink", f"https://docs.google.com/spreadsheets/d/{f['id']}"),
+                    "url": f.get(
+                        "webViewLink", f"https://docs.google.com/spreadsheets/d/{f['id']}"
+                    ),
                 }
                 for f in resp.get("files", [])
             ]
@@ -114,12 +121,14 @@ def register_drive_tools(mcp: FastMCP) -> None:
 
                 resp = service.files().list(**kwargs).execute()
                 for f in resp.get("files", []):
-                    all_files.append({
-                        "id": f["id"],
-                        "name": f["name"],
-                        "modified_time": f.get("modifiedTime", ""),
-                        "url": f.get("webViewLink", ""),
-                    })
+                    all_files.append(
+                        {
+                            "id": f["id"],
+                            "name": f["name"],
+                            "modified_time": f.get("modifiedTime", ""),
+                            "url": f.get("webViewLink", ""),
+                        }
+                    )
                     if len(all_files) >= max_results:
                         return all_files
 
@@ -151,10 +160,14 @@ def register_drive_tools(mcp: FastMCP) -> None:
 
         service = _drive_service()
         try:
-            f = service.files().get(
-                fileId=file_id,
-                fields="id,name,mimeType,modifiedTime,webViewLink,owners",
-            ).execute()
+            f = (
+                service.files()
+                .get(
+                    fileId=file_id,
+                    fields="id,name,mimeType,modifiedTime,webViewLink,owners",
+                )
+                .execute()
+            )
             return {
                 "id": f["id"],
                 "name": f.get("name", ""),

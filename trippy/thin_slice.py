@@ -20,10 +20,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import sys
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from trippy.models.trip import Trip
 
 from rich.console import Console
 from rich.panel import Panel
@@ -47,7 +49,6 @@ def run_thin_slice(
         ChecklistItem,
         Confirmation,
         ConfirmationType,
-        RiskSeverity,
         Segment,
         SegmentType,
         Stay,
@@ -76,7 +77,9 @@ def run_thin_slice(
 
     if seed_path.exists():
         seed_data = json.loads(seed_path.read_text(encoding="utf-8"))
-        trips_seed = seed_data if isinstance(seed_data, list) else seed_data.get("trips", [seed_data])
+        trips_seed = (
+            seed_data if isinstance(seed_data, list) else seed_data.get("trips", [seed_data])
+        )
         for t in trips_seed:
             if "japan" in t.get("name", "").lower():
                 # Build a canonical trip from seed data
@@ -88,11 +91,30 @@ def run_thin_slice(
                     start_date=date(2026, 3, 10),
                     end_date=date(2026, 3, 24),
                     travelers=[
-                        Traveler(name="Ken", passport_country="CAN", passport_expiry=date(2030, 5, 15)),
-                        Traveler(name="Sue", passport_country="CAN", passport_expiry=date(2029, 11, 3)),
-                        Traveler(name="Child 1", passport_country="CAN", passport_expiry=date(2028, 2, 20), is_minor=True),
-                        Traveler(name="Child 2", passport_country="CAN", passport_expiry=date(2028, 2, 20), is_minor=True),
-                        Traveler(name="Child 3", passport_country="CAN", passport_expiry=date(2029, 7, 1), is_minor=True),
+                        Traveler(
+                            name="Ken", passport_country="CAN", passport_expiry=date(2030, 5, 15)
+                        ),
+                        Traveler(
+                            name="Sue", passport_country="CAN", passport_expiry=date(2029, 11, 3)
+                        ),
+                        Traveler(
+                            name="Child 1",
+                            passport_country="CAN",
+                            passport_expiry=date(2028, 2, 20),
+                            is_minor=True,
+                        ),
+                        Traveler(
+                            name="Child 2",
+                            passport_country="CAN",
+                            passport_expiry=date(2028, 2, 20),
+                            is_minor=True,
+                        ),
+                        Traveler(
+                            name="Child 3",
+                            passport_country="CAN",
+                            passport_expiry=date(2029, 7, 1),
+                            is_minor=True,
+                        ),
                     ],
                     segments=[
                         Segment(
@@ -185,9 +207,15 @@ def run_thin_slice(
             ChecklistItem(item_id="chk-01", category="booking", title="Book outbound flights"),
             ChecklistItem(item_id="chk-02", category="booking", title="Book return flights"),
             ChecklistItem(item_id="chk-03", category="booking", title="Book all hotels"),
-            ChecklistItem(item_id="chk-04", category="document", title="Check all passport expiry dates"),
-            ChecklistItem(item_id="chk-05", category="document", title="Check Japan ETA requirement"),
-            ChecklistItem(item_id="chk-06", category="logistics", title="Buy JR Pass before departure"),
+            ChecklistItem(
+                item_id="chk-04", category="document", title="Check all passport expiry dates"
+            ),
+            ChecklistItem(
+                item_id="chk-05", category="document", title="Check Japan ETA requirement"
+            ),
+            ChecklistItem(
+                item_id="chk-06", category="logistics", title="Buy JR Pass before departure"
+            ),
         ],
         segments=[
             Segment(
@@ -233,12 +261,16 @@ def run_thin_slice(
             console.print(f"  [green]✓[/green] Sheet created: {new_trip.sync.google_sheet_url}")
             results["step5_sheet_url"] = new_trip.sync.google_sheet_url
         except Exception as exc:
-            console.print(f"  [yellow]⚠[/yellow] Sheet creation failed (no real credentials?): {exc}")
+            console.print(
+                f"  [yellow]⚠[/yellow] Sheet creation failed (no real credentials?): {exc}"
+            )
             results["step5_sheet_url"] = "SKIPPED"
     else:
         # Mock sheet creation
         new_trip.sync.google_sheet_id = "MOCK-SHEET-ID-12345"
-        new_trip.sync.google_sheet_url = "https://docs.google.com/spreadsheets/d/MOCK-SHEET-ID-12345"
+        new_trip.sync.google_sheet_url = (
+            "https://docs.google.com/spreadsheets/d/MOCK-SHEET-ID-12345"
+        )
         new_trip.sync.last_synced_at = datetime.utcnow()
         new_trip.sync.last_synced_by = "agent"
         trip_svc.save(new_trip)
@@ -248,7 +280,9 @@ def run_thin_slice(
     # -----------------------------------------------------------------------
     # STEP 6: Ingest booking confirmation
     # -----------------------------------------------------------------------
-    console.print(Panel("[bold]Step 6:[/bold] Ingest booking confirmation from email", style="cyan"))
+    console.print(
+        Panel("[bold]Step 6:[/bold] Ingest booking confirmation from email", style="cyan")
+    )
 
     # Use fixture email or mock
     fixture_email = _load_fixture_confirmation()
@@ -289,27 +323,32 @@ def run_thin_slice(
 
     _display_risk_table(risks)
     results["step7_risks"] = [
-        {"severity": r.severity.value, "description": r.description}
-        for r in risks
+        {"severity": r.severity.value, "description": r.description} for r in risks
     ]
 
     # -----------------------------------------------------------------------
     # Summary
     # -----------------------------------------------------------------------
     console.print()
-    console.print(Panel(
-        f"[bold green]Thin slice complete.[/bold green]\n\n"
-        f"Past trip mined:  [cyan]{results['step1_trip_id']}[/cyan]\n"
-        f"Preferences saved: [cyan]{len(results['step2_preferences'])} entries[/cyan]\n"
-        f"Family profile:   [cyan]{results['step3_profile_count']} travelers[/cyan]\n"
-        f"New trip:         [cyan]{results['step4_new_trip_id']}[/cyan]\n"
-        f"Sheet:            [cyan]{results['step5_sheet_url']}[/cyan]\n"
-        f"Confirmation:     [cyan]{results['step6_confirmation']}[/cyan]\n"
-        f"Risks found:      [cyan]{len(risks)}[/cyan]"
-        + (" ([red]" + str(len(new_trip.high_risks)) + " high[/red])" if new_trip.high_risks else ""),
-        style="green",
-        title="Results",
-    ))
+    console.print(
+        Panel(
+            f"[bold green]Thin slice complete.[/bold green]\n\n"
+            f"Past trip mined:  [cyan]{results['step1_trip_id']}[/cyan]\n"
+            f"Preferences saved: [cyan]{len(results['step2_preferences'])} entries[/cyan]\n"
+            f"Family profile:   [cyan]{results['step3_profile_count']} travelers[/cyan]\n"
+            f"New trip:         [cyan]{results['step4_new_trip_id']}[/cyan]\n"
+            f"Sheet:            [cyan]{results['step5_sheet_url']}[/cyan]\n"
+            f"Confirmation:     [cyan]{results['step6_confirmation']}[/cyan]\n"
+            f"Risks found:      [cyan]{len(risks)}[/cyan]"
+            + (
+                " ([red]" + str(len(new_trip.high_risks)) + " high[/red])"
+                if new_trip.high_risks
+                else ""
+            ),
+            style="green",
+            title="Results",
+        )
+    )
 
     return results
 
@@ -320,7 +359,7 @@ def run_thin_slice(
 
 
 def _create_demo_trip() -> Trip:
-    from trippy.models.trip import Segment, SegmentType, Stay, StayType, Traveler, Trip, TripStatus
+    from trippy.models.trip import Traveler, Trip, TripStatus
 
     return Trip(
         trip_id="japan-2026-demo",
@@ -342,6 +381,7 @@ def _load_fixture_confirmation() -> dict[str, Any]:
     if air_canada.exists():
         text = air_canada.read_text(encoding="utf-8")
         import re
+
         code_match = re.search(r"[A-Z]{2}\d{4,}", text)
         return {
             "vendor": "Air Canada",

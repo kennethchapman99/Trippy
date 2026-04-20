@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-
-import pytest
+from datetime import date, datetime
 
 from trippy.models.preferences import FamilyTravelPreferences
 from trippy.models.trip import (
     RiskSeverity,
     Segment,
-    SegmentType,
     Stay,
-    StayType,
     Traveler,
     Trip,
     TripStatus,
@@ -277,9 +273,7 @@ class TestUnconfirmedBookings:
     def test_unbooked_segment_planned_trip_medium(self) -> None:
         trip = _make_trip(
             status=TripStatus.PLANNED,
-            segments=[
-                Segment(segment_id="s1", origin="YYZ", destination="NRT")
-            ],
+            segments=[Segment(segment_id="s1", origin="YYZ", destination="NRT")],
         )
         risks = _detector().audit(trip)
         unbooked = [r for r in risks if "unbooked-seg" in r.risk_id]
@@ -323,7 +317,6 @@ class TestNoRisks:
         )
         risks = _detector().audit(trip)
         high_or_critical = [
-            r for r in risks
-            if r.severity in (RiskSeverity.HIGH, RiskSeverity.CRITICAL)
+            r for r in risks if r.severity in (RiskSeverity.HIGH, RiskSeverity.CRITICAL)
         ]
         assert not high_or_critical

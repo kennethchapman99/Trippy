@@ -28,6 +28,7 @@ class ParsedConfirmation(BaseModel):
 
         s = unescape(str(v)).strip().strip("<>").strip()
         return s or "UNKNOWN"
+
     # Flight-specific
     origin: str | None = None
     destination: str | None = None
@@ -177,7 +178,6 @@ class ConfirmationParser:
         if body_html:
             # Strip tags crudely for context; not perfect but helps Claude
             import re
-
             from html import unescape
 
             clean = unescape(body_html)
@@ -185,7 +185,7 @@ class ConfirmationParser:
             clean = re.sub(r"\s{2,}", " ", clean).strip()
             content_parts.append(f"=== EMAIL BODY (HTML, tags stripped) ===\n{clean}")
 
-        for fname, ctype, data in (attachments or []):
+        for fname, ctype, data in attachments or []:
             if ctype == "application/pdf" or fname.lower().endswith(".pdf"):
                 pdf_text = _extract_pdf_text(data)
                 if pdf_text:

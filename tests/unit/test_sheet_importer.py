@@ -364,24 +364,52 @@ class TestReadGoogleSheetsApi:
         return service
 
     def test_multi_tab_output_has_headers(self) -> None:
-        service = self._make_sheets_service([
-            {"properties": {"title": "Flights"}, "data": [{"rowData": [
-                {"values": [{"formattedValue": "Origin"}, {"formattedValue": "Dest"}]},
-                {"values": [{"formattedValue": "YYZ"}, {"formattedValue": "NRT"}]},
-            ]}]},
-            {"properties": {"title": "Hotels"}, "data": [{"rowData": [
-                {"values": [{"formattedValue": "Hotel"}, {"formattedValue": "City"}]},
-            ]}]},
-        ])
+        service = self._make_sheets_service(
+            [
+                {
+                    "properties": {"title": "Flights"},
+                    "data": [
+                        {
+                            "rowData": [
+                                {
+                                    "values": [
+                                        {"formattedValue": "Origin"},
+                                        {"formattedValue": "Dest"},
+                                    ]
+                                },
+                                {"values": [{"formattedValue": "YYZ"}, {"formattedValue": "NRT"}]},
+                            ]
+                        }
+                    ],
+                },
+                {
+                    "properties": {"title": "Hotels"},
+                    "data": [
+                        {
+                            "rowData": [
+                                {
+                                    "values": [
+                                        {"formattedValue": "Hotel"},
+                                        {"formattedValue": "City"},
+                                    ]
+                                },
+                            ]
+                        }
+                    ],
+                },
+            ]
+        )
         text = _read_google_sheets_api("FAKE_ID", sheets_service=service)
         assert "=== Sheet: Flights ===" in text
         assert "=== Sheet: Hotels ===" in text
         assert "YYZ" in text
 
     def test_empty_sheet_returns_header_only(self) -> None:
-        service = self._make_sheets_service([
-            {"properties": {"title": "Empty"}, "data": [{"rowData": []}]},
-        ])
+        service = self._make_sheets_service(
+            [
+                {"properties": {"title": "Empty"}, "data": [{"rowData": []}]},
+            ]
+        )
         text = _read_google_sheets_api("FAKE_ID", sheets_service=service)
         assert "=== Sheet: Empty ===" in text
 
@@ -392,11 +420,20 @@ class TestReadGoogleSheetsApi:
         assert text == ""
 
     def test_read_sheet_to_text_dispatches_to_api(self) -> None:
-        service = self._make_sheets_service([
-            {"properties": {"title": "Trip"}, "data": [{"rowData": [
-                {"values": [{"formattedValue": "Japan 2026"}]},
-            ]}]},
-        ])
+        service = self._make_sheets_service(
+            [
+                {
+                    "properties": {"title": "Trip"},
+                    "data": [
+                        {
+                            "rowData": [
+                                {"values": [{"formattedValue": "Japan 2026"}]},
+                            ]
+                        }
+                    ],
+                },
+            ]
+        )
         text = read_sheet_to_text(
             "https://docs.google.com/spreadsheets/d/FAKE_ID/edit",
             sheets_service=service,
@@ -404,11 +441,20 @@ class TestReadGoogleSheetsApi:
         assert "Japan 2026" in text
 
     def test_bare_spreadsheet_id_dispatches_to_api(self) -> None:
-        service = self._make_sheets_service([
-            {"properties": {"title": "Sheet1"}, "data": [{"rowData": [
-                {"values": [{"formattedValue": "hello"}]},
-            ]}]},
-        ])
+        service = self._make_sheets_service(
+            [
+                {
+                    "properties": {"title": "Sheet1"},
+                    "data": [
+                        {
+                            "rowData": [
+                                {"values": [{"formattedValue": "hello"}]},
+                            ]
+                        }
+                    ],
+                },
+            ]
+        )
         # 20+ char alphanumeric ID triggers the bare-ID path
         text = read_sheet_to_text("1brg_D0qM_UCLI2qedDzmnwfRZii", sheets_service=service)
         assert "hello" in text

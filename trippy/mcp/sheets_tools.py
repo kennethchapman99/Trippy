@@ -12,11 +12,13 @@ logger = logging.getLogger(__name__)
 
 def _sheets_service() -> Any:
     from trippy.ingest.google_auth import GoogleAuthManager
+
     return GoogleAuthManager().build_service("sheets", "v4")
 
 
 def _drive_service() -> Any:
     from trippy.ingest.google_auth import GoogleAuthManager
+
     return GoogleAuthManager().build_service("drive", "v3")
 
 
@@ -38,11 +40,16 @@ def register_sheets_tools(mcp: FastMCP) -> None:
         sid = _extract_sheet_id(spreadsheet_id)
         service = _sheets_service()
         try:
-            resp = service.spreadsheets().values().get(
-                spreadsheetId=sid,
-                range=cell_range,
-                valueRenderOption="UNFORMATTED_VALUE",
-            ).execute()
+            resp = (
+                service.spreadsheets()
+                .values()
+                .get(
+                    spreadsheetId=sid,
+                    range=cell_range,
+                    valueRenderOption="UNFORMATTED_VALUE",
+                )
+                .execute()
+            )
             return {
                 "spreadsheet_id": sid,
                 "range": resp.get("range", cell_range),
@@ -71,12 +78,17 @@ def register_sheets_tools(mcp: FastMCP) -> None:
         sid = _extract_sheet_id(spreadsheet_id)
         service = _sheets_service()
         try:
-            resp = service.spreadsheets().values().update(
-                spreadsheetId=sid,
-                range=cell_range,
-                valueInputOption="USER_ENTERED",
-                body={"values": values},
-            ).execute()
+            resp = (
+                service.spreadsheets()
+                .values()
+                .update(
+                    spreadsheetId=sid,
+                    range=cell_range,
+                    valueInputOption="USER_ENTERED",
+                    body={"values": values},
+                )
+                .execute()
+            )
             return {
                 "spreadsheet_id": sid,
                 "updated_range": resp.get("updatedRange", cell_range),
@@ -106,13 +118,18 @@ def register_sheets_tools(mcp: FastMCP) -> None:
         sid = _extract_sheet_id(spreadsheet_id)
         service = _sheets_service()
         try:
-            resp = service.spreadsheets().values().append(
-                spreadsheetId=sid,
-                range=cell_range,
-                valueInputOption="USER_ENTERED",
-                insertDataOption="INSERT_ROWS",
-                body={"values": values},
-            ).execute()
+            resp = (
+                service.spreadsheets()
+                .values()
+                .append(
+                    spreadsheetId=sid,
+                    range=cell_range,
+                    valueInputOption="USER_ENTERED",
+                    insertDataOption="INSERT_ROWS",
+                    body={"values": values},
+                )
+                .execute()
+            )
             updates = resp.get("updates", {})
             return {
                 "spreadsheet_id": sid,
@@ -136,9 +153,7 @@ def register_sheets_tools(mcp: FastMCP) -> None:
         """
         service = _sheets_service()
         try:
-            resp = service.spreadsheets().create(
-                body={"properties": {"title": title}}
-            ).execute()
+            resp = service.spreadsheets().create(body={"properties": {"title": title}}).execute()
             sid = resp["spreadsheetId"]
             url = resp.get("spreadsheetUrl", f"https://docs.google.com/spreadsheets/d/{sid}")
 
@@ -180,10 +195,14 @@ def register_sheets_tools(mcp: FastMCP) -> None:
         """
         drive = _drive_service()
         try:
-            copy = drive.files().copy(
-                fileId=template_spreadsheet_id,
-                body={"name": title},
-            ).execute()
+            copy = (
+                drive.files()
+                .copy(
+                    fileId=template_spreadsheet_id,
+                    body={"name": title},
+                )
+                .execute()
+            )
             new_id = copy["id"]
             url = f"https://docs.google.com/spreadsheets/d/{new_id}"
 
@@ -215,16 +234,15 @@ def register_sheets_tools(mcp: FastMCP) -> None:
         sid = _extract_sheet_id(spreadsheet_id)
         service = _sheets_service()
         try:
-            resp = service.spreadsheets().get(
-                spreadsheetId=sid, fields="properties.title,sheets.properties.title"
-            ).execute()
+            resp = (
+                service.spreadsheets()
+                .get(spreadsheetId=sid, fields="properties.title,sheets.properties.title")
+                .execute()
+            )
             return {
                 "spreadsheet_id": sid,
                 "title": resp.get("properties", {}).get("title", ""),
-                "sheets": [
-                    s["properties"]["title"]
-                    for s in resp.get("sheets", [])
-                ],
+                "sheets": [s["properties"]["title"] for s in resp.get("sheets", [])],
             }
         except Exception as exc:
             logger.error("sheets_get_metadata(%s) failed: %s", sid, exc)

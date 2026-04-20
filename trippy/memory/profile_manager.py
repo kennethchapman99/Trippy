@@ -45,9 +45,7 @@ class ProfileManager:
         )
         if self._profile_path:
             self._profile_path.parent.mkdir(parents=True, exist_ok=True)
-            self._profile_path.write_text(
-                profile.model_dump_json(indent=2), encoding="utf-8"
-            )
+            self._profile_path.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
 
     def update_from_trip_travelers(
         self, trip_travelers: list[Traveler], profile: FamilyProfile | None = None

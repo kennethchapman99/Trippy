@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import logging
 from pathlib import Path
 from typing import Any
@@ -31,7 +30,6 @@ class GmailReconcilerRunner:
         from trippy.ingest.linker import ingest_email
         from trippy.ingest.parser import ConfirmationParser
 
-        trip_id: str | None = inputs.get("trip_id")
         max_emails: int = inputs.get("max_emails", 50)
 
         auth = self._auth_manager or GoogleAuthManager()
@@ -50,15 +48,11 @@ class GmailReconcilerRunner:
         updates: list[dict[str, Any]] = []
         unlinked: list[dict[str, Any]] = []
 
-        trips_dir = self._trips_dir or config.TRIPS_PATH
         vault_path = config.VAULT_PATH
 
         for email_content in emails:
             eml_path = watcher.save_to_vault(email_content, vault_path)
-            atts = [
-                (a.filename, a.content_type, a.data)
-                for a in email_content.attachments
-            ]
+            atts = [(a.filename, a.content_type, a.data) for a in email_content.attachments]
             parse_result = parser.parse(
                 body_text=email_content.body_text,
                 body_html=email_content.body_html,
@@ -76,20 +70,24 @@ class GmailReconcilerRunner:
 
             if link.linked:
                 linked_count += 1
-                updates.append({
-                    "trip_id": link.trip_id,
-                    "confirmation_code": conf.confirmation_code,
-                    "vendor": conf.vendor,
-                    "method": link.method,
-                })
+                updates.append(
+                    {
+                        "trip_id": link.trip_id,
+                        "confirmation_code": conf.confirmation_code,
+                        "vendor": conf.vendor,
+                        "method": link.method,
+                    }
+                )
             else:
                 unlinked_count += 1
-                unlinked.append({
-                    "vendor": conf.vendor,
-                    "code": conf.confirmation_code,
-                    "type": conf.confirmation_type,
-                    "reason": "No matching trip found",
-                })
+                unlinked.append(
+                    {
+                        "vendor": conf.vendor,
+                        "code": conf.confirmation_code,
+                        "type": conf.confirmation_type,
+                        "reason": "No matching trip found",
+                    }
+                )
 
         return {
             "emails_scanned": len(emails),

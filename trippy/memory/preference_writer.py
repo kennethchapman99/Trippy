@@ -10,7 +10,6 @@ Design principles:
 from __future__ import annotations
 
 import logging
-from collections import Counter
 
 from trippy.memory.store import MemoryStore
 from trippy.models.preferences import FamilyTravelPreferences
@@ -96,8 +95,7 @@ class PreferenceWriter:
                     source=f"extracted from trips: {', '.join(trip_ids)}",
                 )
                 written["min_connection"] = (
-                    f"Min international connection {max(110, min_seen)} min"
-                    f" (conf={conf:.0%})"
+                    f"Min international connection {max(110, min_seen)} min (conf={conf:.0%})"
                 )
 
         # -------------------------------------------------------
@@ -136,7 +134,8 @@ class PreferenceWriter:
 
         logger.info(
             "PreferenceWriter wrote %d preferences from %d lived trips",
-            len(written), len(lived_trips)
+            len(written),
+            len(lived_trips),
         )
         return written
 
@@ -148,7 +147,6 @@ class PreferenceWriter:
             for seg in trip.segments:
                 if seg.depart_at:
                     hour = seg.depart_at.hour
-                    minute = seg.depart_at.minute
                     if hour >= 8:
                         avoided += 1  # acceptable departure; family chose not-early
         return {"avoided_count": avoided}

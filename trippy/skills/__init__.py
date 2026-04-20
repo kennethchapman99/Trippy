@@ -33,7 +33,7 @@ def get_all_skill_summaries() -> str:
         if path.exists():
             content = path.read_text(encoding="utf-8")
             # Extract first two lines after the title
-            skill_lines = [l for l in content.splitlines() if l.strip()]
+            skill_lines = [line for line in content.splitlines() if line.strip()]
             desc = skill_lines[2] if len(skill_lines) > 2 else ""
             lines.append(f"- **{name}**: {desc}")
     return "\n".join(lines)

@@ -5,7 +5,10 @@ from __future__ import annotations
 import logging
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from trippy.models.preferences import FamilyTravelPreferences
 
 logger = logging.getLogger(__name__)
 
@@ -84,13 +87,15 @@ class ItineraryBuilderRunner:
         current_date = start
 
         # Day 1: arrival
-        itinerary.append({
-            "day": current_day,
-            "date": str(current_date),
-            "city": destinations[0] if destinations else "Arrival city",
-            "type": "arrival",
-            "notes": "Arrive, check in, easy first evening. Jet lag day — no packed schedule.",
-        })
+        itinerary.append(
+            {
+                "day": current_day,
+                "date": str(current_date),
+                "city": destinations[0] if destinations else "Arrival city",
+                "type": "arrival",
+                "notes": "Arrive, check in, easy first evening. Jet lag day — no packed schedule.",
+            }
+        )
         current_day += 1
         current_date += timedelta(days=1)
 
@@ -102,22 +107,24 @@ class ItineraryBuilderRunner:
             nights = max(prefs.stay.min_nights_per_destination, nights)
 
             for day_in_dest in range(nights):
-                is_transit_day = (day_in_dest == nights - 1 and i < len(destinations) - 1)
+                is_transit_day = day_in_dest == nights - 1 and i < len(destinations) - 1
                 notes = f"{dest}: "
                 if day_in_dest == 0 and i > 0:
-                    notes += f"Arrive from {destinations[i-1]}. "
+                    notes += f"Arrive from {destinations[i - 1]}. "
                 if is_transit_day:
-                    notes += f"Check out, transfer to {destinations[i+1]}."
+                    notes += f"Check out, transfer to {destinations[i + 1]}."
                 else:
                     notes += f"Explore {dest}."
 
-                itinerary.append({
-                    "day": current_day,
-                    "date": str(current_date),
-                    "city": dest,
-                    "type": "transit" if is_transit_day else "regular",
-                    "notes": notes,
-                })
+                itinerary.append(
+                    {
+                        "day": current_day,
+                        "date": str(current_date),
+                        "city": dest,
+                        "type": "transit" if is_transit_day else "regular",
+                        "notes": notes,
+                    }
+                )
                 current_day += 1
                 current_date += timedelta(days=1)
 
@@ -127,13 +134,15 @@ class ItineraryBuilderRunner:
                 break
 
         # Last day: departure
-        itinerary.append({
-            "day": total_days,
-            "date": str(start + timedelta(days=total_days - 1)),
-            "city": destinations[-1] if destinations else "Departure",
-            "type": "departure",
-            "notes": "Pack, check out, depart. No activities — buffer for airport.",
-        })
+        itinerary.append(
+            {
+                "day": total_days,
+                "date": str(start + timedelta(days=total_days - 1)),
+                "city": destinations[-1] if destinations else "Departure",
+                "type": "departure",
+                "notes": "Pack, check out, depart. No activities — buffer for airport.",
+            }
+        )
 
         return itinerary
 
@@ -161,9 +170,7 @@ class ItineraryBuilderRunner:
         warnings: list[str] = []
         for item in itinerary:
             if item.get("type") == "transit":
-                warnings.append(
-                    f"Day {item['day']}: city transit day — confirm transfer booking"
-                )
+                warnings.append(f"Day {item['day']}: city transit day — confirm transfer booking")
         return warnings
 
 

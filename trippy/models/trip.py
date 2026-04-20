@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-class TripStatus(str, Enum):
+class TripStatus(StrEnum):
     DREAM = "dream"
     PLANNED = "planned"
     BOOKED = "booked"
@@ -25,7 +25,7 @@ class TripStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class SegmentType(str, Enum):
+class SegmentType(StrEnum):
     FLIGHT = "flight"
     TRAIN = "train"
     FERRY = "ferry"
@@ -34,7 +34,7 @@ class SegmentType(str, Enum):
     OTHER = "other"
 
 
-class StayType(str, Enum):
+class StayType(StrEnum):
     HOTEL = "hotel"
     AIRBNB = "airbnb"
     VRBO = "vrbo"
@@ -43,14 +43,14 @@ class StayType(str, Enum):
     OTHER = "other"
 
 
-class RiskSeverity(str, Enum):
+class RiskSeverity(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
 
 
-class ConfirmationType(str, Enum):
+class ConfirmationType(StrEnum):
     FLIGHT = "flight"
     HOTEL = "hotel"
     RENTAL = "rental"
@@ -299,7 +299,8 @@ class Trip(BaseModel):
     @property
     def high_risks(self) -> list[RiskFlag]:
         return [
-            r for r in self.risk_flags
+            r
+            for r in self.risk_flags
             if not r.resolved and r.severity in (RiskSeverity.HIGH, RiskSeverity.CRITICAL)
         ]
 

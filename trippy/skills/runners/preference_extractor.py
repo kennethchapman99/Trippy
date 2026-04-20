@@ -25,7 +25,6 @@ class PreferenceExtractorRunner:
         from trippy.memory.preference_writer import PreferenceWriter
         from trippy.memory.profile_manager import ProfileManager
         from trippy.memory.store import MemoryStore
-        from trippy.models.trip import Trip
         from trippy.services.trip_state import TripStateService
 
         memory = self._memory_store or MemoryStore(config.MEMORY_PATH)
@@ -62,7 +61,8 @@ class PreferenceExtractorRunner:
 
         logger.info(
             "PreferenceExtractor: wrote %d preferences, %d profile updates",
-            len(written), len(profile_updates)
+            len(written),
+            len(profile_updates),
         )
 
         return {

@@ -39,9 +39,7 @@ class TestLoadValidTokenFromDisk:
         mock_creds = MagicMock()
         mock_creds.valid = True
 
-        with patch(
-            "trippy.ingest.google_auth.GoogleAuthManager._load_or_refresh"
-        ) as mock_load:
+        with patch("trippy.ingest.google_auth.GoogleAuthManager._load_or_refresh") as mock_load:
             mock_load.return_value = mock_creds
             mgr = _manager(tmp_path)
             result = mgr.get_credentials()
