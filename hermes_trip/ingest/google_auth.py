@@ -74,9 +74,7 @@ class GoogleAuthManager:
                         "Download OAuth client secrets (Desktop app type) from "
                         "Google Cloud Console and save to that path."
                     )
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    str(self._creds_path), scopes_list
-                )
+                flow = InstalledAppFlow.from_client_secrets_file(str(self._creds_path), scopes_list)
                 creds = flow.run_local_server(port=0)
             self._token_path.parent.mkdir(parents=True, exist_ok=True)
             self._token_path.write_text(creds.to_json())

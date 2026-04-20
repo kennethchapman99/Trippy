@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hermes_trip.ingest.parser import ConfirmationParser, ParsedConfirmation, ParserResult
+from trippy.ingest.parser import ConfirmationParser, ParsedConfirmation, ParserResult
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 EMAILS_DIR = FIXTURES_DIR / "emails"

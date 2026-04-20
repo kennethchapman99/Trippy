@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hermes_trip.importers.sheet_importer import (
+from trippy.importers.sheet_importer import (
     CONFIDENCE_THRESHOLD,
     ImportResult,
     SheetImporter,
@@ -54,7 +54,7 @@ def _make_importer(fixture_name: str, db_url: str | None = None) -> SheetImporte
 
     from sqlalchemy import create_engine
 
-    from hermes_trip.db.models import Base
+    from trippy.db.models import Base
 
     if db_url is None:
         _, db_path = tempfile.mkstemp(suffix=".db")
@@ -266,8 +266,8 @@ class TestIdempotency:
             file_db = f"sqlite:///{tmp_db}"
             from sqlalchemy import create_engine
 
-            from hermes_trip.db import make_session_factory
-            from hermes_trip.db.models import Base
+            from trippy.db import make_session_factory
+            from trippy.db.models import Base
 
             eng = create_engine(file_db)
             Base.metadata.create_all(eng)
@@ -286,7 +286,7 @@ class TestIdempotency:
             # Confirm only 1 trip in DB
             from sqlalchemy import select
 
-            from hermes_trip.db.models import Trip
+            from trippy.db.models import Trip
 
             factory = make_session_factory(file_db)
             with factory() as session:
@@ -303,7 +303,7 @@ class TestIdempotency:
 
 class TestCollectFlags:
     def test_flags_low_confidence_fields(self) -> None:
-        from hermes_trip.importers.sheet_importer import FieldValue, ParsedTrip
+        from trippy.importers.sheet_importer import FieldValue, ParsedTrip
 
         parsed = ParsedTrip(
             name=FieldValue(value="Test Trip", confidence=1.0),
@@ -318,7 +318,7 @@ class TestCollectFlags:
         assert "status" not in flag_fields  # 0.9 >= threshold
 
     def test_no_flags_for_high_confidence_fields_with_values(self) -> None:
-        from hermes_trip.importers.sheet_importer import FieldValue, ParsedTrip
+        from trippy.importers.sheet_importer import FieldValue, ParsedTrip
 
         parsed = ParsedTrip(
             name=FieldValue(value="Test Trip", confidence=1.0),
@@ -364,24 +364,52 @@ class TestReadGoogleSheetsApi:
         return service
 
     def test_multi_tab_output_has_headers(self) -> None:
-        service = self._make_sheets_service([
-            {"properties": {"title": "Flights"}, "data": [{"rowData": [
-                {"values": [{"formattedValue": "Origin"}, {"formattedValue": "Dest"}]},
-                {"values": [{"formattedValue": "YYZ"}, {"formattedValue": "NRT"}]},
-            ]}]},
-            {"properties": {"title": "Hotels"}, "data": [{"rowData": [
-                {"values": [{"formattedValue": "Hotel"}, {"formattedValue": "City"}]},
-            ]}]},
-        ])
+        service = self._make_sheets_service(
+            [
+                {
+                    "properties": {"title": "Flights"},
+                    "data": [
+                        {
+                            "rowData": [
+                                {
+                                    "values": [
+                                        {"formattedValue": "Origin"},
+                                        {"formattedValue": "Dest"},
+                                    ]
+                                },
+                                {"values": [{"formattedValue": "YYZ"}, {"formattedValue": "NRT"}]},
+                            ]
+                        }
+                    ],
+                },
+                {
+                    "properties": {"title": "Hotels"},
+                    "data": [
+                        {
+                            "rowData": [
+                                {
+                                    "values": [
+                                        {"formattedValue": "Hotel"},
+                                        {"formattedValue": "City"},
+                                    ]
+                                },
+                            ]
+                        }
+                    ],
+                },
+            ]
+        )
         text = _read_google_sheets_api("FAKE_ID", sheets_service=service)
         assert "=== Sheet: Flights ===" in text
         assert "=== Sheet: Hotels ===" in text
         assert "YYZ" in text
 
     def test_empty_sheet_returns_header_only(self) -> None:
-        service = self._make_sheets_service([
-            {"properties": {"title": "Empty"}, "data": [{"rowData": []}]},
-        ])
+        service = self._make_sheets_service(
+            [
+                {"properties": {"title": "Empty"}, "data": [{"rowData": []}]},
+            ]
+        )
         text = _read_google_sheets_api("FAKE_ID", sheets_service=service)
         assert "=== Sheet: Empty ===" in text
 
@@ -392,11 +420,20 @@ class TestReadGoogleSheetsApi:
         assert text == ""
 
     def test_read_sheet_to_text_dispatches_to_api(self) -> None:
-        service = self._make_sheets_service([
-            {"properties": {"title": "Trip"}, "data": [{"rowData": [
-                {"values": [{"formattedValue": "Japan 2026"}]},
-            ]}]},
-        ])
+        service = self._make_sheets_service(
+            [
+                {
+                    "properties": {"title": "Trip"},
+                    "data": [
+                        {
+                            "rowData": [
+                                {"values": [{"formattedValue": "Japan 2026"}]},
+                            ]
+                        }
+                    ],
+                },
+            ]
+        )
         text = read_sheet_to_text(
             "https://docs.google.com/spreadsheets/d/FAKE_ID/edit",
             sheets_service=service,
@@ -404,11 +441,20 @@ class TestReadGoogleSheetsApi:
         assert "Japan 2026" in text
 
     def test_bare_spreadsheet_id_dispatches_to_api(self) -> None:
-        service = self._make_sheets_service([
-            {"properties": {"title": "Sheet1"}, "data": [{"rowData": [
-                {"values": [{"formattedValue": "hello"}]},
-            ]}]},
-        ])
+        service = self._make_sheets_service(
+            [
+                {
+                    "properties": {"title": "Sheet1"},
+                    "data": [
+                        {
+                            "rowData": [
+                                {"values": [{"formattedValue": "hello"}]},
+                            ]
+                        }
+                    ],
+                },
+            ]
+        )
         # 20+ char alphanumeric ID triggers the bare-ID path
         text = read_sheet_to_text("1brg_D0qM_UCLI2qedDzmnwfRZii", sheets_service=service)
         assert "hello" in text

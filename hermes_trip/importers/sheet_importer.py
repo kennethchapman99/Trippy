@@ -293,10 +293,7 @@ def _read_google_sheets_api(
         title = sheet.get("properties", {}).get("title", "Sheet")
         rows: list[str] = []
         for row_data in (sheet.get("data") or [{}])[0].get("rowData", []):
-            cells = [
-                cell.get("formattedValue", "")
-                for cell in (row_data.get("values") or [])
-            ]
+            cells = [cell.get("formattedValue", "") for cell in (row_data.get("values") or [])]
             rows.append("\t".join(cells))
             if len(rows) >= MAX_ROWS_PER_SHEET:
                 break

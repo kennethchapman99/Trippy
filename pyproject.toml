@@ -1,7 +1,7 @@
 [project]
-name = "hermes-trip"
-version = "0.1.0"
-description = "Hermes Trip Agent — personal travel-planning AI for the Chapman family"
+name = "trippy"
+version = "0.2.0"
+description = "Trippy — Hermes-native travel concierge for the Chapman family"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -19,10 +19,11 @@ dependencies = [
     "pypdf>=4.0",
     "rapidfuzz>=3.0",
     "python-dateutil>=2.9",
+    "mcp>=1.0",
 ]
 
 [project.scripts]
-hermes-trip = "hermes_trip.cli:app"
+trippy = "trippy.cli:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -52,7 +53,7 @@ ignore = ["E501", "B008"]
 python_version = "3.11"
 strict = true
 plugins = ["sqlalchemy.ext.mypy.plugin"]
-exclude = ["hermes_trip/db/migrations/"]
+exclude = ["trippy/db/migrations/", "hermes_trip/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

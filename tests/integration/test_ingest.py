@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy import create_engine, select
 
-from hermes_trip.db.models import Base, Confirmation, Leg, Stay, Trip
+from trippy.db.models import Base, Confirmation, Leg, Stay, Trip
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 EMAILS_DIR = FIXTURES_DIR / "emails"
@@ -32,7 +32,7 @@ def file_db(tmp_path: Path) -> str:
 
 def _seed_trip(db_url: str) -> None:
     """Insert Japan 2026 trip with one leg (AC003 YYZ→NRT) and one stay."""
-    from hermes_trip.db import make_session_factory
+    from trippy.db import make_session_factory
 
     factory = make_session_factory(db_url)
     with factory() as session:
@@ -94,9 +94,9 @@ class TestFlightIngestion:
     def test_air_canada_confirmation_links_to_japan_trip(self, file_db: str) -> None:
         _seed_trip(file_db)
 
-        from hermes_trip.db import make_session_factory
-        from hermes_trip.ingest.linker import ingest_email
-        from hermes_trip.ingest.parser import ConfirmationParser
+        from trippy.db import make_session_factory
+        from trippy.ingest.linker import ingest_email
+        from trippy.ingest.parser import ConfirmationParser
 
         email_text = (EMAILS_DIR / "aircanada_flight.txt").read_text()
         parser = ConfirmationParser(anthropic_client=_make_parser_client("aircanada_flight"))
@@ -114,9 +114,9 @@ class TestFlightIngestion:
     def test_confirmation_row_persisted(self, file_db: str) -> None:
         _seed_trip(file_db)
 
-        from hermes_trip.db import make_session_factory
-        from hermes_trip.ingest.linker import ingest_email
-        from hermes_trip.ingest.parser import ConfirmationParser
+        from trippy.db import make_session_factory
+        from trippy.ingest.linker import ingest_email
+        from trippy.ingest.parser import ConfirmationParser
 
         email_text = (EMAILS_DIR / "aircanada_flight.txt").read_text()
         parser = ConfirmationParser(anthropic_client=_make_parser_client("aircanada_flight"))
@@ -136,9 +136,9 @@ class TestFlightIngestion:
     def test_link_method_is_date_airport_or_flight_code(self, file_db: str) -> None:
         _seed_trip(file_db)
 
-        from hermes_trip.db import make_session_factory
-        from hermes_trip.ingest.linker import ingest_email
-        from hermes_trip.ingest.parser import ConfirmationParser
+        from trippy.db import make_session_factory
+        from trippy.ingest.linker import ingest_email
+        from trippy.ingest.parser import ConfirmationParser
 
         email_text = (EMAILS_DIR / "aircanada_flight.txt").read_text()
         parser = ConfirmationParser(anthropic_client=_make_parser_client("aircanada_flight"))
@@ -156,9 +156,9 @@ class TestHotelIngestion:
     def test_booking_hotel_links_to_japan_trip(self, file_db: str) -> None:
         _seed_trip(file_db)
 
-        from hermes_trip.db import make_session_factory
-        from hermes_trip.ingest.linker import ingest_email
-        from hermes_trip.ingest.parser import ConfirmationParser
+        from trippy.db import make_session_factory
+        from trippy.ingest.linker import ingest_email
+        from trippy.ingest.parser import ConfirmationParser
 
         email_text = (EMAILS_DIR / "booking_hotel.txt").read_text()
         parser = ConfirmationParser(anthropic_client=_make_parser_client("booking_hotel"))
@@ -177,9 +177,9 @@ class TestUnlinkedConfirmation:
         """A confirmation with no matching trip is stored with trip_id=None."""
         _seed_trip(file_db)
 
-        from hermes_trip.db import make_session_factory
-        from hermes_trip.ingest.linker import ingest_email
-        from hermes_trip.ingest.parser import ParsedConfirmation
+        from trippy.db import make_session_factory
+        from trippy.ingest.linker import ingest_email
+        from trippy.ingest.parser import ParsedConfirmation
 
         # VRBO Iceland — no matching trip in DB
         parsed = ParsedConfirmation(
@@ -202,9 +202,9 @@ class TestUnlinkedConfirmation:
         assert link.method == "unlinked"
 
     def test_unlinked_confirmation_persisted_in_db(self, file_db: str) -> None:
-        from hermes_trip.db import make_session_factory
-        from hermes_trip.ingest.linker import ingest_email
-        from hermes_trip.ingest.parser import ParsedConfirmation
+        from trippy.db import make_session_factory
+        from trippy.ingest.linker import ingest_email
+        from trippy.ingest.parser import ParsedConfirmation
 
         parsed = ParsedConfirmation(
             confirmation_type="hotel",

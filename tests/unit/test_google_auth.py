@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hermes_trip.ingest.google_auth import ALL_SCOPES, GoogleAuthManager
+from trippy.ingest.google_auth import ALL_SCOPES, GoogleAuthManager
 
 
 def _manager(tmp_path: Path, credentials: object | None = None) -> GoogleAuthManager:
@@ -39,9 +39,7 @@ class TestLoadValidTokenFromDisk:
         mock_creds = MagicMock()
         mock_creds.valid = True
 
-        with patch(
-            "hermes_trip.ingest.google_auth.GoogleAuthManager._load_or_refresh"
-        ) as mock_load:
+        with patch("trippy.ingest.google_auth.GoogleAuthManager._load_or_refresh") as mock_load:
             mock_load.return_value = mock_creds
             mgr = _manager(tmp_path)
             result = mgr.get_credentials()
@@ -61,11 +59,11 @@ class TestRefreshExpiredToken:
         mock_creds.refresh_token = "rt"
 
         with (
-            patch("hermes_trip.ingest.google_auth.Credentials", create=True),
-            patch("hermes_trip.ingest.google_auth.Request", create=True),
+            patch("trippy.ingest.google_auth.Credentials", create=True),
+            patch("trippy.ingest.google_auth.Request", create=True),
         ):
             # Patch via the module's deferred imports
-            import hermes_trip.ingest.google_auth as ga_module
+            import trippy.ingest.google_auth as ga_module
 
             original = ga_module.GoogleAuthManager._load_or_refresh
 

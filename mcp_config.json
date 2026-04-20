@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "trippy-google-tools": {
+      "command": "python",
+      "args": ["-m", "trippy.mcp.server"],
+      "description": "Gmail, Google Sheets, and Google Drive tools for the Trippy travel concierge",
+      "env": {
+        "GOOGLE_TOKEN_PATH": "${GOOGLE_TOKEN_PATH:-~/.trippy/google_token.json}",
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}"
+      }
+    }
+  }
+}
