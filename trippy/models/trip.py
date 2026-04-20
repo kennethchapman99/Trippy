@@ -235,6 +235,7 @@ class SyncMetadata(BaseModel):
     google_sheet_url: str | None = None
     last_synced_at: datetime | None = None
     last_synced_by: str | None = None  # "agent" | "human"
+    cell_updated_at: dict[str, str] = Field(default_factory=dict)
     sync_conflicts: list[str] = Field(default_factory=list)
 
     @field_validator("google_sheet_url", mode="before")

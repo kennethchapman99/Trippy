@@ -1,0 +1,12 @@
+{
+  "overview": {},
+  "flights": [
+    {
+      "Segment ID": "seg-1",
+      "Carrier": "Old Carrier"
+    }
+  ],
+  "hotels": [],
+  "checklist": [],
+  "budget": []
+}
