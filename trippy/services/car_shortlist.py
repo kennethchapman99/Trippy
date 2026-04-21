@@ -144,7 +144,9 @@ def _options_from_profile(profile: object, intake: TripIntake) -> list[CarOption
                     "Airport pickup is usually simplest; avoid unclear shuttle/offsite pickup with luggage.",
                 ],
                 friction_flags=flags,
-                confidence_notes=["This is a live-search handoff candidate, not a confirmed vehicle quote."],
+                confidence_notes=[
+                    "This is a live-search handoff candidate, not a confirmed vehicle quote."
+                ],
                 live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
             )
         )

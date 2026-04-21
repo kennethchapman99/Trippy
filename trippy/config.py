@@ -48,7 +48,9 @@ DUFFEL_ACCESS_TOKEN: str = os.environ.get("DUFFEL_ACCESS_TOKEN", "")
 # Google Sheet template
 SHEET_TEMPLATE_ID: str = os.environ.get("TRIPPY_SHEET_TEMPLATE_ID", "")
 LIVE_VALIDATION_ENABLED: bool = _bool("TRIPPY_LIVE_VALIDATION_ENABLED", False)
-LIVE_VALIDATION_TIMEOUT_SECONDS: float = float(os.environ.get("TRIPPY_LIVE_VALIDATION_TIMEOUT_SECONDS", "4"))
+LIVE_VALIDATION_TIMEOUT_SECONDS: float = float(
+    os.environ.get("TRIPPY_LIVE_VALIDATION_TIMEOUT_SECONDS", "4")
+)
 
 DATABASE_URL: str = f"sqlite:///{DB_PATH}"
 

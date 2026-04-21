@@ -126,7 +126,9 @@ def _routes_for_option(option: TripPlanOption) -> list[MapRoute]:
                 label="Inter-island movement to validate",
                 origin_query=option.regions[0],
                 destination_query=option.regions[1],
-                google_maps_url=_directions_url(option.regions[0], option.regions[1], MapRouteMode.DRIVING),
+                google_maps_url=_directions_url(
+                    option.regions[0], option.regions[1], MapRouteMode.DRIVING
+                ),
                 mode=MapRouteMode.DRIVING,
                 notes="Placeholder for flight/ferry research; do not treat as a literal drive route.",
             )
@@ -177,7 +179,19 @@ def _category(query: str) -> MapPinCategory:
         return MapPinCategory.LODGING
     if "restaurant" in lower or "food" in lower:
         return MapPinCategory.FOOD
-    if any(word in lower for word in ["whale", "hot springs", "viewpoint", "volcano", "tea", "lagoa", "furnas", "sete"]):
+    if any(
+        word in lower
+        for word in [
+            "whale",
+            "hot springs",
+            "viewpoint",
+            "volcano",
+            "tea",
+            "lagoa",
+            "furnas",
+            "sete",
+        ]
+    ):
         return MapPinCategory.ACTIVITY
     return MapPinCategory.LOGISTICS
 

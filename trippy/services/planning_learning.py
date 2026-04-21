@@ -145,7 +145,8 @@ class PlanningLearningService:
                         )
                     )
             if state.category == ShortlistCategory.ACTIVITIES and any(
-                option.recommendation_grade in {RecommendationGrade.GOOD, RecommendationGrade.STRONG}
+                option.recommendation_grade
+                in {RecommendationGrade.GOOD, RecommendationGrade.STRONG}
                 for option in state.activity_options
             ):
                 proposals.append(

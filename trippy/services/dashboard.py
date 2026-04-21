@@ -203,14 +203,10 @@ def _shortlist_status(trip_id: str) -> dict[str, str]:
     statuses: dict[str, str] = {}
     for state in ShortlistStore().load_all(trip_id):
         live = sum(
-            1
-            for option in state.options_as_dicts()
-            if option.get("row_status") == "verified_live"
+            1 for option in state.options_as_dicts() if option.get("row_status") == "verified_live"
         )
         researched = sum(
-            1
-            for option in state.options_as_dicts()
-            if option.get("row_status") == "researched"
+            1 for option in state.options_as_dicts() if option.get("row_status") == "researched"
         )
         statuses[state.category.value] = (
             f"{state.option_count} option(s), {live} live, {researched} researched, recommended {state.recommended_option_id}"
@@ -247,12 +243,18 @@ def _next_actions(
     if "intake" not in planning_status:
         actions.append(f"Create intake: uv run trippy trip-intake wizard --trip-name {trip.name!r}")
     if "draft" not in planning_status:
-        actions.append(f"Generate plan draft: uv run trippy trip-plan draft --trip-id {trip.trip_id}")
+        actions.append(
+            f"Generate plan draft: uv run trippy trip-plan draft --trip-id {trip.trip_id}"
+        )
     if "workspace" not in planning_status:
-        actions.append(f"Prepare workspace: uv run trippy trip-plan workspace --trip-id {trip.trip_id}")
+        actions.append(
+            f"Prepare workspace: uv run trippy trip-plan workspace --trip-id {trip.trip_id}"
+        )
     for category in ("flights", "lodging", "cars", "activities"):
         if category not in shortlist_status:
-            actions.append(f"Generate {category} shortlist: uv run trippy trip-plan {category} --trip-id {trip.trip_id}")
+            actions.append(
+                f"Generate {category} shortlist: uv run trippy trip-plan {category} --trip-id {trip.trip_id}"
+            )
     if not trip.segments:
         actions.append("Research exact flight options and total travel burden.")
     if trip.unconfirmed_segments:

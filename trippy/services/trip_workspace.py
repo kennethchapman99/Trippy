@@ -104,9 +104,13 @@ class TripWorkspaceService:
                 state.status = WorkspaceStatus.SHEET_FAILED
                 error = str(sheet.get("error", "Google Sheet was not created."))
                 state.warnings.append(error)
-                state.next_actions.insert(0, "Run trippy doctor and trippy auth-google, then retry workspace creation.")
+                state.next_actions.insert(
+                    0, "Run trippy doctor and trippy auth-google, then retry workspace creation."
+                )
         else:
-            state.next_actions.insert(0, "Google Sheet creation skipped; local workspace JSON was prepared.")
+            state.next_actions.insert(
+                0, "Google Sheet creation skipped; local workspace JSON was prepared."
+            )
 
         self._save_workspace_state(state)
         return state
@@ -153,7 +157,11 @@ class TripWorkspaceService:
 
     def _build_canonical_trip(self, intake: TripIntake, option: TripPlanOption) -> Trip:
         start = intake.travel_window.start_date
-        end = start + timedelta(days=option.duration_days - 1) if start else intake.travel_window.end_date
+        end = (
+            start + timedelta(days=option.duration_days - 1)
+            if start
+            else intake.travel_window.end_date
+        )
         travelers = _travelers_for_intake(intake)
         segments = _placeholder_segments(intake, option)
         stays = _placeholder_stays(intake, option, start)
@@ -358,10 +366,30 @@ class TripWorkspaceService:
                 name="Logistics",
                 headers=["Area", "Question", "Status", "Notes"],
                 rows=[
-                    ["Entry", "Portugal/Schengen entry requirements", "seeded", "Check passport validity and any ETIAS timing."],
-                    ["Health", "Vaccines/precautions", "seeded", "Add weather and motion-sickness backup planning."],
-                    ["Cash", "Local currency guidance", "seeded", "Estimate euros to carry for small vendors, parking, tips, and markets."],
-                    ["Inter-island", "Schedule buffers", "seeded", option.island_region_movement_friction],
+                    [
+                        "Entry",
+                        "Portugal/Schengen entry requirements",
+                        "seeded",
+                        "Check passport validity and any ETIAS timing.",
+                    ],
+                    [
+                        "Health",
+                        "Vaccines/precautions",
+                        "seeded",
+                        "Add weather and motion-sickness backup planning.",
+                    ],
+                    [
+                        "Cash",
+                        "Local currency guidance",
+                        "seeded",
+                        "Estimate euros to carry for small vendors, parking, tips, and markets.",
+                    ],
+                    [
+                        "Inter-island",
+                        "Schedule buffers",
+                        "seeded",
+                        option.island_region_movement_friction,
+                    ],
                 ],
             ),
             WorkspaceTab(
@@ -420,9 +448,14 @@ class TripWorkspaceService:
                 .execute()
             )
             sheet_id = str(resp["spreadsheetId"])
-            url = str(resp.get("spreadsheetUrl", f"https://docs.google.com/spreadsheets/d/{sheet_id}"))
+            url = str(
+                resp.get("spreadsheetUrl", f"https://docs.google.com/spreadsheets/d/{sheet_id}")
+            )
 
-            updates = [{"range": f"{_sheet_tab_name(tab.name)}!A1", "values": [tab.headers, *tab.rows]} for tab in tabs]
+            updates = [
+                {"range": f"{_sheet_tab_name(tab.name)}!A1", "values": [tab.headers, *tab.rows]}
+                for tab in tabs
+            ]
             try:
                 service.spreadsheets().values().batchUpdate(
                     spreadsheetId=sheet_id,
@@ -432,10 +465,14 @@ class TripWorkspaceService:
                 partial_failures.append(f"Sheet was created but tab values failed: {exc}")
 
             try:
-                meta = service.spreadsheets().get(
-                    spreadsheetId=sheet_id,
-                    fields="sheets.properties(sheetId,title)",
-                ).execute()
+                meta = (
+                    service.spreadsheets()
+                    .get(
+                        spreadsheetId=sheet_id,
+                        fields="sheets.properties(sheetId,title)",
+                    )
+                    .execute()
+                )
                 sheet_ids = {
                     str(sheet["properties"]["title"]): int(sheet["properties"]["sheetId"])
                     for sheet in meta.get("sheets", [])
@@ -459,7 +496,9 @@ class TripWorkspaceService:
                         fields="id,parents",
                     ).execute()
                 except Exception as exc:
-                    partial_failures.append(f"Sheet was created but Drive folder move failed: {exc}")
+                    partial_failures.append(
+                        f"Sheet was created but Drive folder move failed: {exc}"
+                    )
 
             return {"spreadsheet_id": sheet_id, "url": url, "partial_failures": partial_failures}
         except Exception as exc:
@@ -565,7 +604,9 @@ def _workspace_checklist(option: TripPlanOption) -> list[ChecklistItem]:
     ]
     return [
         ChecklistItem(item_id=f"plan-{idx:02d}", category=category, title=title)
-        for idx, (category, title) in enumerate(items + [("risk", risk) for risk in option.major_risks], start=1)
+        for idx, (category, title) in enumerate(
+            items + [("risk", risk) for risk in option.major_risks], start=1
+        )
     ]
 
 
@@ -624,7 +665,9 @@ def _load_or_build_shortlists(
         ShortlistCategory.FLIGHTS: FlightShortlistService(intake_service, planner_service, store),
         ShortlistCategory.LODGING: LodgingShortlistService(intake_service, planner_service, store),
         ShortlistCategory.CARS: CarShortlistService(intake_service, planner_service, store),
-        ShortlistCategory.ACTIVITIES: ActivityShortlistService(intake_service, planner_service, store),
+        ShortlistCategory.ACTIVITIES: ActivityShortlistService(
+            intake_service, planner_service, store
+        ),
     }
     states: dict[str, Any] = {}
     for category, builder in builders.items():
@@ -717,7 +760,28 @@ def _flight_rows(state: Any | None) -> list[list[Any]]:
                 ", ".join(option.validation.missing_fields),
             ]
         )
-    return rows or [["", "seeded", "", "", "", "", "", "", "", "", "", "", "Run trip-plan flights.", "", "", "", "", ""]]
+    return rows or [
+        [
+            "",
+            "seeded",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "Run trip-plan flights.",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ]
+    ]
 
 
 def _lodging_rows(state: Any | None) -> list[list[Any]]:
@@ -753,7 +817,34 @@ def _lodging_rows(state: Any | None) -> list[list[Any]]:
                 ", ".join(option.validation.missing_fields),
             ]
         )
-    return rows or [["", "seeded", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Run trip-plan lodging.", "", "", "", "", "", ""]]
+    return rows or [
+        [
+            "",
+            "seeded",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "Run trip-plan lodging.",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ]
+    ]
 
 
 def _car_rows(state: Any | None) -> list[list[Any]]:
@@ -784,7 +875,29 @@ def _car_rows(state: Any | None) -> list[list[Any]]:
                 ", ".join(option.validation.missing_fields),
             ]
         )
-    return rows or [["", "seeded", "", "", "", "", "", "", "", "", "", "", "", "Run trip-plan cars.", "", "", "", "", ""]]
+    return rows or [
+        [
+            "",
+            "seeded",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "Run trip-plan cars.",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ]
+    ]
 
 
 def _activity_rows(state: Any | None) -> list[list[Any]]:
@@ -815,7 +928,29 @@ def _activity_rows(state: Any | None) -> list[list[Any]]:
                 ", ".join(option.validation.missing_fields),
             ]
         )
-    return rows or [["", "seeded", "", "", "", "", "", "", "", "", "", "", "", "Run trip-plan activities.", "", "", "", "", ""]]
+    return rows or [
+        [
+            "",
+            "seeded",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "Run trip-plan activities.",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ]
+    ]
 
 
 def _map_rows(map_artifact: Any, shortlists: dict[str, Any]) -> list[list[Any]]:
@@ -846,12 +981,26 @@ def _map_rows(map_artifact: Any, shortlists: dict[str, Any]) -> list[list[Any]]:
 
 def _risk_rows(trip: Trip, shortlists: dict[str, Any]) -> list[list[Any]]:
     rows = [
-        [risk.description, risk.severity.value, "seeded", risk.recommended_fix or "", "selected plan"]
+        [
+            risk.description,
+            risk.severity.value,
+            "seeded",
+            risk.recommended_fix or "",
+            "selected plan",
+        ]
         for risk in trip.risk_flags
     ]
     for state in shortlists.values():
         for warning in state.warnings:
-            rows.append([warning, "medium", "researched", state.recommendation_summary, state.category.value])
+            rows.append(
+                [
+                    warning,
+                    "medium",
+                    "researched",
+                    state.recommendation_summary,
+                    state.category.value,
+                ]
+            )
         for option in state.options_as_dicts():
             for flag in option.get("friction_flags", [])[:3]:
                 rows.append(
@@ -883,9 +1032,13 @@ def _timeline_rows(
             date_value=start,
             event_type="flight",
             title=_option_summary(best_flight) or "Outbound flight research",
-            location=best_flight.arrival_airport if best_flight is not None else ", ".join(option.regions),
+            location=best_flight.arrival_airport
+            if best_flight is not None
+            else ", ".join(option.regions),
             from_value=", ".join(intake.departure_airports),
-            to_value=best_flight.arrival_airport if best_flight is not None else "destination gateway",
+            to_value=best_flight.arrival_airport
+            if best_flight is not None
+            else "destination gateway",
             provider=getattr(best_flight, "booking_source", ""),
             status="recommended" if best_flight is not None else "seeded",
             fixed="flexible",
@@ -1142,7 +1295,9 @@ def _workspace_completeness(shortlists: dict[str, Any], trip: Trip) -> int:
         bool(trip.segments),
         bool(trip.stays),
         all(category in shortlists for category in ("flights", "lodging", "cars", "activities")),
-        any(item.category in {"document", "logistics", "health", "money"} for item in trip.checklist),
+        any(
+            item.category in {"document", "logistics", "health", "money"} for item in trip.checklist
+        ),
         bool(trip.risk_flags),
     ]
     return int(sum(1 for item in checks if item) / len(checks) * 100)
@@ -1175,7 +1330,9 @@ def _workspace_next_actions(shortlists: dict[str, Any], trip: Trip) -> list[str]
         if state is None:
             actions.append(f"Generate {category} shortlist")
         elif getattr(state, "recommended_option_id", None):
-            actions.append(f"Open and live-verify recommended {category}: {state.recommended_option_id}")
+            actions.append(
+                f"Open and live-verify recommended {category}: {state.recommended_option_id}"
+            )
     if trip.unconfirmed_segments or trip.unconfirmed_stays:
         actions.append("Promote selected recommendations to approved/booked once human confirms.")
     return actions

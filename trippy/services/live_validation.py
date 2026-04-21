@@ -47,7 +47,9 @@ class LiveValidationService:
         *,
         attempt_network: bool | None = None,
     ) -> ResearchShortlistState:
-        should_fetch = config.LIVE_VALIDATION_ENABLED if attempt_network is None else attempt_network
+        should_fetch = (
+            config.LIVE_VALIDATION_ENABLED if attempt_network is None else attempt_network
+        )
         for option in _state_options(state):
             self._validate_option(option, state=state, attempt_network=should_fetch)
         state.artifacts["validation_mode"] = "network" if should_fetch else "provenance_only"
@@ -100,7 +102,9 @@ class LiveValidationService:
             validation.confidence = min(validation.confidence, 0.35)
             option.row_status = ShortlistRowStatus.RESEARCHED
             option.live_data_status = LiveDataStatus.HANDOFF_REQUIRED
-            validation.notes.append(f"Live source check failed with status {status_code or 'unknown'}.")
+            validation.notes.append(
+                f"Live source check failed with status {status_code or 'unknown'}."
+            )
         option.validation = validation
 
 
@@ -176,7 +180,9 @@ def _missing_fields(option: Any, state: ResearchShortlistState) -> list[str]:
                 missing.append(field)
         missing.extend(["exact_availability", "final_total_price", "cancellation_deadline"])
     elif state.category.value == "cars":
-        missing.extend(["exact_vehicle_model", "final_total_price", "deposit_terms", "insurance_terms"])
+        missing.extend(
+            ["exact_vehicle_model", "final_total_price", "deposit_terms", "insurance_terms"]
+        )
     elif state.category.value == "activities":
         missing.extend(["exact_schedule", "remaining_capacity", "operator_safety_details"])
     return missing

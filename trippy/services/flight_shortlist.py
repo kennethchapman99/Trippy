@@ -50,7 +50,9 @@ class FlightShortlistService:
         )
         plan = source_plan(TravelSourceCategory.FLIGHTS)
         profile = profile_for_intake(ctx.intake)
-        options = _azores_options(ctx, profile.gateway_airports[0] if profile.gateway_airports else "destination")
+        options = _azores_options(
+            ctx, profile.gateway_airports[0] if profile.gateway_airports else "destination"
+        )
         state = ResearchShortlistState(
             trip_id=trip_id,
             category=ShortlistCategory.FLIGHTS,
@@ -117,7 +119,10 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
                 "Likely highest comfort if available because it avoids layover failure and travel-day loss.",
                 "May cost more or operate seasonally; price premium can still be rational for a short family trip.",
             ],
-            friction_flags=["seasonal availability must be verified", "baggage and seat terms unknown"],
+            friction_flags=[
+                "seasonal availability must be verified",
+                "baggage and seat terms unknown",
+            ],
             confidence_notes=["This is a source-linked candidate, not a confirmed fare."],
             live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
         ),
@@ -148,8 +153,13 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
                 "Aeroplan relevance may offset some friction if the fare is same-ticket and well timed.",
                 "Lisbon transfer adds Schengen connection risk and can burn a larger travel day.",
             ],
-            friction_flags=["layover timing needs validation", "avoid overnight or very tight Lisbon transfer"],
-            confidence_notes=["Use as the best backup if nonstop is unavailable or irrationally expensive."],
+            friction_flags=[
+                "layover timing needs validation",
+                "avoid overnight or very tight Lisbon transfer",
+            ],
+            confidence_notes=[
+                "Use as the best backup if nonstop is unavailable or irrationally expensive."
+            ],
         ),
         FlightOption(
             option_id="flight-boston-positioning-pdl",
@@ -181,7 +191,11 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
                 "Could be cheaper, but multi-ticket or baggage recheck risk can erase the value.",
                 "Only acceptable with protected routing, sane layover, and clear luggage path.",
             ],
-            friction_flags=["airport mismatch/recheck risk", "delay protection risk", "family luggage burden"],
+            friction_flags=[
+                "airport mismatch/recheck risk",
+                "delay protection risk",
+                "family luggage burden",
+            ],
             confidence_notes=["Use mainly as a price sanity check, not default recommendation."],
         ),
     ]

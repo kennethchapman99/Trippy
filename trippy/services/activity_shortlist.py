@@ -116,7 +116,9 @@ def _options_from_profile(profile: object, intake: TripIntake) -> list[ActivityO
                 },
                 family_pace_fit_score=88 if idx <= 3 else 74,
                 safety_confidence_score=78,
-                crowd_fit_score=84 if "private" in query.lower() or "small" in query.lower() else 66,
+                crowd_fit_score=84
+                if "private" in query.lower() or "small" in query.lower()
+                else 66,
                 total_friction_score=18 + len(flags) * 8,
                 recommendation_grade=RecommendationGrade.GOOD
                 if idx <= 3
@@ -126,7 +128,9 @@ def _options_from_profile(profile: object, intake: TripIntake) -> list[ActivityO
                     "Reject if pickup, group size, or cancellation terms are unclear.",
                 ],
                 friction_flags=flags,
-                confidence_notes=["Source link is the start of live validation, not a confirmed booking option."],
+                confidence_notes=[
+                    "Source link is the start of live validation, not a confirmed booking option."
+                ],
                 live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
             )
         )

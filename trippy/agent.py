@@ -348,7 +348,9 @@ def _run_planning_service(inputs: dict[str, Any]) -> str:
                 duration_days=inputs.get("duration_days"),
                 travelers=adults + children,
                 party=TripParty(
-                    party_type=TripPartyType(party_type.strip().lower().replace("-", "_").replace(" ", "_")),
+                    party_type=TripPartyType(
+                        party_type.strip().lower().replace("-", "_").replace(" ", "_")
+                    ),
                     adults=adults,
                     children=children,
                     explicit=True,
@@ -357,7 +359,11 @@ def _run_planning_service(inputs: dict[str, Any]) -> str:
                 goals=_as_string_list(inputs.get("goals")),
                 avoidances=_as_string_list(inputs.get("avoidances")),
             )
-            return TripIntakeService().create(intake, overwrite=bool(trip_id)).model_dump_json(indent=2)
+            return (
+                TripIntakeService()
+                .create(intake, overwrite=bool(trip_id))
+                .model_dump_json(indent=2)
+            )
         if not trip_id:
             return json.dumps({"error": "trip_id is required", "action": action})
         if action == "show_intake":
@@ -388,26 +394,46 @@ def _run_planning_service(inputs: dict[str, Any]) -> str:
             from trippy import config
             from trippy.services.trip_map_builder import TripMapBuilder
 
-            return TripMapBuilder().write_artifacts(
-                trip_id,
-                config.EXPORT_PATH / "maps",
-            ).model_dump_json(indent=2)
+            return (
+                TripMapBuilder()
+                .write_artifacts(
+                    trip_id,
+                    config.EXPORT_PATH / "maps",
+                )
+                .model_dump_json(indent=2)
+            )
         if action == "flights":
             from trippy.services.flight_shortlist import FlightShortlistService
 
-            return FlightShortlistService().build(trip_id, validate_live=validate_live).model_dump_json(indent=2)
+            return (
+                FlightShortlistService()
+                .build(trip_id, validate_live=validate_live)
+                .model_dump_json(indent=2)
+            )
         if action == "lodging":
             from trippy.services.lodging_shortlist import LodgingShortlistService
 
-            return LodgingShortlistService().build(trip_id, validate_live=validate_live).model_dump_json(indent=2)
+            return (
+                LodgingShortlistService()
+                .build(trip_id, validate_live=validate_live)
+                .model_dump_json(indent=2)
+            )
         if action == "cars":
             from trippy.services.car_shortlist import CarShortlistService
 
-            return CarShortlistService().build(trip_id, validate_live=validate_live).model_dump_json(indent=2)
+            return (
+                CarShortlistService()
+                .build(trip_id, validate_live=validate_live)
+                .model_dump_json(indent=2)
+            )
         if action == "activities":
             from trippy.services.activity_shortlist import ActivityShortlistService
 
-            return ActivityShortlistService().build(trip_id, validate_live=validate_live).model_dump_json(indent=2)
+            return (
+                ActivityShortlistService()
+                .build(trip_id, validate_live=validate_live)
+                .model_dump_json(indent=2)
+            )
         if action == "propose_learning":
             from trippy.services.planning_learning import PlanningLearningService
 

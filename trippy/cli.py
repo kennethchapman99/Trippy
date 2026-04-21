@@ -254,7 +254,9 @@ def trip_intake_wizard(
         "--separate-rooms",
         help="Separate rooms/privacy matter for this trip",
     ),
-    privacy_needs: str = typer.Option("", "--privacy-needs", help="Privacy or room-separation needs"),
+    privacy_needs: str = typer.Option(
+        "", "--privacy-needs", help="Privacy or room-separation needs"
+    ),
     mobility_notes: str = typer.Option("", "--mobility-notes", help="Mobility/stamina notes"),
     child_friendliness_notes: str = typer.Option(
         "",
@@ -272,7 +274,9 @@ def trip_intake_wizard(
         "--max-travel-time-hours",
         help="Preferred max total travel time in hours",
     ),
-    prefer_direct: bool = typer.Option(True, "--direct/--connections-ok", help="Prefer direct flights"),
+    prefer_direct: bool = typer.Option(
+        True, "--direct/--connections-ok", help="Prefer direct flights"
+    ),
     goal: list[str] | None = typer.Option(None, "--goal", help="Trip goal; repeatable"),
     avoidance: list[str] | None = typer.Option(
         None,
@@ -318,7 +322,9 @@ def trip_intake_wizard(
             raw_destination = str(typer.prompt("Destination seed(s)", default="Azores")).strip()
             destinations = _split_cli_list([raw_destination])
         if not travel_window and not season and not start_date:
-            travel_window = str(typer.prompt("Travel window or season", default="summer 2027")).strip()
+            travel_window = str(
+                typer.prompt("Travel window or season", default="summer 2027")
+            ).strip()
         if not duration_days:
             duration_days = str(typer.prompt("Duration in days or range", default="10")).strip()
         party_type = str(
@@ -334,7 +340,9 @@ def trip_intake_wizard(
         travelers = adults + children
         if children and not child_age:
             raw_ages = str(typer.prompt("Child ages or age bands", default="")).strip()
-            child_age = [int(part.strip()) for part in raw_ages.split(",") if part.strip().isdigit()]
+            child_age = [
+                int(part.strip()) for part in raw_ages.split(",") if part.strip().isdigit()
+            ]
         if not traveler:
             raw_roster = str(
                 typer.prompt(
@@ -512,7 +520,9 @@ def trip_plan_select(
 @trip_plan_app.command("workspace")
 def trip_plan_workspace(
     trip_id: str = typer.Option(..., "--trip-id", help="Trip intake ID"),
-    option_id: str = typer.Option("", "--option-id", help="Optional plan option ID to select inline"),
+    option_id: str = typer.Option(
+        "", "--option-id", help="Optional plan option ID to select inline"
+    ),
     folder_id: str = typer.Option("", "--folder-id", help="Optional Google Drive folder ID"),
     google: bool = typer.Option(True, "--google/--no-google", help="Attempt Google Sheet creation"),
     validate_live: bool = typer.Option(
@@ -1848,7 +1858,9 @@ def _run_shortlist_command(
 
 
 def _print_shortlist(state: Any) -> None:
-    table = Table(title=f"{state.category.value.title()} Shortlist: {state.trip_id}", show_lines=True)
+    table = Table(
+        title=f"{state.category.value.title()} Shortlist: {state.trip_id}", show_lines=True
+    )
     table.add_column("Rank", justify="right")
     table.add_column("Option", style="bold")
     table.add_column("Source")
@@ -1860,11 +1872,7 @@ def _print_shortlist(state: Any) -> None:
     table.add_column("Why / Tradeoffs")
 
     for option in state.options_as_dicts():
-        source = (
-            option.get("booking_source")
-            or option.get("source")
-            or option.get("deep_link", "")
-        )
+        source = option.get("booking_source") or option.get("source") or option.get("deep_link", "")
         name = (
             option.get("airline")
             or option.get("name")

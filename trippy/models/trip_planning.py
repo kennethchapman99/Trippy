@@ -86,7 +86,9 @@ class FlightPreferenceInput(BaseModel):
 class LodgingPreferenceInput(BaseModel):
     preferred_types: list[str] = Field(default_factory=list)
     city_strategy: str = "central boutique hotel when in cities"
-    non_city_strategy: str = "private rental or small hotel with safe location and practical parking"
+    non_city_strategy: str = (
+        "private rental or small hotel with safe location and practical parking"
+    )
     min_beds: int = 3
     king_bed_preferred: bool = True
     notes: str | None = None
@@ -267,7 +269,9 @@ class TripIntake(BaseModel):
             raise ValueError("trip_name is required")
         return cleaned
 
-    @field_validator("destination_seeds", "departure_airports", "goals", "avoidances", mode="before")
+    @field_validator(
+        "destination_seeds", "departure_airports", "goals", "avoidances", mode="before"
+    )
     @classmethod
     def _clean_list(cls, value: object) -> list[str]:
         if value is None:
@@ -327,13 +331,21 @@ class TripIntake(BaseModel):
             and self.duration_max_days < self.duration_min_days
         ):
             raise ValueError("duration_max_days must be on or after duration_min_days")
-        if self.duration_days is None and self.duration_min_days is not None and self.duration_max_days is not None:
+        if (
+            self.duration_days is None
+            and self.duration_min_days is not None
+            and self.duration_max_days is not None
+        ):
             self.duration_days = round((self.duration_min_days + self.duration_max_days) / 2)
 
     def duration_display(self) -> str:
         if self.duration_label:
             return self.duration_label
-        if self.duration_min_days and self.duration_max_days and self.duration_min_days != self.duration_max_days:
+        if (
+            self.duration_min_days
+            and self.duration_max_days
+            and self.duration_min_days != self.duration_max_days
+        ):
             return f"{self.duration_min_days}-{self.duration_max_days} days"
         if self.duration_days:
             return f"{self.duration_days} days"

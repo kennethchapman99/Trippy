@@ -122,7 +122,10 @@ def test_azores_golden_path_services(
     assert "/flights/" not in cars.car_options[2].deep_link
     assert activities.activity_options[0].source == "GetYourGuide"
     assert flights.flight_options[0].row_status == ShortlistRowStatus.RESEARCHED
-    assert flights.flight_options[0].validation.verification_status == VerificationStatus.MANUAL_REQUIRED
+    assert (
+        flights.flight_options[0].validation.verification_status
+        == VerificationStatus.MANUAL_REQUIRED
+    )
     assert lodging.lodging_options[0].fit_category.value in {
         "preferred_fit",
         "comfortable_fit",
@@ -324,7 +327,9 @@ def test_live_validation_marks_reachable_rows_without_claiming_inventory(
     planner.select_option(intake.trip_id, "azores-two-island-balanced")
     flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
 
-    validator = LiveValidationService(fetcher=lambda _url, _timeout: (True, 200, "fake live source OK"))
+    validator = LiveValidationService(
+        fetcher=lambda _url, _timeout: (True, 200, "fake live source OK")
+    )
     validated = validator.validate_state(flights, attempt_network=True)
     first = validated.flight_options[0]
 
@@ -346,7 +351,9 @@ def test_trip_party_edge_cases_are_visible() -> None:
         mode=TripIntakeMode.SELECTED_DESTINATION,
         trip_name="One Parent Trip",
         destination_seeds=["France"],
-        party=TripParty(party_type=TripPartyType.SUBSET_FAMILY, adults=1, children=1, explicit=True),
+        party=TripParty(
+            party_type=TripPartyType.SUBSET_FAMILY, adults=1, children=1, explicit=True
+        ),
     )
     six = TripIntake(
         mode=TripIntakeMode.SELECTED_DESTINATION,

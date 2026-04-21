@@ -57,7 +57,14 @@ class LodgingShortlistService:
         )
         plan = source_plan(category)
         options = _options_from_profile(profile, ctx.intake)
-        recommended = next((option.option_id for option in options if option.recommendation_grade == RecommendationGrade.GOOD), options[0].option_id if options else None)
+        recommended = next(
+            (
+                option.option_id
+                for option in options
+                if option.recommendation_grade == RecommendationGrade.GOOD
+            ),
+            options[0].option_id if options else None,
+        )
         state = ResearchShortlistState(
             trip_id=trip_id,
             category=ShortlistCategory.LODGING,
@@ -89,8 +96,7 @@ def _options_from_profile(profile: object, intake: TripIntake) -> list[LodgingOp
     traveler_count = party.total_travelers
     requires_three_beds = traveler_count >= 5 or getattr(party, "children", 0) >= 2
     privacy_needed = bool(
-        getattr(party, "separate_rooms_preferred", False)
-        or getattr(party, "privacy_needs", None)
+        getattr(party, "separate_rooms_preferred", False) or getattr(party, "privacy_needs", None)
     )
     options: list[LodgingOption] = []
     for idx, target in enumerate(targets[:5], start=1):
@@ -102,7 +108,11 @@ def _options_from_profile(profile: object, intake: TripIntake) -> list[LodgingOp
         is_private = target.get("lodging_type") == "private rental"
         bed_fit_known = True if is_private else None
         king_known = None
-        parking = "likely practical but live-verify exact property parking" if is_private else "verify paid/free parking and loading access"
+        parking = (
+            "likely practical but live-verify exact property parking"
+            if is_private
+            else "verify paid/free parking and loading access"
+        )
         flags = []
         if requires_three_beds and bed_fit_known is None:
             flags.append("family 3-bed layout is not proven")
@@ -130,7 +140,9 @@ def _options_from_profile(profile: object, intake: TripIntake) -> list[LodgingOp
                 location_area=str(target["location_area"]),
                 island_or_region=str(target["island_or_region"]),
                 lodging_type=str(target["lodging_type"]),
-                room_layout="whole-home/unit target" if is_private else "hotel room or two-room setup; live-verify",
+                room_layout="whole-home/unit target"
+                if is_private
+                else "hotel room or two-room setup; live-verify",
                 bed_layout="target 3+ beds; exact layout must be live-verified",
                 adult_child_fit=(
                     f"Validate {party.adults} adult(s), {party.children} child(ren), "
@@ -170,7 +182,9 @@ def _options_from_profile(profile: object, intake: TripIntake) -> list[LodgingOp
                     "Do not advance unless occupancy, beds, cancellation, and access are explicit.",
                 ],
                 friction_flags=flags,
-                confidence_notes=["Source link starts exact validation; availability is not asserted."],
+                confidence_notes=[
+                    "Source link starts exact validation; availability is not asserted."
+                ],
                 live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
             )
         )

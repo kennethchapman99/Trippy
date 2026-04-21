@@ -126,7 +126,9 @@ class TripPlannerService:
                 summary=", ".join(concept.destinations),
                 duration_days=concept.recommended_duration_days,
                 regions=concept.destinations,
-                nights_by_region=_even_nights(concept.destinations, concept.recommended_duration_days),
+                nights_by_region=_even_nights(
+                    concept.destinations, concept.recommended_duration_days
+                ),
                 rationale=concept.rationale,
                 travel_burden=concept.estimated_travel_burden,
                 island_region_movement_friction="Requires live validation by exact route and lodging sequence.",
@@ -162,7 +164,9 @@ class TripPlannerService:
             for signal in self._country_priors.fit_for_text(seed)
         ]
         if not signals:
-            signals = ["No direct country prior matched; require live evidence and family-fit validation."]
+            signals = [
+                "No direct country prior matched; require live evidence and family-fit validation."
+            ]
         options = [
             TripPlanOption(
                 option_id="single-base-easy",
@@ -199,7 +203,9 @@ class TripPlannerService:
                 summary="Use two bases to improve coverage while preserving downtime.",
                 duration_days=duration,
                 regions=intake.destination_seeds,
-                nights_by_region=_even_nights(intake.destination_seeds[:2] or intake.destination_seeds, duration),
+                nights_by_region=_even_nights(
+                    intake.destination_seeds[:2] or intake.destination_seeds, duration
+                ),
                 rationale=[
                     "Balances depth with a broader sense of place.",
                     "Usually the best pattern if the trip is at least 8-10 days.",
@@ -404,10 +410,7 @@ def _even_nights(regions: list[str], duration_days: int) -> dict[str, int]:
     nights = max(1, duration_days - 1)
     base = nights // len(regions)
     extra = nights % len(regions)
-    return {
-        region: base + (1 if idx < extra else 0)
-        for idx, region in enumerate(regions)
-    }
+    return {region: base + (1 if idx < extra else 0) for idx, region in enumerate(regions)}
 
 
 def _required_research() -> list[str]:
