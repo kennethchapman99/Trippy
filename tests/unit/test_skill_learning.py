@@ -125,7 +125,9 @@ class TestRollback:
 
 
 class TestEvaluationHarness:
-    def test_replays_fixtures_and_compares_pre_post(self, skill_env: tuple[Path, Path, Path]) -> None:
+    def test_replays_fixtures_and_compares_pre_post(
+        self, skill_env: tuple[Path, Path, Path]
+    ) -> None:
         defs_dir, metadata, _ = skill_env
         svc = SkillLearningService(definitions_dir=defs_dir, metadata_path=metadata)
 

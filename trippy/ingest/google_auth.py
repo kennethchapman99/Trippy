@@ -12,9 +12,32 @@ from trippy import config
 logger = logging.getLogger(__name__)
 
 GMAIL_SCOPES: tuple[str, ...] = ("https://www.googleapis.com/auth/gmail.readonly",)
-SHEETS_SCOPES: tuple[str, ...] = ("https://www.googleapis.com/auth/spreadsheets.readonly",)
-DRIVE_SCOPES: tuple[str, ...] = ("https://www.googleapis.com/auth/drive.readonly",)
+SHEETS_SCOPES: tuple[str, ...] = ("https://www.googleapis.com/auth/spreadsheets",)
+DRIVE_SCOPES: tuple[str, ...] = ("https://www.googleapis.com/auth/drive",)
 ALL_SCOPES: tuple[str, ...] = GMAIL_SCOPES + SHEETS_SCOPES + DRIVE_SCOPES
+
+
+def token_scopes(token_path: Path) -> set[str]:
+    """Return OAuth scopes recorded in a Google authorized-user token file."""
+    import json
+
+    if not token_path.exists():
+        return set()
+
+    raw = json.loads(token_path.read_text(encoding="utf-8"))
+    scopes_raw = raw.get("scopes") or raw.get("scope") or []
+    if isinstance(scopes_raw, str):
+        return set(scopes_raw.split())
+    if isinstance(scopes_raw, list):
+        return {str(scope) for scope in scopes_raw}
+    return set()
+
+
+def missing_required_scopes(token_path: Path, required: Sequence[str] | None = None) -> set[str]:
+    """Return required scopes absent from a token file."""
+    expected = set(required or ALL_SCOPES)
+    actual = token_scopes(token_path)
+    return expected - actual
 
 
 class GoogleAuthManager:

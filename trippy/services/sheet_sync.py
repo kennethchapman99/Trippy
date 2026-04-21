@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime
-from typing import Any
+from typing import Any, cast
 
 from trippy.models.trip import ChecklistItem, Segment, Stay, Trip
 from trippy.services.trip_state import TripStateService
@@ -54,7 +54,9 @@ _TRANSFERS_COLS = [
 class SheetSyncService:
     """Manages the Trippy trip sheet ↔ canonical state sync."""
 
-    def __init__(self, auth_manager: Any | None = None, state_service: TripStateService | None = None) -> None:
+    def __init__(
+        self, auth_manager: Any | None = None, state_service: TripStateService | None = None
+    ) -> None:
         self._auth = auth_manager
         self._state = state_service or TripStateService()
 
@@ -333,7 +335,7 @@ class SheetSyncService:
                 .get(spreadsheetId=sheet_id, range=range_name)
                 .execute()
             )
-            return resp.get("values", [])
+            return cast(list[list[str]], resp.get("values", []))
         except Exception as exc:
             logger.warning("pull range failed sheet=%s range=%s err=%s", sheet_id, range_name, exc)
             return []
@@ -344,8 +346,7 @@ class SheetSyncService:
             if not row:
                 continue
             mapped = {
-                col: str(row[idx]).strip() if idx < len(row) else ""
-                for idx, col in enumerate(cols)
+                col: str(row[idx]).strip() if idx < len(row) else "" for idx, col in enumerate(cols)
             }
             if any(mapped.values()):
                 data.append(mapped)
@@ -414,7 +415,9 @@ class SheetSyncService:
                     "Segment ID not found in canonical trip; row ignored.",
                 )
                 continue
-            self._merge_model_field(trip, seg, f"flights.{seg_id}.carrier", "carrier", row.get("Carrier"), ts)
+            self._merge_model_field(
+                trip, seg, f"flights.{seg_id}.carrier", "carrier", row.get("Carrier"), ts
+            )
             self._merge_model_field(
                 trip,
                 seg,
@@ -423,7 +426,9 @@ class SheetSyncService:
                 row.get("Confirmation"),
                 ts,
             )
-            self._merge_model_field(trip, seg, f"flights.{seg_id}.notes", "notes", row.get("Notes"), ts)
+            self._merge_model_field(
+                trip, seg, f"flights.{seg_id}.notes", "notes", row.get("Notes"), ts
+            )
 
         by_stay_id = {stay.stay_id: stay for stay in trip.stays}
         for row in pulled.get("hotels", []):
@@ -597,10 +602,8 @@ class SheetSyncService:
         reason: str,
     ) -> None:
         trip.sync.sync_conflicts.append(
-            (
-                f"{ts.isoformat()} field={field_key} sheet={sheet_value!r} "
-                f"canonical={canonical_value!r} reason={reason}"
-            )
+            f"{ts.isoformat()} field={field_key} sheet={sheet_value!r} "
+            f"canonical={canonical_value!r} reason={reason}"
         )
 
 

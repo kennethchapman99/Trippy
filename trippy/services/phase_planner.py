@@ -30,7 +30,6 @@ class PhasePlannerService:
         self._trips_dir = trips_dir or config.TRIPS_PATH
 
     def status(self) -> list[PhaseStatus]:
-        from trippy import config
         from trippy.memory.store import MemoryStore
         from trippy.services.trip_state import TripStateService
 
@@ -38,9 +37,18 @@ class PhasePlannerService:
         trip_svc = TripStateService(self._trips_dir)
         trips = trip_svc.load_all()
 
-        has_google_creds = (
-            config.GMAIL_CREDENTIALS_PATH.exists()
-            and (config.GMAIL_TOKEN_PATH.exists() or config.GOOGLE_TOKEN_PATH.exists())
+        from trippy.services.setup import CheckStatus, SetupDoctor
+
+        doctor = SetupDoctor()
+        setup_report = doctor.run()
+        google_checks = {
+            check.name: check.status
+            for check in setup_report.checks
+            if check.name in {"google_credentials", "google_token", "google_scopes"}
+        }
+        has_google_creds = all(
+            google_checks.get(name) == CheckStatus.PASS
+            for name in ("google_credentials", "google_token", "google_scopes")
         )
         has_trips = len(trips) > 0
         has_preferences = memory.get_value("pref:preferences_object") is not None
@@ -54,7 +62,14 @@ class PhasePlannerService:
                 phase=2,
                 title="Live Google credentials",
                 complete=has_google_creds,
-                blockers=[] if has_google_creds else ["Missing Google credentials/token files"],
+                blockers=[]
+                if has_google_creds
+                else [
+                    check.summary
+                    for check in setup_report.checks
+                    if check.name in {"google_credentials", "google_token", "google_scopes"}
+                    and check.status in {CheckStatus.FAIL, CheckStatus.SKIP}
+                ],
                 next_step="Run: trippy phase-run 2",
             )
         )
@@ -84,7 +99,9 @@ class PhasePlannerService:
                 phase=5,
                 title="Gmail reconciliation in production",
                 complete=has_confirmation,
-                blockers=[] if has_confirmation else ["No parsed confirmations linked to trips yet"],
+                blockers=[]
+                if has_confirmation
+                else ["No parsed confirmations linked to trips yet"],
                 next_step="Run: trippy phase-run 5 --max-emails 50",
             )
         )
@@ -115,7 +132,9 @@ class PhasePlannerService:
 
     def _run_phase_2(self) -> dict[str, Any]:
         from trippy import config
+        from trippy.services.setup import SetupDoctor
 
+        report = SetupDoctor().run()
         return {
             "phase": 2,
             "credentials_path": str(config.GMAIL_CREDENTIALS_PATH),
@@ -123,6 +142,9 @@ class PhasePlannerService:
             "google_token_path": str(config.GOOGLE_TOKEN_PATH),
             "credentials_exist": config.GMAIL_CREDENTIALS_PATH.exists(),
             "token_exists": config.GMAIL_TOKEN_PATH.exists() or config.GOOGLE_TOKEN_PATH.exists(),
+            "setup_ok": report.ok,
+            "checks": [check.model_dump(mode="json") for check in report.checks],
+            "next_actions": report.next_actions,
         }
 
     def _run_phase_3(self, **kwargs: Any) -> dict[str, Any]:
@@ -163,7 +185,15 @@ class PhasePlannerService:
         from trippy.skills.runners.gmail_reconciler import GmailReconcilerRunner
 
         runner = GmailReconcilerRunner()
-        result = runner.run({"max_emails": kwargs.get("max_emails", 50)})
+        result = runner.run(
+            {
+                "max_emails": kwargs.get("max_emails", 50),
+                "trip_id": kwargs.get("trip_id"),
+                "label": kwargs.get("label", "INBOX"),
+                "query": kwargs.get("query"),
+                "dry_run": kwargs.get("dry_run", False),
+            }
+        )
         return {"phase": 5, "reconciled": result}
 
     def _run_phase_6(self, **kwargs: Any) -> dict[str, Any]:
@@ -183,18 +213,37 @@ class PhasePlannerService:
         runner = FrictionAuditRunner()
         audit_result = runner.run({"trip_id": trip_id, "check_preferences": True})
 
-        # Minimal self-improvement loop: store a reusable hint when high/critical
+        # Minimal self-improvement loop: propose a reusable hint when high/critical.
         critical = int(audit_result.get("critical", 0))
         high = int(audit_result.get("high", 0))
+        learning_proposals: list[str] = []
         if critical > 0 or high > 0:
-            memory = MemoryStore(config.MEMORY_PATH)
-            memory.set(
-                key="hint:always-run-friction-audit-after-reconcile",
-                value=True,
-                category="skill_hint",
-                confidence=0.8,
-                source="phase-runner",
-                notes="High/critical risk found; enforce post-reconcile friction audit.",
+            from trippy.services.learning import (
+                LearningEventStore,
+                LearningProposal,
+                ProposalType,
             )
 
-        return {"phase": 6, "audit": audit_result}
+            memory = MemoryStore(config.MEMORY_PATH)
+            key = "hint:always-run-friction-audit-after-reconcile"
+            existing = memory.get(key)
+            proposals = LearningEventStore(memory_path=memory.path).add_proposals(
+                [
+                    LearningProposal(
+                        proposal_type=ProposalType.MEMORY,
+                        summary="Review hint: always run friction audit after reconciliation",
+                        before=existing.model_dump(mode="json") if existing else None,
+                        after={
+                            "key": key,
+                            "value": True,
+                            "category": "skill_hint",
+                            "confidence": 0.8,
+                            "source": "phase-runner",
+                            "notes": "High/critical risk found; enforce post-reconcile friction audit.",
+                        },
+                    )
+                ]
+            )
+            learning_proposals = [proposal.id for proposal in proposals]
+
+        return {"phase": 6, "audit": audit_result, "learning_proposals": learning_proposals}

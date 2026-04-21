@@ -28,7 +28,9 @@ def _fake_db_trip(name: str) -> SimpleNamespace:
 
 
 def test_import_sheet_persists_canonical_json_and_returns_trip_ids(tmp_path) -> None:
-    runner = PastTripMinerRunner(trips_dir=tmp_path, auth_manager=MagicMock(), anthropic_client=MagicMock())
+    runner = PastTripMinerRunner(
+        trips_dir=tmp_path, auth_manager=MagicMock(), anthropic_client=MagicMock()
+    )
 
     import_result = ImportResult(source="sheet-id")
     import_result.trips_created = 2
@@ -50,7 +52,9 @@ def test_import_sheet_persists_canonical_json_and_returns_trip_ids(tmp_path) -> 
         return _factory_ctx()
 
     with (
-        patch("trippy.importers.sheet_importer.SheetImporter.import_file", return_value=import_result),
+        patch(
+            "trippy.importers.sheet_importer.SheetImporter.import_file", return_value=import_result
+        ),
         patch("trippy.db.make_session_factory", return_value=_factory),
     ):
         result = runner._import_sheet({"id": "sheet-123", "name": "Ignored Name"})

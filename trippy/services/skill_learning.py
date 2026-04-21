@@ -189,7 +189,9 @@ class SkillLearningService:
     ) -> int:
         """Apply a proposal to the skill definition, guarded by approval flag."""
         if human_approval_required and not approved_by_human:
-            raise PermissionError("Human approval required before applying skill definition changes")
+            raise PermissionError(
+                "Human approval required before applying skill definition changes"
+            )
 
         path = Path(proposal.definition_path)
         if not path.exists():

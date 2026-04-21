@@ -6,9 +6,12 @@ from datetime import date, datetime
 
 from trippy.models.preferences import FamilyTravelPreferences
 from trippy.models.trip import (
+    ChecklistItem,
     RiskSeverity,
     Segment,
+    SegmentType,
     Stay,
+    StayType,
     Traveler,
     Trip,
     TripStatus,
@@ -279,6 +282,115 @@ class TestUnconfirmedBookings:
         unbooked = [r for r in risks if "unbooked-seg" in r.risk_id]
         assert len(unbooked) == 1
         assert unbooked[0].severity == RiskSeverity.MEDIUM
+
+
+class TestFamilyComfortChecks:
+    def test_family_stay_requires_explicit_three_bed_fit(self) -> None:
+        trip = _make_trip(
+            travelers=[Traveler(name=f"Traveler {i}") for i in range(5)],
+            stays=[
+                Stay(
+                    stay_id="stay-1",
+                    stay_type=StayType.HOTEL,
+                    property_name="Nice Hotel",
+                    city="Lisbon",
+                    country="Portugal",
+                    room_type="standard queen room",
+                )
+            ],
+        )
+
+        risks = _detector().audit(trip)
+
+        assert [r for r in risks if r.risk_id == "bed-fit-short-stay-1"]
+        assert [r for r in risks if r.risk_id == "queen-compromise-stay-1"]
+
+    def test_city_rental_without_exceptional_upside_is_flagged(self) -> None:
+        trip = _make_trip(
+            stays=[
+                Stay(
+                    stay_id="stay-1",
+                    stay_type=StayType.AIRBNB,
+                    property_name="Apartment",
+                    city="Rome",
+                    country="Italy",
+                    notes="basic apartment",
+                )
+            ],
+        )
+
+        risks = _detector().audit(trip)
+
+        assert [r for r in risks if r.risk_id == "city-rental-fit-stay-1"]
+
+    def test_driving_and_pacing_friction_are_flagged(self) -> None:
+        trip = _make_trip(
+            segments=[
+                Segment(
+                    segment_id="drive-1",
+                    segment_type=SegmentType.CAR,
+                    origin="Florence",
+                    destination="Hill Town",
+                    notes="narrow roads and difficult parking",
+                )
+            ],
+            stays=[
+                Stay(
+                    stay_id="stay-1",
+                    property_name="Transit Stop",
+                    city="Siena",
+                    country="Italy",
+                    check_in=date(2027, 3, 10),
+                    check_out=date(2027, 3, 11),
+                    room_type="king suite with 3 beds",
+                )
+            ],
+        )
+
+        risks = _detector().audit(trip)
+
+        assert [r for r in risks if r.risk_id == "driving-friction-drive-1"]
+        assert [r for r in risks if r.risk_id == "one-night-stop-stay-1"]
+
+    def test_missing_destination_readiness_and_tour_quality_are_flagged(self) -> None:
+        trip = _make_trip(
+            checklist=[
+                ChecklistItem(
+                    item_id="tour-1",
+                    category="activity",
+                    title="Large group food tour",
+                    notes="crowded mass market safety unknown",
+                )
+            ]
+        )
+
+        risks = _detector().audit(trip)
+
+        assert [r for r in risks if r.risk_id == "missing-cash-currency-guidance"]
+        assert [r for r in risks if r.risk_id == "missing-entry-requirements"]
+        assert [r for r in risks if r.risk_id == "missing-health-precautions"]
+        assert [r for r in risks if r.risk_id == "tour-quality-tour-1"]
+
+    def test_country_prior_cautions_are_visible_but_not_trip_blocking(self) -> None:
+        trip = _make_trip(
+            destination_summary="Italy family food and history trip",
+            stays=[
+                Stay(
+                    stay_id="stay-1",
+                    property_name="Central Rome Hotel",
+                    city="Rome",
+                    country="Italy",
+                    room_type="king suite with 3 beds",
+                )
+            ],
+        )
+
+        risks = _detector().audit(trip)
+
+        country_risks = [r for r in risks if r.risk_id == "country-prior-italy"]
+        assert country_risks
+        assert country_risks[0].severity == RiskSeverity.LOW
+        assert "directional priors" in country_risks[0].description
 
 
 class TestNoRisks:

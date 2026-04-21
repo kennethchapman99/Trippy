@@ -331,3 +331,112 @@ class TestGmailReconcilerCanonicalSync:
         assert updated.segments[0].confirmation_code == "ABC123"
         assert pushes == [("japan-2026", "sheet-abc-123")]
         assert result["ambiguities"] == []
+
+    def test_runner_dry_run_does_not_update_canonical_or_push_sheet(
+        self, file_db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _seed_trip(file_db)
+
+        from trippy import config
+        from trippy.ingest.gmail_watcher import EmailContent
+        from trippy.models.trip import Trip as CanonicalTrip
+        from trippy.models.trip import TripStatus
+        from trippy.services.trip_state import TripStateService
+        from trippy.skills.runners.gmail_reconciler import GmailReconcilerRunner
+
+        trips_dir = tmp_path / "trips"
+        monkeypatch.setattr(config, "DATABASE_URL", file_db)
+        monkeypatch.setattr(config, "TRIPS_PATH", trips_dir)
+        monkeypatch.setattr(config, "VAULT_PATH", tmp_path / "vault")
+
+        trip_state = TripStateService(trips_dir=trips_dir)
+        canonical_trip = CanonicalTrip(
+            trip_id="japan-2026",
+            name="Japan 2026",
+            status=TripStatus.BOOKED,
+            sync=SyncMetadata(google_sheet_id="sheet-abc-123"),
+            segments=[
+                Segment(
+                    segment_id="leg-1",
+                    segment_type=SegmentType.FLIGHT,
+                    carrier="Air Canada",
+                    flight_number="AC003",
+                    origin="YYZ",
+                    destination="NRT",
+                )
+            ],
+        )
+        trip_state.save(canonical_trip)
+
+        fixture_email = EmailContent(
+            message_id="m-1",
+            sender="bookings@aircanada.com",
+            subject="Your Air Canada booking confirmation",
+            date=canonical_trip.created_at,
+            body_text=(EMAILS_DIR / "aircanada_flight.txt").read_text(),
+            body_html="",
+            attachments=[],
+            raw_bytes=b"raw-email",
+        )
+
+        class FakeWatcher:
+            def __init__(self, auth_manager: object | None = None) -> None:
+                self._auth_manager = auth_manager
+
+            def authenticate(self) -> None:
+                return None
+
+            def fetch_new_messages(
+                self,
+                label: str = "INBOX",
+                max_results: int = 50,
+                query: str | None = None,
+            ) -> list[EmailContent]:
+                assert label == "INBOX"
+                assert max_results == 5
+                assert query == "from:aircanada.com"
+                return [fixture_email]
+
+            def save_to_vault(self, email_content: EmailContent, vault_path: Path) -> Path:
+                raise AssertionError("dry-run should not save email to vault")
+
+        pushes: list[tuple[str, str]] = []
+
+        class FakeSheetSyncService:
+            def __init__(self, auth_manager: object | None = None) -> None:
+                self._auth_manager = auth_manager
+
+            def push_trip_to_sheet(self, trip: CanonicalTrip, sheet_id: str) -> None:
+                pushes.append((trip.trip_id, sheet_id))
+
+        class FakeAuthManager:
+            pass
+
+        from trippy.ingest import gmail_watcher as watcher_mod
+        from trippy.ingest import google_auth as google_auth_mod
+        from trippy.services import sheet_sync as sheet_sync_mod
+
+        monkeypatch.setattr(watcher_mod, "GmailWatcher", FakeWatcher)
+        monkeypatch.setattr(google_auth_mod, "GoogleAuthManager", FakeAuthManager)
+        monkeypatch.setattr(sheet_sync_mod, "SheetSyncService", FakeSheetSyncService)
+
+        runner = GmailReconcilerRunner(
+            trips_dir=trips_dir,
+            anthropic_client=_make_parser_client("aircanada_flight"),
+        )
+        result = runner.run(
+            {
+                "max_emails": 5,
+                "trip_id": "japan-2026",
+                "query": "from:aircanada.com",
+                "dry_run": True,
+            }
+        )
+
+        updated = trip_state.load("japan-2026")
+        assert updated is not None
+        assert result["dry_run"] is True
+        assert result["confirmations_linked"] == 1
+        assert len(updated.confirmations) == 0
+        assert updated.segments[0].confirmation_code is None
+        assert pushes == []

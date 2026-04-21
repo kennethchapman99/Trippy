@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from inspect import signature
 from pathlib import Path
 from typing import Any
 
@@ -29,18 +30,27 @@ class GmailReconcilerRunner:
         from trippy.db.models import Trip as DbTrip
         from trippy.ingest.gmail_watcher import GmailWatcher
         from trippy.ingest.google_auth import GoogleAuthManager
-        from trippy.ingest.linker import ingest_email
+        from trippy.ingest.linker import TripLinker
         from trippy.ingest.parser import ConfirmationParser
         from trippy.services.sheet_sync import SheetSyncService
         from trippy.services.trip_state import TripStateService
 
         max_emails: int = inputs.get("max_emails", 50)
+        label: str = inputs.get("label", "INBOX")
+        query: str | None = inputs.get("query")
+        target_trip_id: str | None = inputs.get("trip_id")
+        dry_run: bool = bool(inputs.get("dry_run", False))
 
         auth = self._auth_manager or GoogleAuthManager()
         watcher = GmailWatcher(auth_manager=auth)
         watcher.authenticate()
 
-        emails = watcher.fetch_new_messages(max_results=max_emails)
+        emails = _fetch_candidate_emails(
+            watcher=watcher,
+            label=label,
+            query=query,
+            max_emails=max_emails,
+        )
         logger.info("GmailReconciler: fetched %d candidate emails", len(emails))
 
         parser = ConfirmationParser(anthropic_client=self._anthropic_client)
@@ -58,7 +68,7 @@ class GmailReconcilerRunner:
         ambiguities: list[dict[str, Any]] = []
 
         for email_content in emails:
-            eml_path = watcher.save_to_vault(email_content, vault_path)
+            eml_path = None if dry_run else watcher.save_to_vault(email_content, vault_path)
             atts = [(a.filename, a.content_type, a.data) for a in email_content.attachments]
             parse_result = parser.parse(
                 body_text=email_content.body_text,
@@ -72,9 +82,40 @@ class GmailReconcilerRunner:
                 continue
 
             conf = parse_result.confirmation
+            db_trip_name: str | None = None
+            db_trip_slug: str | None = None
+            canonical_from_db: Any | None = None
+            matches_target = False
             with factory() as session:
-                link = ingest_email(conf, session, raw_email_path=str(eml_path))
+                linker = TripLinker(session)
+                link = linker.link(conf, raw_email_path=str(eml_path) if eml_path else None)
                 db_trip = session.get(DbTrip, link.trip_id) if link.trip_id is not None else None
+                matches_target = _db_trip_matches_filter(db_trip, target_trip_id)
+                if db_trip is not None:
+                    db_trip_name = db_trip.name
+                    db_trip_slug = db_trip.name.lower().replace(" ", "-")
+                    if matches_target:
+                        canonical_from_db = trip_state.from_db_trip(db_trip)
+                if dry_run or not matches_target:
+                    session.rollback()
+                else:
+                    session.commit()
+
+            if link.linked and not matches_target:
+                unlinked_count += 1
+                ambiguity = {
+                    "type": "target_trip_mismatch",
+                    "vendor": conf.vendor,
+                    "code": conf.confirmation_code,
+                    "confirmation_type": conf.confirmation_type,
+                    "target_trip_id": target_trip_id,
+                    "linked_trip_name": db_trip_name,
+                    "reason": "Confirmation matched a different trip than the requested trip_id",
+                    "email_subject": email_content.subject,
+                }
+                ambiguities.append(ambiguity)
+                unlinked.append(ambiguity)
+                continue
 
             if link.linked:
                 linked_count += 1
@@ -90,19 +131,31 @@ class GmailReconcilerRunner:
                     )
                     continue
 
-                trip = trip_state.load(db_trip.name.lower().replace(" ", "-"))
+                trip = trip_state.load(db_trip_slug or "")
                 if trip is None:
-                    trip = trip_state.from_db_trip(db_trip)
+                    trip = canonical_from_db
+                if trip is None:
+                    ambiguities.append(
+                        {
+                            "type": "canonical_trip_missing",
+                            "confirmation_code": conf.confirmation_code,
+                            "vendor": conf.vendor,
+                            "trip_db_id": link.trip_id,
+                            "reason": "Linked trip could not be converted to canonical state",
+                        }
+                    )
+                    continue
 
                 canonical_confirmation = _to_canonical_confirmation(
                     confirmation=conf,
                     subject=email_content.subject,
-                    eml_path=eml_path,
+                    eml_path=eml_path or Path("dry-run"),
                 )
                 match_info = _attach_confirmation_to_trip(trip, canonical_confirmation, conf)
-                trip_state.save(trip)
+                if not dry_run:
+                    trip_state.save(trip)
 
-                if trip.sync.google_sheet_id:
+                if trip.sync.google_sheet_id and not dry_run:
                     sheet_sync.push_trip_to_sheet(trip, trip.sync.google_sheet_id)
 
                 updates.append(
@@ -114,6 +167,7 @@ class GmailReconcilerRunner:
                         "method": link.method,
                         "linked_segment_id": match_info.get("linked_segment_id"),
                         "linked_stay_id": match_info.get("linked_stay_id"),
+                        "dry_run": dry_run,
                     }
                 )
                 if match_info["ambiguity"] is not None:
@@ -139,6 +193,10 @@ class GmailReconcilerRunner:
                 )
 
         return {
+            "dry_run": dry_run,
+            "target_trip_id": target_trip_id,
+            "label": label,
+            "query": query,
             "emails_scanned": len(emails),
             "confirmations_parsed": linked_count + unlinked_count,
             "confirmations_linked": linked_count,
@@ -148,6 +206,32 @@ class GmailReconcilerRunner:
             "unlinked": unlinked,
             "ambiguities": ambiguities,
         }
+
+
+def _fetch_candidate_emails(
+    *,
+    watcher: Any,
+    label: str,
+    query: str | None,
+    max_emails: int,
+) -> list[Any]:
+    """Call GmailWatcher while staying compatible with older injected test fakes."""
+    params = signature(watcher.fetch_new_messages).parameters
+    kwargs: dict[str, Any] = {"max_results": max_emails}
+    if "label" in params:
+        kwargs["label"] = label
+    if "query" in params:
+        kwargs["query"] = query
+    return watcher.fetch_new_messages(**kwargs)  # type: ignore[no-any-return]
+
+
+def _db_trip_matches_filter(db_trip: Any | None, target_trip_id: str | None) -> bool:
+    if target_trip_id is None:
+        return True
+    if db_trip is None:
+        return False
+    slug = str(db_trip.name).lower().replace(" ", "-")
+    return target_trip_id in {str(db_trip.id), slug}
 
 
 def _to_canonical_confirmation(confirmation: Any, subject: str, eml_path: Path) -> Any:
@@ -166,7 +250,9 @@ def _to_canonical_confirmation(confirmation: Any, subject: str, eml_path: Path) 
     )
 
 
-def _attach_confirmation_to_trip(trip: Any, canonical_confirmation: Any, parsed: Any) -> dict[str, Any]:
+def _attach_confirmation_to_trip(
+    trip: Any, canonical_confirmation: Any, parsed: Any
+) -> dict[str, Any]:
     """Attach confirmation to canonical trip and enrich a matching segment/stay."""
     trip.confirmations.append(canonical_confirmation)
 
@@ -214,7 +300,9 @@ def _attach_confirmation_to_trip(trip: Any, canonical_confirmation: Any, parsed:
                 parsed.property_name and stay.property_name.lower() == parsed.property_name.lower()
             )
             date_match = bool(
-                parsed.check_in and stay.check_in and stay.check_in.isoformat() == parsed.check_in[:10]
+                parsed.check_in
+                and stay.check_in
+                and stay.check_in.isoformat() == parsed.check_in[:10]
             )
             if city_match or property_match or date_match:
                 stay.confirmation_code = parsed.confirmation_code

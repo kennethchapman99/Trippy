@@ -74,6 +74,7 @@ def _build_system_prompt(
     operations_mode: bool = False,
     active_trip_context: str | None = None,
     orchestration_context: str | None = None,
+    setup_context: str | None = None,
 ) -> str:
     parts: list[str] = []
 
@@ -108,6 +109,9 @@ def _build_system_prompt(
 
     if orchestration_context:
         parts.append(orchestration_context)
+
+    if setup_context:
+        parts.append(setup_context)
 
     return "\n\n---\n\n".join(parts)
 
@@ -170,8 +174,9 @@ def _skill_tools() -> list[dict[str, Any]]:
         {
             "name": "update_memory",
             "description": (
-                "Write a durable preference or insight to agent memory. "
-                "Use this only for genuinely reusable, non-trip-specific facts."
+                "Create a reviewable proposal for a durable preference or insight. "
+                "Use this only for genuinely reusable, non-trip-specific facts; "
+                "approval is required before memory changes."
             ),
             "input_schema": {
                 "type": "object",
@@ -213,6 +218,7 @@ def _execute_tool(
     inputs: dict[str, Any],
     memory: MemoryStore,
     trip_svc: TripStateService,
+    learning_dir: Path | None = None,
 ) -> str:
     if name == "invoke_skill":
         return _run_skill(inputs.get("skill_name", ""), inputs.get("inputs", {}))
@@ -228,15 +234,35 @@ def _execute_tool(
         return json.dumps({"trips": [t.summary() for t in trips]})
 
     if name == "update_memory":
-        entry = memory.set(
-            key=inputs["key"],
-            value=inputs["value"],
-            category=inputs["category"],
-            confidence=inputs.get("confidence", 1.0),
-            source="agent",
-            notes=inputs.get("notes"),
+        from trippy.services.learning import LearningEventStore, LearningProposal, ProposalType
+
+        key = str(inputs["key"])
+        existing = memory.get(key)
+        proposals = LearningEventStore(learning_dir, memory_path=memory.path).add_proposals(
+            [
+                LearningProposal(
+                    proposal_type=ProposalType.MEMORY,
+                    summary=f"Review agent-proposed memory update: {key}",
+                    before=existing.model_dump(mode="json") if existing else None,
+                    after={
+                        "key": key,
+                        "value": inputs["value"],
+                        "category": inputs["category"],
+                        "confidence": inputs.get("confidence", 1.0),
+                        "source": "agent",
+                        "notes": inputs.get("notes"),
+                    },
+                )
+            ]
         )
-        return json.dumps({"ok": True, "key": entry.key, "version": entry.version})
+        return json.dumps(
+            {
+                "ok": True,
+                "review_required": True,
+                "proposal_id": proposals[0].id,
+                "key": key,
+            }
+        )
 
     if name == "run_friction_audit":
         from trippy.skills.runners.friction_audit import FrictionAuditRunner
@@ -298,11 +324,16 @@ class TrIppyAgent:
         anthropic_client: anthropic.Anthropic | None = None,
         memory_path: Path | None = None,
         trips_dir: Path | None = None,
+        learning_dir: Path | None = None,
     ) -> None:
         self._client = anthropic_client or anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
         self._memory = MemoryStore(memory_path or config.MEMORY_PATH)
         self._trip_svc = TripStateService(trips_dir=trips_dir or config.TRIPS_PATH)
+        self._learning_dir = learning_dir or (
+            memory_path.parent / "learning" if memory_path is not None else config.LEARNING_PATH
+        )
         self._history: list[dict[str, Any]] = []
+        self._last_workflow_id: str | None = None
 
     def _classify_intent(self, user_message: str) -> UserIntent:
         msg = user_message.lower()
@@ -368,6 +399,61 @@ class TrIppyAgent:
             logger.exception("Sheet sync refresh failed for trip %s", trip.trip_id)
             return {"ok": False, "error": str(exc)}
 
+    def _setup_context(self) -> str | None:
+        from trippy.services.setup import CheckStatus, SetupDoctor
+
+        report = SetupDoctor(project_root=Path.cwd()).run(create_paths=False)
+        blockers = [
+            check
+            for check in report.checks
+            if check.status == CheckStatus.FAIL
+            and check.name
+            in {"anthropic_key", "google_credentials", "google_token", "google_scopes"}
+        ]
+        if not blockers:
+            return None
+        lines = [
+            "## Setup Blockers",
+            "Explain these blockers before attempting live Google workflows:",
+        ]
+        lines.extend(f"- {check.summary}" for check in blockers)
+        if report.next_actions:
+            lines.append("Next actions:")
+            lines.extend(f"- {action}" for action in report.next_actions)
+        return "\n".join(lines)
+
+    def _record_agent_workflow(
+        self,
+        *,
+        intent: UserIntent,
+        active_trip: Trip | None,
+        events: list[dict[str, Any]],
+    ) -> None:
+        if not events:
+            self._last_workflow_id = None
+            return
+
+        from trippy.services.learning import LearningEventStore, WorkflowOutcome, WorkflowStatus
+
+        skill_name = None
+        for event in events:
+            if event.get("skill_name"):
+                skill_name = str(event["skill_name"])
+                break
+
+        outcome = WorkflowOutcome(
+            workflow_name=f"agent:{intent.value}",
+            skill_name=skill_name,
+            trip_id=active_trip.trip_id if active_trip else None,
+            status=WorkflowStatus.SUCCESS,
+            summary=f"Agent handled {intent.value} with {len(events)} tool/orchestration event(s)",
+            metrics={"events": len(events)},
+            artifacts={"events": events},
+            evidence_refs=[f"agent-intent:{intent.value}"],
+        )
+        LearningEventStore(self._learning_dir).record_workflow(outcome)
+        self._last_workflow_id = outcome.id
+
     def chat(self, user_message: str) -> str:
         """Process a single user message and return the agent's response."""
         intent = self._classify_intent(user_message)
@@ -389,6 +475,7 @@ class TrIppyAgent:
 
         orchestration_events: list[dict[str, Any]] = []
         if intent == UserIntent.RECONCILE_BOOKINGS:
+            assert active_trip is not None
             orchestration_events.append(
                 {
                     "action": "invoke_skill",
@@ -400,7 +487,11 @@ class TrIppyAgent:
             )
         elif intent == UserIntent.IN_TRIP_OPS and active_trip is not None:
             orchestration_events.append(
-                {"action": "get_trip", "trip_id": active_trip.trip_id, "result": active_trip.model_dump()}
+                {
+                    "action": "get_trip",
+                    "trip_id": active_trip.trip_id,
+                    "result": active_trip.model_dump(),
+                }
             )
             orchestration_events.append(
                 {
@@ -412,6 +503,7 @@ class TrIppyAgent:
                             {"trip_id": active_trip.trip_id, "check_preferences": True},
                             self._memory,
                             self._trip_svc,
+                            self._learning_dir,
                         )
                     ),
                 }
@@ -437,9 +529,9 @@ class TrIppyAgent:
         if orchestration_events:
             orchestration_context = (
                 "## Deterministic Orchestration\n"
-                f"intent={intent.value}\n"
-                + json.dumps(orchestration_events, indent=2, default=str)
+                f"intent={intent.value}\n" + json.dumps(orchestration_events, indent=2, default=str)
             )
+        setup_context = self._setup_context()
 
         system_prompt = _build_system_prompt(
             self._memory,
@@ -447,8 +539,10 @@ class TrIppyAgent:
             operations_mode=intent == UserIntent.IN_TRIP_OPS,
             active_trip_context=active_trip_context,
             orchestration_context=orchestration_context,
+            setup_context=setup_context,
         )
         tools = _skill_tools()
+        workflow_events = list(orchestration_events)
 
         # Agentic loop — keep running until no more tool calls
         for _ in range(10):
@@ -473,6 +567,7 @@ class TrIppyAgent:
                         dict(block.input),
                         self._memory,
                         self._trip_svc,
+                        self._learning_dir,
                     )
                     tool_results.append(
                         {
@@ -481,17 +576,31 @@ class TrIppyAgent:
                             "content": result,
                         }
                     )
+                    workflow_events.append(
+                        {
+                            "action": "tool_use",
+                            "tool_name": block.name,
+                            "input": dict(block.input),
+                            "result": result,
+                        }
+                    )
 
             # Add assistant turn to history
             self._history.append({"role": "assistant", "content": response.content})
 
             if response.stop_reason == "end_turn" or not tool_results:
                 final_text = "\n".join(text_parts)
+                self._record_agent_workflow(
+                    intent=intent,
+                    active_trip=active_trip,
+                    events=workflow_events,
+                )
                 return final_text
 
             # Add tool results and continue
             self._history.append({"role": "user", "content": tool_results})
 
+        self._record_agent_workflow(intent=intent, active_trip=active_trip, events=workflow_events)
         return "Agent loop limit reached."
 
     def run_interactive(self) -> None:
@@ -518,6 +627,10 @@ class TrIppyAgent:
         if active_trips:
             console.print(f"[dim]Active trips: {', '.join(t.name for t in active_trips)}[/dim]\n")
 
+        setup_context = self._setup_context()
+        if setup_context:
+            console.print("[yellow]Setup has blockers. Run `trippy doctor` for details.[/yellow]\n")
+
         while True:
             try:
                 user_input = console.input("[bold green]You:[/bold green] ").strip()
@@ -535,6 +648,13 @@ class TrIppyAgent:
                     response = self.chat(user_input)
                 console.print("[bold cyan]Trippy:[/bold cyan]")
                 console.print(Markdown(response))
+                if self._last_workflow_id:
+                    console.print(
+                        f"\n[dim]Workflow ID: {self._last_workflow_id}[/dim]\n"
+                        "[dim]Share feedback with:[/dim] "
+                        f'trippy feedback {self._last_workflow_id} --rating helpful --notes "..." '
+                        "--future-learning"
+                    )
                 console.print()
             except KeyboardInterrupt:
                 console.print("\n[dim](interrupted)[/dim]\n")

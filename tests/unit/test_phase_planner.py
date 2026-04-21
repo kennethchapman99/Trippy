@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
 
+from trippy.ingest.google_auth import ALL_SCOPES
 from trippy.memory.store import MemoryStore
 from trippy.models.trip import Trip, TripStatus
 from trippy.services.phase_planner import PhasePlannerService
@@ -16,13 +18,15 @@ def test_status_shows_phase_2_complete_when_google_files_exist(tmp_path, monkeyp
     creds = tmp_path / "gmail_credentials.json"
     token = tmp_path / "gmail_token.json"
     creds.write_text("{}", encoding="utf-8")
-    token.write_text("{}", encoding="utf-8")
+    token.write_text(json.dumps({"scopes": list(ALL_SCOPES)}), encoding="utf-8")
 
     monkeypatch.setattr(config, "GMAIL_CREDENTIALS_PATH", creds)
     monkeypatch.setattr(config, "GMAIL_TOKEN_PATH", token)
     monkeypatch.setattr(config, "GOOGLE_TOKEN_PATH", tmp_path / "google_token.json")
 
-    planner = PhasePlannerService(memory_path=tmp_path / "memory.json", trips_dir=tmp_path / "trips")
+    planner = PhasePlannerService(
+        memory_path=tmp_path / "memory.json", trips_dir=tmp_path / "trips"
+    )
     phases = planner.status()
     phase2 = next(p for p in phases if p.phase == 2)
     assert phase2.complete
@@ -50,7 +54,9 @@ def test_status_marks_phase_3_complete_with_trips_and_preferences(tmp_path) -> N
         )
     )
 
-    planner = PhasePlannerService(memory_path=tmp_path / "memory.json", trips_dir=tmp_path / "trips")
+    planner = PhasePlannerService(
+        memory_path=tmp_path / "memory.json", trips_dir=tmp_path / "trips"
+    )
     phases = planner.status()
     phase3 = next(p for p in phases if p.phase == 3)
     assert phase3.complete
@@ -65,7 +71,9 @@ def test_run_phase_2_reports_file_existence(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(config, "GMAIL_TOKEN_PATH", tmp_path / "gmail_token.json")
     monkeypatch.setattr(config, "GOOGLE_TOKEN_PATH", tmp_path / "google_token.json")
 
-    planner = PhasePlannerService(memory_path=tmp_path / "memory.json", trips_dir=tmp_path / "trips")
+    planner = PhasePlannerService(
+        memory_path=tmp_path / "memory.json", trips_dir=tmp_path / "trips"
+    )
     result = planner.run_phase(2)
     assert result["phase"] == 2
     assert result["credentials_exist"] is True
@@ -73,6 +81,8 @@ def test_run_phase_2_reports_file_existence(tmp_path, monkeypatch) -> None:
 
 
 def test_run_phase_unsupported_returns_error(tmp_path) -> None:
-    planner = PhasePlannerService(memory_path=tmp_path / "memory.json", trips_dir=tmp_path / "trips")
+    planner = PhasePlannerService(
+        memory_path=tmp_path / "memory.json", trips_dir=tmp_path / "trips"
+    )
     result = planner.run_phase(99)
     assert "error" in result

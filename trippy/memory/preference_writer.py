@@ -40,11 +40,40 @@ class PreferenceWriter:
         self,
         trips: list[Trip],
         min_trips: int = _MIN_TRIPS_FOR_PREFERENCE,
+        *,
+        approved_by_human: bool = False,
     ) -> dict[str, str]:
-        """Analyse trips and write any new or updated durable preferences.
+        """Analyse trips and write approved durable preferences.
 
         Returns a dict of {preference_key: reason_string} for logging/display.
         """
+        if not approved_by_human:
+            raise PermissionError(
+                "Preference writes require review approval. Use extract_candidates() "
+                "and the learning proposal flow instead."
+            )
+        candidates = self.extract_candidates(trips, min_trips=min_trips)
+        written: dict[str, str] = {}
+        for name, candidate in candidates.items():
+            self._memory.set(
+                key=str(candidate["key"]),
+                value=candidate["value"],
+                category=str(candidate["category"]),
+                confidence=float(candidate["confidence"]),
+                source=str(candidate["source"]),
+                notes=str(candidate["notes"]) if candidate.get("notes") else None,
+            )
+            written[name] = str(candidate["reason"])
+
+        logger.info("PreferenceWriter wrote %d preferences", len(written))
+        return written
+
+    def extract_candidates(
+        self,
+        trips: list[Trip],
+        min_trips: int = _MIN_TRIPS_FOR_PREFERENCE,
+    ) -> dict[str, dict[str, Any]]:
+        """Analyse trips and return memory-write candidates without mutating memory."""
         if not trips:
             return {}
 
@@ -54,7 +83,7 @@ class PreferenceWriter:
             return {}
 
         trip_ids = [t.trip_id for t in lived_trips]
-        written: dict[str, str] = {}
+        candidates: dict[str, dict[str, Any]] = {}
 
         # -------------------------------------------------------
         # Departure time analysis
@@ -62,20 +91,22 @@ class PreferenceWriter:
         early_departures = self._find_early_departures(lived_trips)
         if early_departures["avoided_count"] >= min_trips:
             conf = _calc_confidence(early_departures["avoided_count"], min_trips)
-            self._memory.set(
-                key="pref:departure_time_earliest_acceptable",
-                value={
-                    "time": "07:00",
-                    "evidence": f"avoided early departures in {early_departures['avoided_count']} trips",
-                },
-                category="preference",
-                confidence=conf,
-                source=f"extracted from {len(lived_trips)} trips",
-            )
-            written["departure_time"] = (
+            reason = (
                 f"Earliest acceptable 07:00 (avoided early in "
                 f"{early_departures['avoided_count']} trips, conf={conf:.0%})"
             )
+            candidates["departure_time"] = {
+                "key": "pref:departure_time_earliest_acceptable",
+                "value": {
+                    "time": "07:00",
+                    "evidence": f"avoided early departures in {early_departures['avoided_count']} trips",
+                },
+                "category": "preference",
+                "confidence": conf,
+                "source": f"extracted from {len(lived_trips)} trips",
+                "notes": reason,
+                "reason": reason,
+            }
 
         # -------------------------------------------------------
         # Connection time analysis
@@ -85,19 +116,19 @@ class PreferenceWriter:
             min_seen = connections.get("min_minutes_seen")
             if min_seen and min_seen > 60:
                 conf = _calc_confidence(connections["sample_count"], min_trips)
-                self._memory.set(
-                    key="pref:min_connection_international",
-                    value={
+                reason = f"Min international connection {max(110, min_seen)} min (conf={conf:.0%})"
+                candidates["min_connection"] = {
+                    "key": "pref:min_connection_international",
+                    "value": {
                         "minutes": max(110, min_seen),
                         "evidence": f"min observed: {min_seen} min across {connections['sample_count']} connections",
                     },
-                    category="preference",
-                    confidence=conf,
-                    source=f"extracted from trips: {', '.join(trip_ids)}",
-                )
-                written["min_connection"] = (
-                    f"Min international connection {max(110, min_seen)} min (conf={conf:.0%})"
-                )
+                    "category": "preference",
+                    "confidence": conf,
+                    "source": f"extracted from trips: {', '.join(trip_ids)}",
+                    "notes": reason,
+                    "reason": reason,
+                }
 
         # -------------------------------------------------------
         # Stay preferences from lived trips
@@ -106,39 +137,42 @@ class PreferenceWriter:
         if stay_prefs["sample_count"] >= min_trips:
             conf = _calc_confidence(stay_prefs["sample_count"], min_trips)
             if stay_prefs.get("avg_nights_per_dest"):
-                self._memory.set(
-                    key="pref:min_nights_per_destination",
-                    value={
+                nights = max(2, int(stay_prefs["avg_nights_per_dest"]))
+                reason = f"Min {nights} nights/destination"
+                candidates["nights_per_dest"] = {
+                    "key": "pref:min_nights_per_destination",
+                    "value": {
                         "nights": max(2, int(stay_prefs["avg_nights_per_dest"])),
                         "evidence": f"avg {stay_prefs['avg_nights_per_dest']:.1f} nights/dest",
                     },
-                    category="preference",
-                    confidence=conf,
-                    source=f"extracted from trips: {', '.join(trip_ids)}",
-                )
-                written["nights_per_dest"] = (
-                    f"Min {max(2, int(stay_prefs['avg_nights_per_dest']))} nights/destination"
-                )
+                    "category": "preference",
+                    "confidence": conf,
+                    "source": f"extracted from trips: {', '.join(trip_ids)}",
+                    "notes": reason,
+                    "reason": reason,
+                }
 
         # -------------------------------------------------------
         # Source trip metadata in memory
         # -------------------------------------------------------
         existing_prefs = FamilyTravelPreferences(source_trips=trip_ids)
         existing_prefs.confidence = min(0.9, len(lived_trips) * 0.15)
-        self._memory.set(
-            key="pref:preference_source_trips",
-            value={"trip_ids": trip_ids, "count": len(lived_trips)},
-            category="preference",
-            confidence=existing_prefs.confidence,
-            source="preference_writer",
-        )
+        candidates["preference_source_trips"] = {
+            "key": "pref:preference_source_trips",
+            "value": {"trip_ids": trip_ids, "count": len(lived_trips)},
+            "category": "preference",
+            "confidence": existing_prefs.confidence,
+            "source": "preference_writer",
+            "notes": "Tracks the lived trips used as preference evidence.",
+            "reason": f"Preference evidence covers {len(lived_trips)} lived trip(s)",
+        }
 
         logger.info(
-            "PreferenceWriter wrote %d preferences from %d lived trips",
-            len(written),
+            "PreferenceWriter found %d preference candidates from %d lived trips",
+            len(candidates),
             len(lived_trips),
         )
-        return written
+        return candidates
 
     # ------------------------------------------------------------------
 
@@ -203,8 +237,14 @@ class PreferenceWriter:
         hint: str,
         source: str,
         confidence: float = 0.7,
+        *,
+        approved_by_human: bool = False,
     ) -> None:
         """Write an agent-discovered planning pattern to memory."""
+        if not approved_by_human:
+            raise PermissionError(
+                "Skill-hint writes require review approval. Use the learning proposal flow instead."
+            )
         self._memory.set(
             key=f"hint:{key}",
             value=hint,

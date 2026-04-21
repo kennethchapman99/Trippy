@@ -14,11 +14,16 @@ access, and a learning loop that persists lessons across trips.
 
 | Capability | Description |
 |---|---|
-| **Mine past trips** | Scans Google Drive for prior travel sheets, parses them into canonical trip records, extracts durable family preferences |
-| **Plan new trips** | Turns a rough idea ("Japan next March") into a structured trip record + Google Sheet, pre-filled with itinerary structure and known preferences |
+| **Mine past trips** | Scans Google Drive for prior travel sheets, parses them into canonical trip records, and proposes durable planning intelligence |
+| **Use country priors** | Applies historical country ratings and notes as directional priors for destination fit, cautions, and ranking |
+| **Compare trip ideas** | Turns loose constraints into ranked family-fit concepts with comfort, food, crowd, travel-burden, and friction tradeoffs |
+| **Plan new trips** | Turns a selected trip idea into a structured trip record + Google Sheet, pre-filled with itinerary structure and known preferences |
+| **Route travel sources** | Uses an explicit source registry for flights, lodging, tours, cars, validation, and deal inspiration |
+| **Generate maps** | Creates practical Google Maps links plus JSON, GeoJSON, and KML artifacts for trip navigation |
+| **Show dashboard** | Builds a static Past Trips / Planned Trips / Ideas dashboard from canonical state |
 | **Reconcile Gmail** | Reads booking confirmations, matches them to the correct trip, updates canonical state, pushes to Google Sheets |
-| **Audit for friction** | Proactively flags tight layovers, hotel check-in mismatches, missing confirmations, passport expiry, missing seats/bags |
-| **Self-improve** | Persists durable lessons to memory after successful workflows; updates Hermes skills so future planning is sharper |
+| **Audit for friction** | Proactively flags tight layovers, hotel check-in mismatches, family bed fit, city lodging burden, crowded tours, pacing issues, and missing entry/health/cash research |
+| **Self-improve** | Records workflow outcomes, retrospectives, and user feedback, then creates review-gated memory and skill proposals |
 
 ---
 
@@ -31,10 +36,17 @@ trippy/
   models/               Canonical Pydantic schemas (source of truth)
     trip.py             Trip, Segment, Stay, Confirmation, RiskFlag, ...
     preferences.py      FamilyTravelPreferences
+    country_priors.py   Historical country-level planning priors
+    intelligence.py     Extracted travel intelligence signals
+    ideas.py            Trip idea requests, concepts, comparisons
+    maps.py             Map pins, routes, and trip map artifacts
+    sources.py          Travel source registry models
+    dashboard.py        Dashboard tiles and export models
+    retrospective.py    Post-trip retrospective models
     profile.py          FamilyProfile, TravelerProfile
   memory/               Hermes memory management
     store.py            JSON-backed MemoryStore (versioned, categorized)
-    preference_writer.py  Extract + write durable preferences from trip evidence
+    preference_writer.py  Extract durable preference candidates from trip evidence
     profile_manager.py  Family profile CRUD
   mcp/                  MCP server — Google API boundary
     server.py           FastMCP entry point
@@ -46,6 +58,14 @@ trippy/
     runners/            Python skill execution modules
   services/             Core business logic
     trip_state.py       Canonical trip CRUD + JSON persistence
+    learning.py         Workflow outcomes, feedback, review-gated proposals
+    country_priors.py   Country prior lookup, scoring, and learning proposals
+    travel_intelligence.py Past-trip intelligence extraction
+    trip_ideation.py    Family-fit trip concept scoring
+    source_registry.py  Deterministic travel source routing
+    map_outputs.py      Google Maps links + JSON/GeoJSON/KML artifacts
+    dashboard.py        Static dashboard JSON + HTML generation
+    retrospective.py    Post-trip retrospective proposal workflow
     sheet_sync.py       Trip state ↔ Google Sheets bidirectional sync
     friction_detector.py  Deterministic rule-based risk auditing
   db/                   SQLite persistence (SQLAlchemy 2.x + Alembic)
@@ -59,7 +79,8 @@ trippy/
 - Canonical state lives in `~/.trippy/trips/{trip_id}.json` + SQLite. The LLM reasons about state; it does not store it.
 - All Google API calls go through the MCP server in `trippy/mcp/`. Services never call Google directly.
 - Memory holds durable truths (preferences, profile). Trip-specific facts stay in trip state.
-- Skills are the self-improvement surface — the agent patches them after successful workflows.
+- Learning is review-gated: workflows and feedback create proposals; only `trippy learn approve` mutates memory or skill files.
+- Skills are the self-improvement surface, but skill edits remain human-approved.
 
 ---
 
@@ -68,6 +89,30 @@ trippy/
 ```bash
 # Install dependencies
 uv sync
+
+# Check local/live readiness
+uv run trippy doctor
+
+# Run Google OAuth and validate Gmail, Sheets write, and Drive access
+uv run trippy auth-google
+
+# Mine past trip intelligence and review proposed learning
+uv run trippy mine-intelligence
+uv run trippy learn review
+
+# Generate ranked family-fit trip concepts
+uv run trippy trip-ideas --time "March break" --days 9 --goal food --goal culture --avoid crowds
+
+# Inspect country-level historical priors
+uv run trippy country-priors Japan
+
+# Inspect source routing, generate maps, and build the dashboard
+uv run trippy sources --category flights
+uv run trippy maps <trip-id>
+uv run trippy dashboard
+
+# Capture post-trip lessons as review-gated proposals
+uv run trippy retro <trip-id> --worked "..." --friction "..." --hard-rule "..."
 
 # Run the end-to-end demo (no credentials required)
 uv run python -m trippy.thin_slice
@@ -82,6 +127,19 @@ uv run python -m trippy.mcp.server
 uv run trippy db-init
 ```
 
+Copy `.env.example` to `.env` for live use. Trippy stores runtime state under
+`~/.trippy` by default:
+
+```bash
+TRIPPY_DB_PATH=~/.trippy/state.db
+TRIPPY_MEMORY_PATH=~/.trippy/memory.json
+TRIPPY_TRIPS_PATH=~/.trippy/trips
+TRIPPY_VAULT_PATH=~/.trippy/vault
+TRIPPY_LEARNING_PATH=~/.trippy/learning
+GMAIL_CREDENTIALS_PATH=~/.trippy/gmail_credentials.json
+GOOGLE_TOKEN_PATH=~/.trippy/google_token.json
+```
+
 ---
 
 ## Skills
@@ -91,7 +149,7 @@ Six Hermes skills are registered and callable by the agent:
 | Skill | Purpose |
 |---|---|
 | `trippy-past-trip-miner` | Scan Drive, import prior trip sheets into canonical records |
-| `trippy-preference-extractor` | Extract durable preferences from lived trip history |
+| `trippy-preference-extractor` | Propose durable preferences from lived trip history |
 | `trippy-trip-sheet-creator` | Create a new Google Sheet from a trip idea |
 | `trippy-gmail-reconciler` | Fetch Gmail confirmations and link them to trips |
 | `trippy-flight-friction-audit` | Audit a trip for risks (layovers, passports, timing) |
@@ -102,7 +160,7 @@ Six Hermes skills are registered and callable by the agent:
 ## Development
 
 ```bash
-uv run pytest            # 186 tests
+uv run pytest            # 235 passing tests, 5 skipped
 uv run mypy trippy/      # type checking
 uv run ruff check .      # lint
 uv run ruff format .     # format
@@ -124,9 +182,23 @@ uv run trippy phase-status
 uv run trippy phase-run 2
 uv run trippy phase-run 3 --folder-id <drive_folder_id>
 uv run trippy phase-run 4 --trip-idea "Japan next March"
-uv run trippy phase-run 5 --max-emails 50
+uv run trippy phase-run 5 --max-emails 50 --dry-run
 uv run trippy phase-run 6 --trip-id japan-2027
 ```
+
+Every meaningful CLI workflow records a workflow ID under
+`~/.trippy/learning/events.jsonl`. Attach explicit feedback and review learning proposals:
+
+```bash
+uv run trippy feedback <workflow-id> --rating needs-work --notes "..." --correction "..." --future-learning
+uv run trippy learn review
+uv run trippy learn approve <proposal-id>
+uv run trippy learn reject <proposal-id>
+```
+
+No preference, profile, memory, or skill learning is applied silently. Past-trip mining,
+agent memory updates, user feedback, and friction-derived hints all create pending proposals
+first.
 
 ---
 
@@ -138,13 +210,18 @@ The full architecture is in place and all CI checks pass:
 
 - [x] Canonical Pydantic models (`Trip`, `Segment`, `Stay`, `Confirmation`, `RiskFlag`, ...)
 - [x] JSON-backed MemoryStore with versioning, categories, and confidence scoring
-- [x] Deterministic `FrictionDetector` (passport expiry, tight connections, missing confirmations, check-in gaps)
+- [x] Deterministic `FrictionDetector` (passport expiry, tight connections, missing confirmations, check-in gaps, family bed fit, city/rental fit, pacing, tours, entry/health/cash readiness)
 - [x] All 6 Hermes skills defined and runnable
 - [x] MCP server with Gmail, Sheets, and Drive tools
 - [x] Hermes agent loop (streaming, tool-calling, memory-injection)
 - [x] Full Typer CLI (`trippy agent`, `trippy db-init`, `trippy import-drive`, ...)
 - [x] SQLite persistence with Alembic migrations
-- [x] 186 passing tests, mypy clean, ruff clean
+- [x] Setup doctor and Google OAuth validator
+- [x] Review-gated workflow feedback and learning proposals
+- [x] Country-level priors from historical ratings and notes
+- [x] Past-trip intelligence mining and trip idea comparison
+- [x] Source registry, map artifact generation, dashboard export, and retrospective proposals
+- [x] 235 passing tests, 5 skipped, mypy clean, ruff clean
 
 ---
 
@@ -157,7 +234,7 @@ Drive. Validate the Gmail → confirmation → trip linking pipeline end-to-end 
 ### Phase 3 — Past trip mining
 Run `trippy-past-trip-miner` against the family's Google Drive to import all historical
 trip sheets into canonical records. Extract durable preferences from that history and
-write them into the MemoryStore.
+review the proposed MemoryStore updates before approving them.
 
 ### Phase 4 — New trip sheet creation
 Wire up `trippy-trip-sheet-creator` to create real Google Sheets from the template,
@@ -169,7 +246,8 @@ them with Claude, link them to the correct trip, update both JSON state and the 
 
 ### Phase 6 — Self-improving skills
 After each successful workflow, have the agent assess whether a skill definition should
-be updated based on what it learned. Persist the updated `.md` and track skill versions.
+be updated based on what it learned. Persist the updated `.md` only after review approval
+and track skill versions.
 
 ---
 

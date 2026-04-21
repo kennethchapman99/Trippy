@@ -239,21 +239,26 @@ class GmailWatcher:
 
         self._service = build("gmail", "v1", credentials=creds)
 
-    def fetch_new_messages(self, label: str = "INBOX", max_results: int = 50) -> list[EmailContent]:
+    def fetch_new_messages(
+        self,
+        label: str = "INBOX",
+        max_results: int = 50,
+        query: str | None = None,
+    ) -> list[EmailContent]:
         """Fetch recent messages from Gmail, filtered to allowed senders."""
         if self._service is None:
             self.authenticate()
         service: Any = self._service
 
         # Narrow to booking-confirmation-like emails to avoid wasting fetch budget
-        query = (
+        gmail_query = query or (
             "subject:(confirmation OR booking OR reservation OR itinerary OR "
             '"your trip" OR "order confirmed" OR "e-ticket")'
         )
         results: dict[str, Any] = (
             service.users()
             .messages()
-            .list(userId="me", labelIds=[label], maxResults=max_results, q=query)
+            .list(userId="me", labelIds=[label], maxResults=max_results, q=gmail_query)
             .execute()
         )
         messages_meta = results.get("messages", [])
