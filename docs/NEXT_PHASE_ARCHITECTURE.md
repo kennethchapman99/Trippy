@@ -20,6 +20,7 @@ Use existing Google Sheet, Gmail, and canonical trip import flows as evidence co
 the imported trips into durable, reviewable memory signals:
 
 - lodging fit by context: city hotel, city rental, rural rental, bed setup
+- country-level priors from historical ratings and notes
 - travel burden: total travel time, directness, connection tolerance
 - pacing: nights per stop, transitions per week, activity/chill balance
 - vendor and loyalty patterns: airlines, hotel groups, platforms, Aeroplan usage
@@ -27,6 +28,10 @@ the imported trips into durable, reviewable memory signals:
 
 Implementation rule: the extractor may propose and summarize memory, but memory writes remain
 review-gated through the existing learning proposal flow.
+
+Country priors are a first planning layer, not a rule engine. Strong countries still need
+sub-region, season, logistics, and trip-style checks. Weak or mixed countries can still be
+recommended when the exact concept resolves the historical friction.
 
 ### Phase 2: Comfort/Friction Engine
 
@@ -43,6 +48,7 @@ Core checks:
 - rental access, parking, safety, and late-arrival complexity
 - overcompressed trip pacing and risky same-day transitions
 - missing cash, visa, entry, health, and vaccination research
+- country-prior cautions such as historical crowd, safety, food, sickness, road, cost, or travel-burden friction
 - mass-market/crowded/weak-safety tour signals when activity data exists
 
 Implementation rule: if data is missing for a reliability-critical check, flag the missing data
@@ -63,6 +69,7 @@ Required concept output:
 - food score
 - crowd risk
 - rationale grounded in family preferences and memory
+- fit based on past country-level history
 - why it might not fit
 - research required before booking
 

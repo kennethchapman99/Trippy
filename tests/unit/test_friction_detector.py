@@ -371,6 +371,27 @@ class TestFamilyComfortChecks:
         assert [r for r in risks if r.risk_id == "missing-health-precautions"]
         assert [r for r in risks if r.risk_id == "tour-quality-tour-1"]
 
+    def test_country_prior_cautions_are_visible_but_not_trip_blocking(self) -> None:
+        trip = _make_trip(
+            destination_summary="Italy family food and history trip",
+            stays=[
+                Stay(
+                    stay_id="stay-1",
+                    property_name="Central Rome Hotel",
+                    city="Rome",
+                    country="Italy",
+                    room_type="king suite with 3 beds",
+                )
+            ],
+        )
+
+        risks = _detector().audit(trip)
+
+        country_risks = [r for r in risks if r.risk_id == "country-prior-italy"]
+        assert country_risks
+        assert country_risks[0].severity == RiskSeverity.LOW
+        assert "directional priors" in country_risks[0].description
+
 
 class TestNoRisks:
     def test_clean_trip_no_risks(self) -> None:

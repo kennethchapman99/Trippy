@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from trippy.memory.store import MemoryStore
 from trippy.models.ideas import TripComparison, TripConcept, TripIdeaRequest
 from trippy.models.preferences import FamilyTravelPreferences
+from trippy.services.country_priors import CountryPriorService
 
 
 @dataclass(frozen=True)
 class _ConceptTemplate:
     concept_id: str
     title: str
+    countries: list[str]
     destinations: list[str]
     recommended_duration_days: int
     best_season: str
@@ -31,6 +33,7 @@ _TEMPLATES = [
     _ConceptTemplate(
         concept_id="portugal-food-cities-coast",
         title="Portugal Food Cities + Coast",
+        countries=["Portugal"],
         destinations=["Lisbon", "Porto", "Douro Valley or Cascais"],
         recommended_duration_days=10,
         best_season="spring or fall",
@@ -47,6 +50,7 @@ _TEMPLATES = [
     _ConceptTemplate(
         concept_id="japan-food-rail-cities",
         title="Japan Food + Rail Cities",
+        countries=["Japan"],
         destinations=["Tokyo", "Kyoto", "Osaka or Hiroshima"],
         recommended_duration_days=14,
         best_season="late fall or shoulder-season spring",
@@ -63,6 +67,7 @@ _TEMPLATES = [
     _ConceptTemplate(
         concept_id="mexico-city-oaxaca-food",
         title="Mexico City + Oaxaca Food Trip",
+        countries=["Mexico"],
         destinations=["Mexico City", "Oaxaca"],
         recommended_duration_days=9,
         best_season="winter or early spring",
@@ -79,6 +84,7 @@ _TEMPLATES = [
     _ConceptTemplate(
         concept_id="costa-rica-private-rental-adventure",
         title="Costa Rica Private Rental + Adventure",
+        countries=["Costa Rica"],
         destinations=["Arenal", "Manuel Antonio or Guanacaste"],
         recommended_duration_days=10,
         best_season="winter dry season",
@@ -97,6 +103,7 @@ _TEMPLATES = [
     _ConceptTemplate(
         concept_id="italy-food-culture-rail",
         title="Italy Food + Culture By Rail",
+        countries=["Italy"],
         destinations=["Rome", "Florence", "Bologna or Venice"],
         recommended_duration_days=12,
         best_season="spring or fall",
@@ -123,6 +130,7 @@ class TripIdeationService:
     ) -> None:
         self._prefs = preferences or FamilyTravelPreferences()
         self._memory = memory
+        self._country_priors = CountryPriorService()
 
     def compare(self, request: TripIdeaRequest, *, limit: int = 5) -> TripComparison:
         concepts = [self._score_template(template, request) for template in _TEMPLATES]
@@ -146,6 +154,18 @@ class TripIdeationService:
             "Food access is scored as a major trip objective.",
         ]
         why_not = list(template.risks)
+        country_fits = [
+            fit
+            for country in template.countries
+            if (fit := self._country_priors.fit_for_country(country))
+        ]
+        for fit in country_fits:
+            score += fit.score_adjustment
+            rationale.append(f"Fit based on past country-level history: {fit.rationale}")
+            if fit.caution_signals:
+                why_not.append(
+                    f"{fit.country} country prior has caution signals: {', '.join(fit.caution_signals[:4])}."
+                )
 
         goals = {goal.lower() for goal in request.goals}
         avoid = {item.lower() for item in request.avoid}
@@ -197,6 +217,7 @@ class TripIdeationService:
             "Exact lodging short list with bed layout, king-bed availability, location, safety, parking/access, and cancellation terms.",
             "Visa/entry requirements, passport validity rules, vaccination or health precautions, and local cash guidance.",
             "Small-group tour/activity operators with strong review and safety signals.",
+            "Validate country prior against exact sub-region, season, logistics, and trip style.",
         ]
 
         return TripConcept(
@@ -214,6 +235,7 @@ class TripIdeationService:
             food_score=template.food_score,
             crowd_risk=template.crowd_risk,
             total_score=max(0, min(100, score // 3)),
+            country_prior_signals=[fit.rationale for fit in country_fits],
             rationale=rationale,
             why_it_may_not_fit=why_not,
             major_risks=template.risks,

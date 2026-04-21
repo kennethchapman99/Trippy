@@ -34,6 +34,7 @@ class TripConcept(BaseModel):
     food_score: int
     crowd_risk: int
     total_score: int
+    country_prior_signals: list[str] = Field(default_factory=list)
     rationale: list[str]
     why_it_may_not_fit: list[str]
     major_risks: list[str]

@@ -15,6 +15,7 @@ access, and a learning loop that persists lessons across trips.
 | Capability | Description |
 |---|---|
 | **Mine past trips** | Scans Google Drive for prior travel sheets, parses them into canonical trip records, and proposes durable planning intelligence |
+| **Use country priors** | Applies historical country ratings and notes as directional priors for destination fit, cautions, and ranking |
 | **Compare trip ideas** | Turns loose constraints into ranked family-fit concepts with comfort, food, crowd, travel-burden, and friction tradeoffs |
 | **Plan new trips** | Turns a selected trip idea into a structured trip record + Google Sheet, pre-filled with itinerary structure and known preferences |
 | **Route travel sources** | Uses an explicit source registry for flights, lodging, tours, cars, validation, and deal inspiration |
@@ -35,6 +36,7 @@ trippy/
   models/               Canonical Pydantic schemas (source of truth)
     trip.py             Trip, Segment, Stay, Confirmation, RiskFlag, ...
     preferences.py      FamilyTravelPreferences
+    country_priors.py   Historical country-level planning priors
     intelligence.py     Extracted travel intelligence signals
     ideas.py            Trip idea requests, concepts, comparisons
     maps.py             Map pins, routes, and trip map artifacts
@@ -57,6 +59,7 @@ trippy/
   services/             Core business logic
     trip_state.py       Canonical trip CRUD + JSON persistence
     learning.py         Workflow outcomes, feedback, review-gated proposals
+    country_priors.py   Country prior lookup, scoring, and learning proposals
     travel_intelligence.py Past-trip intelligence extraction
     trip_ideation.py    Family-fit trip concept scoring
     source_registry.py  Deterministic travel source routing
@@ -99,6 +102,9 @@ uv run trippy learn review
 
 # Generate ranked family-fit trip concepts
 uv run trippy trip-ideas --time "March break" --days 9 --goal food --goal culture --avoid crowds
+
+# Inspect country-level historical priors
+uv run trippy country-priors Japan
 
 # Inspect source routing, generate maps, and build the dashboard
 uv run trippy sources --category flights
@@ -212,6 +218,7 @@ The full architecture is in place and all CI checks pass:
 - [x] SQLite persistence with Alembic migrations
 - [x] Setup doctor and Google OAuth validator
 - [x] Review-gated workflow feedback and learning proposals
+- [x] Country-level priors from historical ratings and notes
 - [x] Past-trip intelligence mining and trip idea comparison
 - [x] Source registry, map artifact generation, dashboard export, and retrospective proposals
 - [x] 235 passing tests, 5 skipped, mypy clean, ruff clean

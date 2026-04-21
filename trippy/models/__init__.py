@@ -1,5 +1,6 @@
 """Canonical Pydantic models — source of truth for trip state."""
 
+from trippy.models.country_priors import CountryFitSignal, CountryPrior, CountryPriorBand
 from trippy.models.dashboard import (
     DashboardIdeaTile,
     DashboardLink,
@@ -51,6 +52,9 @@ __all__ = [
     "Budget",
     "ChecklistItem",
     "Confirmation",
+    "CountryFitSignal",
+    "CountryPrior",
+    "CountryPriorBand",
     "DashboardIdeaTile",
     "DashboardLink",
     "DashboardTripTile",

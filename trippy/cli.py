@@ -227,6 +227,57 @@ def sources(
     _print_sources(items)
 
 
+@app.command("country-priors")
+def country_priors(
+    country: str = typer.Argument("", help="Optional country name to inspect"),
+    propose_learning: bool = typer.Option(
+        False,
+        "--propose-learning",
+        help="Create review-gated memory proposals for the shown country priors",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Show historical country-level preference priors."""
+    from trippy.services.country_priors import CountryPriorService
+
+    service = CountryPriorService()
+    if country:
+        prior = service.get(country)
+        if prior is None:
+            console.print(f"[red]No country prior found for:[/red] {country}")
+            raise typer.Exit(1)
+        priors = [prior]
+    else:
+        priors = service.list_priors()
+
+    workflow_id = _record_cli_workflow(
+        workflow_name="country-priors",
+        summary=f"Reviewed {len(priors)} country-level travel prior(s)",
+        result={"country_priors": [prior.model_dump(mode="json") for prior in priors]},
+        status=WorkflowStatus.SUCCESS,
+    )
+    proposals = []
+    if propose_learning:
+        proposals = service.propose_memory_updates(
+            source_workflow_id=workflow_id,
+            countries=[prior.country for prior in priors],
+        )
+
+    payload = {
+        "workflow_id": workflow_id,
+        "country_priors": [prior.model_dump(mode="json") for prior in priors],
+        "learning_proposals": [proposal.id for proposal in proposals],
+    }
+    if json_output:
+        _print_json(payload)
+        return
+    _print_country_priors(priors)
+    if proposals:
+        console.print(f"\nCreated {len(proposals)} review-gated learning proposal(s).")
+        console.print("Review with: [bold]trippy learn review[/bold]")
+    _print_workflow_footer(workflow_id)
+
+
 @app.command("maps")
 def maps(
     trip_name: str = typer.Argument(..., help="Canonical trip ID or name to map"),
@@ -1121,6 +1172,28 @@ def _print_source_plan(plan: Any) -> None:
     console.print(table)
     for note in plan.notes:
         console.print(f"  · {note}")
+
+
+def _print_country_priors(priors: list[Any]) -> None:
+    table = Table(title="Historical Country Priors", show_lines=True)
+    table.add_column("Country", style="bold")
+    table.add_column("Rating")
+    table.add_column("Band")
+    table.add_column("Positive Signals")
+    table.add_column("Cautions")
+    for prior in priors:
+        table.add_row(
+            prior.country,
+            str(prior.rating) if prior.rating is not None else "",
+            prior.band.value,
+            ", ".join(prior.positive_signals[:4]),
+            ", ".join(prior.caution_signals[:4]),
+        )
+    console.print(table)
+    console.print(
+        "[dim]Country priors are directional. Trip goals, season, sub-region, logistics, "
+        "and newer evidence can override them.[/dim]"
+    )
 
 
 def _print_map_artifact(artifact: Any) -> None:

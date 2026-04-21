@@ -131,6 +131,7 @@ class FrictionDetector:
         risks.extend(self._check_driving_and_parking_friction(trip))
         risks.extend(self._check_pacing(trip))
         risks.extend(self._check_destination_readiness(trip))
+        risks.extend(self._check_country_priors(trip))
         risks.extend(self._check_tour_quality_signals(trip))
 
         logger.info("FrictionDetector: %d risk(s) found for trip %r", len(risks), trip.trip_id)
@@ -632,6 +633,38 @@ class FrictionDetector:
                 )
         return risks
 
+    def _check_country_priors(self, trip: Trip) -> list[RiskFlag]:
+        from trippy.models.country_priors import CountryPriorBand
+        from trippy.services.country_priors import CountryPriorService
+
+        service = CountryPriorService()
+        risks: list[RiskFlag] = []
+        for country in _countries_for_trip(trip):
+            fit = service.fit_for_country(country)
+            if fit is None or not fit.caution_signals:
+                continue
+            severity = (
+                RiskSeverity.MEDIUM if fit.band == CountryPriorBand.CAUTION else RiskSeverity.LOW
+            )
+            risks.append(
+                RiskFlag(
+                    risk_id=f"country-prior-{_risk_slug(fit.country)}",
+                    severity=severity,
+                    category="country_prior",
+                    description=(
+                        f"{fit.country} has historical country-level caution signals: "
+                        f"{', '.join(fit.caution_signals[:5])}. These are directional priors, "
+                        "not a reason to reject the trip automatically."
+                    ),
+                    affected_ids=[],
+                    recommended_fix=(
+                        "Explain why this exact sub-region, season, logistics plan, and trip style "
+                        "still fit before recommending."
+                    ),
+                )
+            )
+        return risks
+
     def _check_tour_quality_signals(self, trip: Trip) -> list[RiskFlag]:
         risks: list[RiskFlag] = []
         tour_terms = ("tour", "excursion", "outing", "adventure")
@@ -720,3 +753,24 @@ def _has_compelling_lodging_upside(text: str) -> bool:
 def _looks_like_city_stay(stay: Stay) -> bool:
     text = _stay_text(stay)
     return bool(stay.city) and not any(term in text for term in ("countryside", "rural", "villa"))
+
+
+def _countries_for_trip(trip: Trip) -> list[str]:
+    countries = []
+    seen = set()
+    for stay in trip.stays:
+        if stay.country and stay.country.lower() not in seen:
+            countries.append(stay.country)
+            seen.add(stay.country.lower())
+    if trip.destination_summary:
+        from trippy.services.country_priors import CountryPriorService
+
+        for fit in CountryPriorService().fit_for_text(trip.destination_summary):
+            if fit.country.lower() not in seen:
+                countries.append(fit.country)
+                seen.add(fit.country.lower())
+    return countries
+
+
+def _risk_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
