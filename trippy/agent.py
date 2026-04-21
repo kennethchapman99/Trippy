@@ -205,6 +205,49 @@ def _skill_tools() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "name": "run_planning_service",
+            "description": (
+                "Run deterministic Trippy planning services for intake creation/lookup, plan drafts, "
+                "plan selection, workspace creation, maps, and exact shortlists. Use this "
+                "instead of duplicating planning logic in agent reasoning."
+            ),
+            "input_schema": {
+                "type": "object",
+                "required": ["action"],
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "create_intake",
+                            "show_intake",
+                            "draft_plan",
+                            "select_plan",
+                            "workspace",
+                            "map",
+                            "flights",
+                            "lodging",
+                            "cars",
+                            "activities",
+                            "propose_learning",
+                        ],
+                    },
+                    "trip_id": {"type": "string"},
+                    "trip_name": {"type": "string"},
+                    "destination": {"type": "array", "items": {"type": "string"}},
+                    "travel_window": {"type": "string"},
+                    "duration_days": {"type": "string"},
+                    "party_type": {"type": "string"},
+                    "adults": {"type": "integer"},
+                    "children": {"type": "integer"},
+                    "goals": {"type": "array", "items": {"type": "string"}},
+                    "avoidances": {"type": "array", "items": {"type": "string"}},
+                    "option_id": {"type": "string"},
+                    "no_google": {"type": "boolean", "default": False},
+                    "validate_live": {"type": "boolean", "default": False},
+                },
+            },
+        },
     ]
 
 
@@ -270,7 +313,120 @@ def _execute_tool(
         runner = FrictionAuditRunner(memory_store=memory)
         return json.dumps(runner.run(inputs))
 
+    if name == "run_planning_service":
+        return _run_planning_service(inputs)
+
     return json.dumps({"error": f"Unknown tool: {name}"})
+
+
+def _run_planning_service(inputs: dict[str, Any]) -> str:
+    action = str(inputs["action"])
+    trip_id = str(inputs.get("trip_id") or "")
+    option_id = str(inputs.get("option_id") or "")
+    validate_live = bool(inputs.get("validate_live", False))
+    try:
+        if action == "create_intake":
+            from trippy.models.trip_planning import (
+                TravelWindow,
+                TripIntake,
+                TripIntakeMode,
+                TripParty,
+                TripPartyType,
+            )
+            from trippy.services.trip_intake import TripIntakeService
+
+            trip_name = str(inputs.get("trip_name") or trip_id or "New Trip")
+            adults = int(inputs.get("adults") or 2)
+            children = int(inputs.get("children") or 3)
+            party_type = str(inputs.get("party_type") or "whole_family")
+            intake = TripIntake(
+                trip_id=trip_id,
+                mode=TripIntakeMode.SELECTED_DESTINATION,
+                trip_name=trip_name,
+                destination_seeds=_as_string_list(inputs.get("destination")),
+                travel_window=TravelWindow(label=str(inputs.get("travel_window") or "") or None),
+                duration_days=inputs.get("duration_days"),
+                travelers=adults + children,
+                party=TripParty(
+                    party_type=TripPartyType(party_type.strip().lower().replace("-", "_").replace(" ", "_")),
+                    adults=adults,
+                    children=children,
+                    explicit=True,
+                    defaulted_from_family_profile=False,
+                ),
+                goals=_as_string_list(inputs.get("goals")),
+                avoidances=_as_string_list(inputs.get("avoidances")),
+            )
+            return TripIntakeService().create(intake, overwrite=bool(trip_id)).model_dump_json(indent=2)
+        if not trip_id:
+            return json.dumps({"error": "trip_id is required", "action": action})
+        if action == "show_intake":
+            from trippy.services.trip_intake import TripIntakeService
+
+            return TripIntakeService().require(trip_id).model_dump_json(indent=2)
+        if action == "draft_plan":
+            from trippy.services.trip_planner import TripPlannerService
+
+            return TripPlannerService().draft(trip_id).model_dump_json(indent=2)
+        if action == "select_plan":
+            from trippy.services.trip_planner import TripPlannerService
+
+            if not option_id:
+                return json.dumps({"error": "option_id is required for select_plan"})
+            return TripPlannerService().select_option(trip_id, option_id).model_dump_json(indent=2)
+        if action == "workspace":
+            from trippy.services.trip_workspace import TripWorkspaceService
+
+            state = TripWorkspaceService().prepare(
+                trip_id,
+                option_id=option_id or None,
+                create_google_sheet=not bool(inputs.get("no_google", False)),
+                validate_live=validate_live,
+            )
+            return state.model_dump_json(indent=2)
+        if action == "map":
+            from trippy import config
+            from trippy.services.trip_map_builder import TripMapBuilder
+
+            return TripMapBuilder().write_artifacts(
+                trip_id,
+                config.EXPORT_PATH / "maps",
+            ).model_dump_json(indent=2)
+        if action == "flights":
+            from trippy.services.flight_shortlist import FlightShortlistService
+
+            return FlightShortlistService().build(trip_id, validate_live=validate_live).model_dump_json(indent=2)
+        if action == "lodging":
+            from trippy.services.lodging_shortlist import LodgingShortlistService
+
+            return LodgingShortlistService().build(trip_id, validate_live=validate_live).model_dump_json(indent=2)
+        if action == "cars":
+            from trippy.services.car_shortlist import CarShortlistService
+
+            return CarShortlistService().build(trip_id, validate_live=validate_live).model_dump_json(indent=2)
+        if action == "activities":
+            from trippy.services.activity_shortlist import ActivityShortlistService
+
+            return ActivityShortlistService().build(trip_id, validate_live=validate_live).model_dump_json(indent=2)
+        if action == "propose_learning":
+            from trippy.services.planning_learning import PlanningLearningService
+
+            proposals = PlanningLearningService().propose_for_trip(trip_id)
+            return json.dumps({"proposal_ids": [proposal.id for proposal in proposals]})
+        return json.dumps({"error": f"Unknown planning action: {action}"})
+    except Exception as exc:
+        logger.exception("Planning service action failed")
+        return json.dumps({"error": str(exc), "action": action, "trip_id": trip_id})
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()]
 
 
 def _run_skill(skill_name: str, inputs: dict[str, Any]) -> str:
@@ -357,7 +513,22 @@ class TrIppyAgent:
             )
         ):
             return UserIntent.IN_TRIP_OPS
-        if any(k in msg for k in ("plan trip", "plan a trip", "itinerary", "where should we go")):
+        if any(
+            k in msg
+            for k in (
+                "plan trip",
+                "plan a trip",
+                "itinerary",
+                "where should we go",
+                "shortlist",
+                "flight options",
+                "lodging options",
+                "car rental",
+                "activities",
+                "workspace",
+                "trip map",
+            )
+        ):
             return UserIntent.PLAN_TRIP
         return UserIntent.GENERAL
 

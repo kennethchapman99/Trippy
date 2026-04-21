@@ -15,10 +15,21 @@ def _expand(key: str, default: str) -> Path:
     return Path(raw).expanduser()
 
 
+def _bool(key: str, default: bool = False) -> bool:
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 # Core storage paths
 DB_PATH: Path = _expand("TRIPPY_DB_PATH", "~/.trippy/state.db")
 MEMORY_PATH: Path = _expand("TRIPPY_MEMORY_PATH", "~/.trippy/memory.json")
 TRIPS_PATH: Path = _expand("TRIPPY_TRIPS_PATH", "~/.trippy/trips")
+INTAKES_PATH: Path = _expand("TRIPPY_INTAKES_PATH", "~/.trippy/intakes")
+PLANS_PATH: Path = _expand("TRIPPY_PLANS_PATH", "~/.trippy/plans")
+WORKSPACES_PATH: Path = _expand("TRIPPY_WORKSPACES_PATH", "~/.trippy/workspaces")
+SHORTLISTS_PATH: Path = _expand("TRIPPY_SHORTLISTS_PATH", "~/.trippy/shortlists")
 VAULT_PATH: Path = _expand("TRIPPY_VAULT_PATH", "~/.trippy/vault")
 EXPORT_PATH: Path = _expand("TRIPPY_EXPORT_PATH", "~/.trippy/export")
 LEARNING_PATH: Path = _expand("TRIPPY_LEARNING_PATH", "~/.trippy/learning")
@@ -36,6 +47,8 @@ DUFFEL_ACCESS_TOKEN: str = os.environ.get("DUFFEL_ACCESS_TOKEN", "")
 
 # Google Sheet template
 SHEET_TEMPLATE_ID: str = os.environ.get("TRIPPY_SHEET_TEMPLATE_ID", "")
+LIVE_VALIDATION_ENABLED: bool = _bool("TRIPPY_LIVE_VALIDATION_ENABLED", False)
+LIVE_VALIDATION_TIMEOUT_SECONDS: float = float(os.environ.get("TRIPPY_LIVE_VALIDATION_TIMEOUT_SECONDS", "4"))
 
 DATABASE_URL: str = f"sqlite:///{DB_PATH}"
 

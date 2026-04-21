@@ -18,7 +18,9 @@ access, and a learning loop that persists lessons across trips.
 | **Use country priors** | Applies historical country ratings and notes as directional priors for destination fit, cautions, and ranking |
 | **Compare trip ideas** | Turns loose constraints into ranked family-fit concepts with comfort, food, crowd, travel-burden, and friction tradeoffs |
 | **Plan new trips** | Turns a selected trip idea into a structured trip record + Google Sheet, pre-filled with itinerary structure and known preferences |
+| **Capture trip party** | Records who is actually coming, adult/child counts, roster, child ages, sleeping/privacy needs, and fuzzy duration ranges |
 | **Route travel sources** | Uses an explicit source registry for flights, lodging, tours, cars, validation, and deal inspiration |
+| **Validate shortlists** | Adds provenance, freshness, confidence, availability, and verification status to shortlist rows, with optional live source-link checks |
 | **Generate maps** | Creates practical Google Maps links plus JSON, GeoJSON, and KML artifacts for trip navigation |
 | **Show dashboard** | Builds a static Past Trips / Planned Trips / Ideas dashboard from canonical state |
 | **Reconcile Gmail** | Reads booking confirmations, matches them to the correct trip, updates canonical state, pushes to Google Sheets |
@@ -39,6 +41,7 @@ trippy/
     country_priors.py   Historical country-level planning priors
     intelligence.py     Extracted travel intelligence signals
     ideas.py            Trip idea requests, concepts, comparisons
+    trip_planning.py    New-trip intake, party/roster, fuzzy duration, plan drafts, and workspace state
     maps.py             Map pins, routes, and trip map artifacts
     sources.py          Travel source registry models
     dashboard.py        Dashboard tiles and export models
@@ -62,6 +65,15 @@ trippy/
     country_priors.py   Country prior lookup, scoring, and learning proposals
     travel_intelligence.py Past-trip intelligence extraction
     trip_ideation.py    Family-fit trip concept scoring
+    trip_intake.py      New-trip intake persistence
+    trip_planner.py     Deterministic trip planning drafts, including Azores golden path
+    trip_workspace.py   Canonical trip + hydrated planning workspace + Master Timeline creation
+    trip_map_builder.py Planning map artifacts from selected plan options
+    flight_shortlist.py Source-linked flight recommendation shortlists
+    lodging_shortlist.py Family-fit lodging recommendation shortlists
+    car_shortlist.py   Car rental recommendation shortlists
+    activity_shortlist.py Activity/tour recommendation shortlists
+    live_validation.py Conservative live-source link validation for shortlist rows
     source_registry.py  Deterministic travel source routing
     map_outputs.py      Google Maps links + JSON/GeoJSON/KML artifacts
     dashboard.py        Static dashboard JSON + HTML generation
@@ -77,7 +89,7 @@ trippy/
 
 **Key design rules:**
 - Canonical state lives in `~/.trippy/trips/{trip_id}.json` + SQLite. The LLM reasons about state; it does not store it.
-- All Google API calls go through the MCP server in `trippy/mcp/`. Services never call Google directly.
+- Google API calls live behind the MCP tools or dedicated sync/workspace service boundaries.
 - Memory holds durable truths (preferences, profile). Trip-specific facts stay in trip state.
 - Learning is review-gated: workflows and feedback create proposals; only `trippy learn approve` mutates memory or skill files.
 - Skills are the self-improvement surface, but skill edits remain human-approved.
@@ -102,6 +114,24 @@ uv run trippy learn review
 
 # Generate ranked family-fit trip concepts
 uv run trippy trip-ideas --time "March break" --days 9 --goal food --goal culture --avoid crowds
+
+# Plan a selected destination with the Azores golden path
+uv run trippy trip-intake wizard --no-prompt --trip-name "Azores 2027" --destination Azores --travel-window "summer 2027" --days "9 to 11 days" --party-type whole_family --adults 2 --children 3 --child-age 15 --child-age 12 --child-age 10 --goal nature --goal food
+uv run trippy trip-plan draft --trip-id azores-2027
+uv run trippy trip-plan select --trip-id azores-2027 --option-id azores-two-island-balanced
+uv run trippy trip-plan workspace --trip-id azores-2027
+uv run trippy trip-map build --trip-id azores-2027
+uv run trippy trip-plan flights --trip-id azores-2027
+uv run trippy trip-plan lodging --trip-id azores-2027
+uv run trippy trip-plan cars --trip-id azores-2027
+uv run trippy trip-plan activities --trip-id azores-2027
+uv run trippy trip-plan propose-learning --trip-id azores-2027
+
+# Duration accepts exact or fuzzy values: --days 10, --days "6 to 8 days", --duration "about a week"
+# Named rosters are repeatable: --traveler "Ken|adult" --traveler "Child 1|12"
+# trip-plan workspace hydrates Flights, Lodging, Cars, Activities, Maps, Risks, Overview, and Master Timeline tabs.
+# Add --validate-live to shortlist or workspace commands to attempt conservative source-link validation.
+# A verified_live row means the live source page was reachable, not that final inventory/payment terms are proven.
 
 # Inspect country-level historical priors
 uv run trippy country-priors Japan
@@ -134,8 +164,14 @@ Copy `.env.example` to `.env` for live use. Trippy stores runtime state under
 TRIPPY_DB_PATH=~/.trippy/state.db
 TRIPPY_MEMORY_PATH=~/.trippy/memory.json
 TRIPPY_TRIPS_PATH=~/.trippy/trips
+TRIPPY_INTAKES_PATH=~/.trippy/intakes
+TRIPPY_PLANS_PATH=~/.trippy/plans
+TRIPPY_WORKSPACES_PATH=~/.trippy/workspaces
+TRIPPY_SHORTLISTS_PATH=~/.trippy/shortlists
 TRIPPY_VAULT_PATH=~/.trippy/vault
 TRIPPY_LEARNING_PATH=~/.trippy/learning
+TRIPPY_LIVE_VALIDATION_ENABLED=false
+TRIPPY_LIVE_VALIDATION_TIMEOUT_SECONDS=4
 GMAIL_CREDENTIALS_PATH=~/.trippy/gmail_credentials.json
 GOOGLE_TOKEN_PATH=~/.trippy/google_token.json
 ```
@@ -160,7 +196,7 @@ Six Hermes skills are registered and callable by the agent:
 ## Development
 
 ```bash
-uv run pytest            # 235 passing tests, 5 skipped
+uv run pytest            # 245 passing tests, 5 skipped
 uv run mypy trippy/      # type checking
 uv run ruff check .      # lint
 uv run ruff format .     # format
@@ -221,7 +257,7 @@ The full architecture is in place and all CI checks pass:
 - [x] Country-level priors from historical ratings and notes
 - [x] Past-trip intelligence mining and trip idea comparison
 - [x] Source registry, map artifact generation, dashboard export, and retrospective proposals
-- [x] 235 passing tests, 5 skipped, mypy clean, ruff clean
+- [x] 245 passing tests, 5 skipped, mypy clean, ruff clean
 
 ---
 

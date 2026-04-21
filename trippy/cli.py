@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json as json_lib
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -19,7 +19,13 @@ if TYPE_CHECKING:
 
 app = typer.Typer(name="trippy", help="Chapman family travel concierge.")
 learn_app = typer.Typer(help="Review and apply Trippy learning proposals.")
+trip_intake_app = typer.Typer(help="Create and inspect new-trip intake state.")
+trip_plan_app = typer.Typer(help="Draft, select, and workspace a new trip plan.")
+trip_map_app = typer.Typer(help="Build planning map artifacts for a new trip.")
 app.add_typer(learn_app, name="learn")
+app.add_typer(trip_intake_app, name="trip-intake")
+app.add_typer(trip_plan_app, name="trip-plan")
+app.add_typer(trip_map_app, name="trip-map")
 console = Console()
 
 
@@ -42,6 +48,10 @@ def db_init() -> None:
     config.VAULT_PATH.mkdir(parents=True, exist_ok=True)
     config.EXPORT_PATH.mkdir(parents=True, exist_ok=True)
     config.TRIPS_PATH.mkdir(parents=True, exist_ok=True)
+    config.INTAKES_PATH.mkdir(parents=True, exist_ok=True)
+    config.PLANS_PATH.mkdir(parents=True, exist_ok=True)
+    config.WORKSPACES_PATH.mkdir(parents=True, exist_ok=True)
+    config.SHORTLISTS_PATH.mkdir(parents=True, exist_ok=True)
     config.LEARNING_PATH.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(["alembic", "upgrade", "head"], capture_output=True, text=True)
     typer.echo(result.stdout)
@@ -193,6 +203,542 @@ def trip_ideas(
     _print_workflow_footer(workflow_id)
 
 
+@trip_intake_app.command("wizard")
+def trip_intake_wizard(
+    mode: str = typer.Option(
+        "selected_destination",
+        "--mode",
+        help="Intake mode: idea or selected_destination",
+    ),
+    trip_name: str = typer.Option("", "--trip-name", help="Human trip name"),
+    destination: list[str] | None = typer.Option(
+        None,
+        "--destination",
+        help="Destination seed; repeatable or comma-separated",
+    ),
+    travel_window: str = typer.Option("", "--travel-window", help="Travel window label"),
+    season: str = typer.Option("", "--season", help="Season or time of year"),
+    start_date: str = typer.Option("", "--start-date", help="Optional YYYY-MM-DD start date"),
+    end_date: str = typer.Option("", "--end-date", help="Optional YYYY-MM-DD end date"),
+    duration_days: str = typer.Option(
+        "",
+        "--days",
+        "--duration",
+        help='Trip duration such as "10", "6 to 8 days", or "about a week"',
+    ),
+    travelers: int = typer.Option(5, "--travelers", help="Number of travelers"),
+    party_type: str = typer.Option(
+        "whole_family",
+        "--party-type",
+        help="whole_family, adults_only, couple, subset_family, family_plus_others, or custom",
+    ),
+    adults: int = typer.Option(0, "--adults", help="Adults coming on this trip"),
+    children: int = typer.Option(0, "--children", help="Children coming on this trip"),
+    child_age: list[int] | None = typer.Option(
+        None,
+        "--child-age",
+        help="Child age; repeatable",
+    ),
+    traveler: list[str] | None = typer.Option(
+        None,
+        "--traveler",
+        help="Traveler roster item; repeatable. Examples: 'Ken|adult', 'Child 1|12', 'Alex|teen'.",
+    ),
+    sleeping_considerations: str = typer.Option(
+        "",
+        "--sleeping-considerations",
+        help="Trip-specific sleeping/bed notes",
+    ),
+    separate_rooms: bool = typer.Option(
+        False,
+        "--separate-rooms",
+        help="Separate rooms/privacy matter for this trip",
+    ),
+    privacy_needs: str = typer.Option("", "--privacy-needs", help="Privacy or room-separation needs"),
+    mobility_notes: str = typer.Option("", "--mobility-notes", help="Mobility/stamina notes"),
+    child_friendliness_notes: str = typer.Option(
+        "",
+        "--child-friendliness-notes",
+        help="Child-friendliness or age-fit notes",
+    ),
+    departure_airport: list[str] | None = typer.Option(
+        None,
+        "--departure-airport",
+        help="Departure airport; repeatable or comma-separated",
+    ),
+    budget_cad: float = typer.Option(0.0, "--budget-cad", help="Approximate budget in CAD"),
+    max_travel_time_hours: float = typer.Option(
+        0.0,
+        "--max-travel-time-hours",
+        help="Preferred max total travel time in hours",
+    ),
+    prefer_direct: bool = typer.Option(True, "--direct/--connections-ok", help="Prefer direct flights"),
+    goal: list[str] | None = typer.Option(None, "--goal", help="Trip goal; repeatable"),
+    avoidance: list[str] | None = typer.Option(
+        None,
+        "--avoidance",
+        "--avoid",
+        help="Thing to avoid; repeatable",
+    ),
+    pace: str = typer.Option("balanced", "--pace", help="relaxed, balanced, or active"),
+    crowd_tolerance: str = typer.Option("low", "--crowd-tolerance", help="low, medium, or high"),
+    food_priority: str = typer.Option("high", "--food-priority", help="low, medium, or high"),
+    lodging_notes: str = typer.Option("", "--lodging-notes", help="Lodging preference notes"),
+    car_rental: str = typer.Option("", "--car-rental", help="Car rental expectation notes"),
+    notes: str = typer.Option("", "--notes", help="Freeform notes"),
+    no_prompt: bool = typer.Option(False, "--no-prompt", help="Use flags/defaults without prompts"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Ask intake questions and write canonical new-trip intake state."""
+    from trippy.models.trip_planning import (
+        CarRentalExpectation,
+        CrowdTolerance,
+        FlightPreferenceInput,
+        FoodPriority,
+        LodgingPreferenceInput,
+        TravelWindow,
+        TripIntake,
+        TripIntakeMode,
+        TripPace,
+        TripParty,
+        TripPartyType,
+    )
+    from trippy.services.trip_intake import TripIntakeService
+
+    destinations = _split_cli_list(destination or [])
+    departures = _split_cli_list(departure_airport or []) or ["YYZ"]
+    goals = _split_cli_list(goal or [])
+    avoidances = _split_cli_list(avoidance or [])
+
+    if not no_prompt:
+        mode = str(typer.prompt("Mode (idea or selected_destination)", default=mode)).strip()
+        if not trip_name:
+            trip_name = str(typer.prompt("Trip name", default="Azores family trip")).strip()
+        if not destinations:
+            raw_destination = str(typer.prompt("Destination seed(s)", default="Azores")).strip()
+            destinations = _split_cli_list([raw_destination])
+        if not travel_window and not season and not start_date:
+            travel_window = str(typer.prompt("Travel window or season", default="summer 2027")).strip()
+        if not duration_days:
+            duration_days = str(typer.prompt("Duration in days or range", default="10")).strip()
+        party_type = str(
+            typer.prompt(
+                "Who is coming (whole_family, adults_only, couple, subset_family, family_plus_others, custom)",
+                default=party_type,
+            )
+        ).strip()
+        if not adults:
+            adults = int(typer.prompt("Adults coming", default=2))
+        if not children:
+            children = int(typer.prompt("Children coming", default=max(0, travelers - adults)))
+        travelers = adults + children
+        if children and not child_age:
+            raw_ages = str(typer.prompt("Child ages or age bands", default="")).strip()
+            child_age = [int(part.strip()) for part in raw_ages.split(",") if part.strip().isdigit()]
+        if not traveler:
+            raw_roster = str(
+                typer.prompt(
+                    "Traveler names/roster (comma-separated, optional)",
+                    default="",
+                )
+            ).strip()
+            traveler = [item.strip() for item in raw_roster.split(",") if item.strip()]
+        if departures == ["YYZ"]:
+            raw_departures = str(typer.prompt("Departure airport(s)", default="YYZ")).strip()
+            departures = _split_cli_list([raw_departures]) or ["YYZ"]
+        if not goals:
+            raw_goals = str(
+                typer.prompt(
+                    "Goals",
+                    default="nature, food, relaxed adventure, family comfort",
+                )
+            ).strip()
+            goals = _split_cli_list([raw_goals])
+        if not avoidances:
+            raw_avoid = str(
+                typer.prompt(
+                    "Avoidances",
+                    default="huge crowds, overpacked days, stressful driving",
+                )
+            ).strip()
+            avoidances = _split_cli_list([raw_avoid])
+
+    try:
+        duration_input: Any = duration_days or None
+        intake = TripIntake(
+            mode=TripIntakeMode(_normalise_enum_value(mode)),
+            trip_name=trip_name,
+            destination_seeds=destinations,
+            travel_window=TravelWindow(
+                label=travel_window or None,
+                season=season or (travel_window or None),
+                start_date=_parse_optional_date(start_date),
+                end_date=_parse_optional_date(end_date),
+            ),
+            duration_days=duration_input,
+            travelers=travelers,
+            departure_airports=departures,
+            budget_cad=budget_cad or None,
+            max_travel_time_hours=max_travel_time_hours or None,
+            flight_preferences=FlightPreferenceInput(prefer_direct=prefer_direct),
+            goals=goals,
+            avoidances=avoidances,
+            pace=TripPace(_normalise_enum_value(pace)),
+            crowd_tolerance=CrowdTolerance(_normalise_enum_value(crowd_tolerance)),
+            food_priority=FoodPriority(_normalise_enum_value(food_priority)),
+            lodging_preferences=LodgingPreferenceInput(notes=lodging_notes or None),
+            car_rental_expectations=CarRentalExpectation(notes=car_rental or None),
+            party=TripParty(
+                party_type=TripPartyType(_normalise_enum_value(party_type)),
+                adults=adults or min(2, travelers),
+                children=children or max(0, travelers - (adults or min(2, travelers))),
+                child_ages=child_age or [],
+                roster=_parse_traveler_specs(traveler or []),
+                explicit=bool(traveler or adults or children or child_age),
+                defaulted_from_family_profile=not bool(traveler or adults or children or child_age),
+                sleeping_considerations=sleeping_considerations or None,
+                separate_rooms_preferred=separate_rooms,
+                privacy_needs=privacy_needs or None,
+                mobility_notes=mobility_notes or None,
+                child_friendliness_notes=child_friendliness_notes or None,
+            ),
+            freeform_notes=notes or None,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Invalid intake:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    intake = TripIntakeService().create(intake)
+    workflow_id = _record_cli_workflow(
+        workflow_name="trip-intake-wizard",
+        trip_id=intake.trip_id,
+        summary=f"Created new-trip intake for {intake.trip_name}",
+        result=intake.model_dump(mode="json"),
+        status=WorkflowStatus.SUCCESS,
+    )
+    payload = {"workflow_id": workflow_id, "intake": intake.model_dump(mode="json")}
+    if json_output:
+        _print_json(payload)
+        return
+    _print_trip_intake(intake)
+    console.print(f"\nNext: [bold]uv run trippy trip-plan draft --trip-id {intake.trip_id}[/bold]")
+    _print_workflow_footer(workflow_id)
+
+
+@trip_intake_app.command("show")
+def trip_intake_show(
+    trip_id: str = typer.Option(..., "--trip-id", help="Trip intake ID"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Show canonical new-trip intake state."""
+    from trippy.services.trip_intake import TripIntakeService
+
+    try:
+        intake = TripIntakeService().require(trip_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    if json_output:
+        _print_json(intake.model_dump(mode="json"))
+        return
+    _print_trip_intake(intake)
+
+
+@trip_plan_app.command("draft")
+def trip_plan_draft(
+    trip_id: str = typer.Option(..., "--trip-id", help="Trip intake ID"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Generate structured planning options from a trip intake."""
+    from trippy.services.trip_planner import TripPlannerService
+
+    try:
+        draft = TripPlannerService().draft(trip_id)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    workflow_id = _record_cli_workflow(
+        workflow_name="trip-plan-draft",
+        skill_name="trippy-family-itinerary-builder",
+        trip_id=trip_id,
+        summary=f"Generated {len(draft.options)} trip plan option(s)",
+        result=draft.model_dump(mode="json"),
+        status=WorkflowStatus.SUCCESS,
+    )
+    payload = {"workflow_id": workflow_id, "draft": draft.model_dump(mode="json")}
+    if json_output:
+        _print_json(payload)
+        return
+    _print_trip_plan_draft(draft)
+    if draft.recommended_option_id:
+        console.print(
+            f"\nSelect: [bold]uv run trippy trip-plan select --trip-id {trip_id} "
+            f"--option-id {draft.recommended_option_id}[/bold]"
+        )
+    _print_workflow_footer(workflow_id)
+
+
+@trip_plan_app.command("select")
+def trip_plan_select(
+    trip_id: str = typer.Option(..., "--trip-id", help="Trip intake ID"),
+    option_id: str = typer.Option(..., "--option-id", help="Plan option ID to approve"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Approve the preferred plan option before workspace creation."""
+    from trippy.services.trip_planner import TripPlannerService
+
+    try:
+        draft = TripPlannerService().select_option(trip_id, option_id)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    workflow_id = _record_cli_workflow(
+        workflow_name="trip-plan-select",
+        trip_id=trip_id,
+        summary=f"Selected trip plan option {option_id}",
+        result=draft.model_dump(mode="json"),
+        status=WorkflowStatus.SUCCESS,
+    )
+    payload = {"workflow_id": workflow_id, "draft": draft.model_dump(mode="json")}
+    if json_output:
+        _print_json(payload)
+        return
+    selected = draft.get_option(option_id)
+    console.print(f"[green]Selected:[/green] {selected.title if selected else option_id}")
+    console.print(f"Next: [bold]uv run trippy trip-plan workspace --trip-id {trip_id}[/bold]")
+    _print_workflow_footer(workflow_id)
+
+
+@trip_plan_app.command("workspace")
+def trip_plan_workspace(
+    trip_id: str = typer.Option(..., "--trip-id", help="Trip intake ID"),
+    option_id: str = typer.Option("", "--option-id", help="Optional plan option ID to select inline"),
+    folder_id: str = typer.Option("", "--folder-id", help="Optional Google Drive folder ID"),
+    google: bool = typer.Option(True, "--google/--no-google", help="Attempt Google Sheet creation"),
+    validate_live: bool = typer.Option(
+        False,
+        "--validate-live",
+        help="Attempt live source link validation before hydrating workspace rows",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Create or prepare the selected trip planning workspace."""
+    from trippy.models.trip_planning import WorkspaceStatus
+    from trippy.services.trip_workspace import TripWorkspaceService
+
+    try:
+        state = TripWorkspaceService().prepare(
+            trip_id,
+            option_id=option_id or None,
+            create_google_sheet=google,
+            folder_id=folder_id or None,
+            validate_live=validate_live,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    workflow_id = _record_cli_workflow(
+        workflow_name="trip-plan-workspace",
+        skill_name="trippy-trip-sheet-creator",
+        trip_id=trip_id,
+        summary=f"Prepared planning workspace for {trip_id}",
+        result=state.model_dump(mode="json"),
+        status=WorkflowStatus.SUCCESS
+        if state.status != WorkspaceStatus.SHEET_FAILED
+        else WorkflowStatus.FAILED,
+    )
+    payload = {"workflow_id": workflow_id, "workspace": state.model_dump(mode="json")}
+    if json_output:
+        _print_json(payload)
+        return
+    _print_trip_workspace(state)
+    _print_workflow_footer(workflow_id)
+
+
+@trip_plan_app.command("flights")
+def trip_plan_flights(
+    trip_id: str = typer.Option(..., "--trip-id", help="Trip intake ID"),
+    validate_live: bool = typer.Option(
+        False,
+        "--validate-live",
+        help="Attempt live source link validation for shortlist rows",
+    ),
+    propose_learning: bool = typer.Option(
+        False,
+        "--propose-learning",
+        help="Create review-gated planning learning proposals from the shortlist",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Generate a friction-aware flight shortlist for the selected plan."""
+    from trippy.services.flight_shortlist import FlightShortlistService
+
+    _run_shortlist_command(
+        trip_id=trip_id,
+        workflow_name="trip-plan-flights",
+        summary="Generated flight shortlist",
+        state=FlightShortlistService().build(trip_id, validate_live=validate_live),
+        propose_learning=propose_learning,
+        json_output=json_output,
+    )
+
+
+@trip_plan_app.command("lodging")
+def trip_plan_lodging(
+    trip_id: str = typer.Option(..., "--trip-id", help="Trip intake ID"),
+    validate_live: bool = typer.Option(
+        False,
+        "--validate-live",
+        help="Attempt live source link validation for shortlist rows",
+    ),
+    propose_learning: bool = typer.Option(
+        False,
+        "--propose-learning",
+        help="Create review-gated planning learning proposals from the shortlist",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Generate a family-fit lodging shortlist for the selected plan."""
+    from trippy.services.lodging_shortlist import LodgingShortlistService
+
+    _run_shortlist_command(
+        trip_id=trip_id,
+        workflow_name="trip-plan-lodging",
+        summary="Generated lodging shortlist",
+        state=LodgingShortlistService().build(trip_id, validate_live=validate_live),
+        propose_learning=propose_learning,
+        json_output=json_output,
+    )
+
+
+@trip_plan_app.command("cars")
+def trip_plan_cars(
+    trip_id: str = typer.Option(..., "--trip-id", help="Trip intake ID"),
+    validate_live: bool = typer.Option(
+        False,
+        "--validate-live",
+        help="Attempt live source link validation for shortlist rows",
+    ),
+    propose_learning: bool = typer.Option(
+        False,
+        "--propose-learning",
+        help="Create review-gated planning learning proposals from the shortlist",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Generate a family/luggage-aware car rental shortlist for the selected plan."""
+    from trippy.services.car_shortlist import CarShortlistService
+
+    _run_shortlist_command(
+        trip_id=trip_id,
+        workflow_name="trip-plan-cars",
+        summary="Generated car rental shortlist",
+        state=CarShortlistService().build(trip_id, validate_live=validate_live),
+        propose_learning=propose_learning,
+        json_output=json_output,
+    )
+
+
+@trip_plan_app.command("activities")
+def trip_plan_activities(
+    trip_id: str = typer.Option(..., "--trip-id", help="Trip intake ID"),
+    validate_live: bool = typer.Option(
+        False,
+        "--validate-live",
+        help="Attempt live source link validation for shortlist rows",
+    ),
+    propose_learning: bool = typer.Option(
+        False,
+        "--propose-learning",
+        help="Create review-gated planning learning proposals from the shortlist",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Generate a safety/review/pacing-aware activity shortlist for the selected plan."""
+    from trippy.services.activity_shortlist import ActivityShortlistService
+
+    _run_shortlist_command(
+        trip_id=trip_id,
+        workflow_name="trip-plan-activities",
+        summary="Generated activity shortlist",
+        state=ActivityShortlistService().build(trip_id, validate_live=validate_live),
+        propose_learning=propose_learning,
+        json_output=json_output,
+    )
+
+
+@trip_plan_app.command("propose-learning")
+def trip_plan_propose_learning(
+    trip_id: str = typer.Option(..., "--trip-id", help="Trip intake ID"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Create review-gated learning proposals from planning choices and shortlists."""
+    from trippy.services.planning_learning import PlanningLearningService
+
+    workflow_id = _record_cli_workflow(
+        workflow_name="trip-plan-propose-learning",
+        trip_id=trip_id,
+        summary=f"Reviewed planning outcomes for {trip_id}",
+        result={"trip_id": trip_id},
+        status=WorkflowStatus.SUCCESS,
+    )
+    proposals = PlanningLearningService().propose_for_trip(
+        trip_id,
+        source_workflow_id=workflow_id,
+    )
+    payload = {
+        "workflow_id": workflow_id,
+        "learning_proposals": [proposal.model_dump(mode="json") for proposal in proposals],
+    }
+    if json_output:
+        _print_json(payload)
+        return
+    console.print(f"Created {len(proposals)} review-gated planning proposal(s).")
+    if proposals:
+        console.print("Review with: [bold]trippy learn review[/bold]")
+    _print_workflow_footer(workflow_id)
+
+
+@trip_map_app.command("build")
+def trip_map_build(
+    trip_id: str = typer.Option(..., "--trip-id", help="Trip intake ID"),
+    option_id: str = typer.Option("", "--option-id", help="Optional plan option ID"),
+    output_dir: Path | None = typer.Option(
+        None,
+        "--output-dir",
+        help="Directory for planning map outputs. Defaults to TRIPPY_EXPORT_PATH/maps.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Generate practical map artifacts from the selected planning option."""
+    from trippy import config
+    from trippy.services.trip_map_builder import TripMapBuilder
+
+    destination = output_dir or config.EXPORT_PATH / "maps"
+    try:
+        artifact = TripMapBuilder().write_artifacts(
+            trip_id,
+            destination,
+            option_id=option_id or None,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    workflow_id = _record_cli_workflow(
+        workflow_name="trip-map-build",
+        trip_id=trip_id,
+        summary=f"Generated planning map artifacts for {trip_id}",
+        result=artifact.model_dump(mode="json"),
+        status=WorkflowStatus.SUCCESS,
+    )
+    payload = {"workflow_id": workflow_id, "map": artifact.model_dump(mode="json")}
+    if json_output:
+        _print_json(payload)
+        return
+    _print_map_artifact(artifact)
+    _print_workflow_footer(workflow_id)
+
+
 @app.command("sources")
 def sources(
     category: str = typer.Option(
@@ -281,8 +827,8 @@ def country_priors(
 @app.command("maps")
 def maps(
     trip_name: str = typer.Argument(..., help="Canonical trip ID or name to map"),
-    output_dir: Path = typer.Option(
-        Path(""),
+    output_dir: Path | None = typer.Option(
+        None,
         "--output-dir",
         help="Directory for JSON, GeoJSON, and KML outputs. Defaults to TRIPPY_EXPORT_PATH/maps.",
     ),
@@ -293,7 +839,7 @@ def maps(
     from trippy.services.map_outputs import MapOutputService
 
     trip = _load_canonical_trip_or_exit(trip_name)
-    destination = output_dir if str(output_dir) else config.EXPORT_PATH / "maps"
+    destination = output_dir or config.EXPORT_PATH / "maps"
     artifact = MapOutputService().write_artifacts(trip, destination)
     workflow_id = _record_cli_workflow(
         workflow_name="maps",
@@ -311,8 +857,8 @@ def maps(
 
 @app.command("dashboard")
 def dashboard(
-    output_dir: Path = typer.Option(
-        Path(""),
+    output_dir: Path | None = typer.Option(
+        None,
         "--output-dir",
         help="Dashboard output directory. Defaults to TRIPPY_EXPORT_PATH/dashboard.",
     ),
@@ -322,7 +868,7 @@ def dashboard(
     from trippy import config
     from trippy.services.dashboard import DashboardService
 
-    destination = output_dir if str(output_dir) else config.EXPORT_PATH / "dashboard"
+    destination = output_dir or config.EXPORT_PATH / "dashboard"
     data = DashboardService().write_dashboard(destination)
     workflow_id = _record_cli_workflow(
         workflow_name="dashboard",
@@ -1142,6 +1688,224 @@ def _print_trip_ideas(comparison: Any) -> None:
             console.print(f"  · {item}")
     for note in comparison.scoring_notes:
         console.print(f"[dim]{note}[/dim]")
+
+
+def _split_cli_list(values: list[str]) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        out.extend(part.strip() for part in value.split(",") if part.strip())
+    return out
+
+
+def _normalise_enum_value(value: str) -> str:
+    return value.strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _parse_optional_date(value: str) -> date | None:
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    try:
+        return datetime.strptime(cleaned, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError(f"Expected date as YYYY-MM-DD, got {value!r}") from exc
+
+
+def _parse_traveler_specs(values: list[str]) -> list[Any]:
+    from trippy.models.trip_planning import TravelerAgeBand, TripTraveler
+
+    travelers = []
+    for raw in _split_cli_list(values):
+        parts = [part.strip() for part in raw.replace(":", "|").split("|") if part.strip()]
+        if not parts:
+            continue
+        name = parts[0]
+        age = None
+        age_band = None
+        notes = None
+        for part in parts[1:]:
+            normalized = _normalise_enum_value(part)
+            if part.isdigit():
+                age = int(part)
+            elif normalized in {band.value for band in TravelerAgeBand}:
+                age_band = TravelerAgeBand(normalized)
+            else:
+                notes = part if notes is None else f"{notes}; {part}"
+        travelers.append(TripTraveler(name=name, age=age, age_band=age_band, notes=notes))
+    return travelers
+
+
+def _print_trip_intake(intake: Any) -> None:
+    table = Table(title=f"Trip Intake: {intake.trip_name}", show_lines=True)
+    table.add_column("Field", style="bold")
+    table.add_column("Value")
+    table.add_row("Trip ID", intake.trip_id)
+    table.add_row("Mode", intake.mode.value)
+    table.add_row("Destinations", ", ".join(intake.destination_seeds) or "TBD")
+    table.add_row("Travel Window", intake.travel_window.display())
+    table.add_row("Duration", intake.duration_display())
+    table.add_row("Travelers", intake.party_summary())
+    table.add_row("Roster", ", ".join(intake.party.traveler_labels()) or "TBD")
+    if intake.party.sleeping_considerations:
+        table.add_row("Sleeping", intake.party.sleeping_considerations)
+    if intake.party.privacy_needs:
+        table.add_row("Privacy", intake.party.privacy_needs)
+    if intake.party.mobility_notes:
+        table.add_row("Mobility", intake.party.mobility_notes)
+    table.add_row("Departure", ", ".join(intake.departure_airports))
+    table.add_row("Goals", ", ".join(intake.goals))
+    table.add_row("Avoidances", ", ".join(intake.avoidances))
+    table.add_row("Pace", intake.pace.value)
+    table.add_row("Crowd", intake.crowd_tolerance.value)
+    table.add_row("Food", intake.food_priority.value)
+    console.print(table)
+
+
+def _print_trip_plan_draft(draft: Any) -> None:
+    table = Table(title=f"Trip Plan Draft: {draft.trip_id}", show_lines=True)
+    table.add_column("Strength", justify="right")
+    table.add_column("Option", style="bold")
+    table.add_column("Regions")
+    table.add_column("Movement")
+    table.add_column("Comfort", justify="right")
+    table.add_column("Summary")
+    for option in draft.options:
+        marker = ""
+        if option.option_id == draft.selected_option_id:
+            marker = " [green]selected[/green]"
+        elif option.option_id == draft.recommended_option_id:
+            marker = " [green]recommended[/green]"
+        table.add_row(
+            str(option.recommendation_strength),
+            f"{option.title}{marker}\n[dim]{option.option_id}[/dim]",
+            ", ".join(option.regions),
+            option.island_region_movement_friction,
+            str(option.family_comfort_score),
+            option.summary,
+        )
+    console.print(table)
+    if draft.assumptions:
+        console.print("\n[bold]Assumptions[/bold]")
+        for item in draft.assumptions:
+            console.print(f"  · {item}")
+
+
+def _print_trip_workspace(state: Any) -> None:
+    console.print(f"[bold]Workspace {state.status.value}:[/bold] {state.trip_id}")
+    console.print(f"Plan option: {state.plan_option_id}")
+    if state.google_sheet_url:
+        console.print(f"Google Sheet: {state.google_sheet_url}")
+    if state.local_workspace_path:
+        console.print(f"Local workspace: {state.local_workspace_path}")
+    console.print("Tabs: " + ", ".join(tab.name for tab in state.tabs))
+    if state.warnings:
+        console.print("\n[bold yellow]Warnings[/bold yellow]")
+        for warning in state.warnings:
+            console.print(f"  · {warning}")
+    if state.next_actions:
+        console.print("\n[bold]Next actions[/bold]")
+        for action in state.next_actions:
+            console.print(f"  · {action}")
+
+
+def _run_shortlist_command(
+    *,
+    trip_id: str,
+    workflow_name: str,
+    summary: str,
+    state: Any,
+    propose_learning: bool,
+    json_output: bool,
+) -> None:
+    workflow_id = _record_cli_workflow(
+        workflow_name=workflow_name,
+        trip_id=trip_id,
+        summary=f"{summary} for {trip_id}",
+        result=state.model_dump(mode="json"),
+        status=WorkflowStatus.SUCCESS if state.option_count else WorkflowStatus.SKIPPED,
+    )
+    proposals = []
+    if propose_learning:
+        from trippy.services.planning_learning import PlanningLearningService
+
+        proposals = PlanningLearningService().propose_for_trip(
+            trip_id,
+            source_workflow_id=workflow_id,
+        )
+    payload = {
+        "workflow_id": workflow_id,
+        "shortlist": state.model_dump(mode="json"),
+        "learning_proposals": [proposal.id for proposal in proposals],
+    }
+    if json_output:
+        _print_json(payload)
+        return
+    _print_shortlist(state)
+    if proposals:
+        console.print(f"\nCreated {len(proposals)} review-gated learning proposal(s).")
+        console.print("Review with: [bold]trippy learn review[/bold]")
+    _print_workflow_footer(workflow_id)
+
+
+def _print_shortlist(state: Any) -> None:
+    table = Table(title=f"{state.category.value.title()} Shortlist: {state.trip_id}", show_lines=True)
+    table.add_column("Rank", justify="right")
+    table.add_column("Option", style="bold")
+    table.add_column("Source")
+    table.add_column("Status")
+    table.add_column("Verification")
+    table.add_column("Freshness")
+    table.add_column("Confidence")
+    table.add_column("Score")
+    table.add_column("Why / Tradeoffs")
+
+    for option in state.options_as_dicts():
+        source = (
+            option.get("booking_source")
+            or option.get("source")
+            or option.get("deep_link", "")
+        )
+        name = (
+            option.get("airline")
+            or option.get("name")
+            or option.get("vehicle_class")
+            or option.get("activity_name")
+            or option.get("option_id")
+        )
+        score = (
+            option.get("family_comfort_score")
+            or option.get("total_friction_score")
+            or option.get("friction_score")
+            or ""
+        )
+        tradeoffs = option.get("tradeoffs", [])
+        flags = option.get("friction_flags", [])
+        validation = option.get("validation", {}) or {}
+        details = "; ".join([*(tradeoffs or [])[:2], *(flags or [])[:2]])
+        table.add_row(
+            str(option.get("rank", "")),
+            f"{name}\n[dim]{option.get('option_id')}[/dim]",
+            str(source),
+            str(option.get("row_status", "")),
+            str(validation.get("verification_status", "")),
+            str(validation.get("freshness_status", "")),
+            f"{float(validation.get('confidence', 0)):.0%}" if validation else "",
+            str(score),
+            details,
+        )
+    console.print(table)
+    if state.recommended_option_id:
+        console.print(f"Recommended: [bold]{state.recommended_option_id}[/bold]")
+    if state.recommendation_summary:
+        console.print(state.recommendation_summary)
+    if state.warnings:
+        console.print("\n[bold yellow]Warnings[/bold yellow]")
+        for warning in state.warnings:
+            console.print(f"  · {warning}")
+    if state.next_actions:
+        console.print("\n[bold]Next actions[/bold]")
+        for action in state.next_actions:
+            console.print(f"  · {action}")
 
 
 def _print_sources(sources: list[Any]) -> None:
