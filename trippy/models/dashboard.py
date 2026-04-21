@@ -23,7 +23,10 @@ class DashboardTripTile(BaseModel):
     budget_band: str
     planning_completeness: int
     hero_label: str
+    traveler_summary: str = ""
     quick_links: list[DashboardLink] = Field(default_factory=list)
+    planning_status: dict[str, str] = Field(default_factory=dict)
+    shortlist_status: dict[str, str] = Field(default_factory=dict)
     next_actions: list[str] = Field(default_factory=list)
     key_risks: list[str] = Field(default_factory=list)
     lessons: list[str] = Field(default_factory=list)

@@ -15,8 +15,12 @@ from trippy.models.dashboard import (
 from trippy.models.ideas import TripComparison, TripConcept, TripIdeaRequest
 from trippy.models.trip import RiskSeverity, Trip, TripStatus
 from trippy.services.map_outputs import MapOutputService
+from trippy.services.shortlist_store import ShortlistStore
 from trippy.services.trip_ideation import TripIdeationService
+from trippy.services.trip_intake import TripIntakeService
+from trippy.services.trip_planner import TripPlannerService
 from trippy.services.trip_state import TripStateService
+from trippy.services.trip_workspace import TripWorkspaceService
 
 
 class DashboardService:
@@ -100,6 +104,12 @@ class DashboardService:
         quick_links = [DashboardLink(label="Map", url=map_url)]
         if trip.sync.google_sheet_url:
             quick_links.append(DashboardLink(label="Sheet", url=trip.sync.google_sheet_url))
+        planning_status = _planning_status(trip.trip_id)
+        shortlist_status = _shortlist_status(trip.trip_id)
+        traveler_summary = _traveler_summary(trip)
+        planning_map = _planning_map_link(trip.trip_id)
+        if planning_map:
+            quick_links.append(DashboardLink(label="Planning Map Data", url=planning_map))
 
         return DashboardTripTile(
             trip_id=trip.trip_id,
@@ -112,8 +122,11 @@ class DashboardService:
             budget_band=_budget_band(trip),
             planning_completeness=_planning_completeness(trip),
             hero_label=(trip.destination_summary or trip.name)[:60],
+            traveler_summary=traveler_summary,
             quick_links=quick_links,
-            next_actions=_next_actions(trip),
+            planning_status=planning_status,
+            shortlist_status=shortlist_status,
+            next_actions=_next_actions(trip, planning_status, shortlist_status),
             key_risks=[risk.description for risk in risks[:3]],
             lessons=_lessons(trip),
         )
@@ -168,8 +181,80 @@ def _planning_completeness(trip: Trip) -> int:
     return int(sum(1 for item in checks if item) / len(checks) * 100)
 
 
-def _next_actions(trip: Trip) -> list[str]:
+def _planning_status(trip_id: str) -> dict[str, str]:
+    status: dict[str, str] = {}
+    intake = TripIntakeService().load(trip_id)
+    if intake is not None:
+        status["intake"] = "done"
+    draft = TripPlannerService().load_draft(trip_id)
+    if draft is not None:
+        status["draft"] = "selected" if draft.selected_option_id else "drafted"
+        if draft.selected_option_id or draft.recommended_option_id:
+            status["plan_option"] = draft.selected_option_id or draft.recommended_option_id or ""
+    workspace = TripWorkspaceService().load(trip_id)
+    if workspace is not None:
+        status["workspace"] = workspace.status.value
+        if workspace.google_sheet_url:
+            status["sheet"] = "created"
+    return status
+
+
+def _shortlist_status(trip_id: str) -> dict[str, str]:
+    statuses: dict[str, str] = {}
+    for state in ShortlistStore().load_all(trip_id):
+        live = sum(
+            1 for option in state.options_as_dicts() if option.get("row_status") == "verified_live"
+        )
+        researched = sum(
+            1 for option in state.options_as_dicts() if option.get("row_status") == "researched"
+        )
+        statuses[state.category.value] = (
+            f"{state.option_count} option(s), {live} live, {researched} researched, recommended {state.recommended_option_id}"
+            if state.recommended_option_id
+            else f"{state.option_count} option(s), {live} live, {researched} researched"
+        )
+    return statuses
+
+
+def _traveler_summary(trip: Trip) -> str:
+    intake = TripIntakeService().load(trip.trip_id)
+    if intake is not None:
+        return intake.party.summary()
+    if trip.travelers:
+        adults = sum(1 for traveler in trip.travelers if not traveler.is_minor)
+        children = sum(1 for traveler in trip.travelers if traveler.is_minor)
+        return f"{len(trip.travelers)} traveler(s); {adults} adult(s); {children} child(ren)"
+    return "Travelers TBD"
+
+
+def _planning_map_link(trip_id: str) -> str | None:
+    from trippy import config
+
+    path = config.EXPORT_PATH / "maps" / f"{trip_id}-planning-map.json"
+    return str(path) if path.exists() else None
+
+
+def _next_actions(
+    trip: Trip,
+    planning_status: dict[str, str],
+    shortlist_status: dict[str, str],
+) -> list[str]:
     actions: list[str] = []
+    if "intake" not in planning_status:
+        actions.append(f"Create intake: uv run trippy trip-intake wizard --trip-name {trip.name!r}")
+    if "draft" not in planning_status:
+        actions.append(
+            f"Generate plan draft: uv run trippy trip-plan draft --trip-id {trip.trip_id}"
+        )
+    if "workspace" not in planning_status:
+        actions.append(
+            f"Prepare workspace: uv run trippy trip-plan workspace --trip-id {trip.trip_id}"
+        )
+    for category in ("flights", "lodging", "cars", "activities"):
+        if category not in shortlist_status:
+            actions.append(
+                f"Generate {category} shortlist: uv run trippy trip-plan {category} --trip-id {trip.trip_id}"
+            )
     if not trip.segments:
         actions.append("Research exact flight options and total travel burden.")
     if trip.unconfirmed_segments:
@@ -180,7 +265,7 @@ def _next_actions(trip: Trip) -> list[str]:
         actions.append("Resolve unconfirmed lodging and check-in details.")
     if not any(item.category == "visa" for item in trip.checklist):
         actions.append("Add visa, entry, health, and cash checklist items.")
-    return actions[:4]
+    return actions[:6]
 
 
 def _lessons(trip: Trip) -> list[str]:
@@ -226,12 +311,21 @@ def _trip_card(trip: DashboardTripTile) -> str:
     )
     actions = "".join(f"<li>{html.escape(action)}</li>" for action in trip.next_actions[:3])
     risks = "".join(f"<li>{html.escape(risk)}</li>" for risk in trip.key_risks[:2])
+    planning = "".join(
+        f"<li>{html.escape(key)}: {html.escape(value)}</li>"
+        for key, value in trip.planning_status.items()
+    )
+    shortlists = "".join(
+        f"<li>{html.escape(key)}: {html.escape(value)}</li>"
+        for key, value in trip.shortlist_status.items()
+    )
     return f"""
       <article class="card">
         <div class="hero">{html.escape(trip.hero_label)}</div>
         <div class="meta">{html.escape(trip.status)} · {html.escape(trip.date_label)}</div>
         <h2>{html.escape(trip.name)}</h2>
         <p>{html.escape(trip.destination)}</p>
+        <p class="traveler">{html.escape(trip.traveler_summary)}</p>
         <div class="scores">
           <span>Family {trip.family_fit_score}</span>
           <span>Comfort {trip.comfort_score}</span>
@@ -239,6 +333,10 @@ def _trip_card(trip: DashboardTripTile) -> str:
         </div>
         <p class="budget">{html.escape(trip.budget_band)}</p>
         <div class="links">{links}</div>
+        <h3>Planning</h3>
+        <ul>{planning or "<li>No planning state recorded.</li>"}</ul>
+        <h3>Shortlists</h3>
+        <ul>{shortlists or "<li>No exact shortlists generated.</li>"}</ul>
         <h3>Next</h3>
         <ul>{actions or "<li>No immediate action recorded.</li>"}</ul>
         <h3>Risks</h3>
