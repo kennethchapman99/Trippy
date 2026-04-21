@@ -137,13 +137,28 @@ class TripSheetCreatorRunner:
         if "europe" in dest_lower:
             flags.append("Check ETIAS requirement (effective 2025)")
 
+        next_actions: list[str] = []
+        if sheet_result.get("error"):
+            next_actions.append(
+                "Run trippy doctor and trippy auth-google, then retry sheet creation."
+            )
+        elif not sheet_result.get("spreadsheet_id"):
+            next_actions.append(
+                "Configure Google credentials to create the human-facing trip sheet."
+            )
+        else:
+            next_actions.append("Open the generated sheet and fill in tentative flights/stays.")
+
         return {
+            "canonical_saved": True,
             "trip_id": trip.trip_id,
             "trip_name": trip.name,
             "sheet_id": sheet_result.get("spreadsheet_id", ""),
             "sheet_url": sheet_result.get("url", ""),
+            "sheet_error": sheet_result.get("error"),
             "suggestion_summary": _suggest_structure(destinations),
             "flags": flags,
+            "next_actions": next_actions,
         }
 
 

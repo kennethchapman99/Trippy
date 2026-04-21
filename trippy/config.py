@@ -21,6 +21,7 @@ MEMORY_PATH: Path = _expand("TRIPPY_MEMORY_PATH", "~/.trippy/memory.json")
 TRIPS_PATH: Path = _expand("TRIPPY_TRIPS_PATH", "~/.trippy/trips")
 VAULT_PATH: Path = _expand("TRIPPY_VAULT_PATH", "~/.trippy/vault")
 EXPORT_PATH: Path = _expand("TRIPPY_EXPORT_PATH", "~/.trippy/export")
+LEARNING_PATH: Path = _expand("TRIPPY_LEARNING_PATH", "~/.trippy/learning")
 
 # Google OAuth
 GMAIL_CREDENTIALS_PATH: Path = _expand("GMAIL_CREDENTIALS_PATH", "~/.trippy/gmail_credentials.json")

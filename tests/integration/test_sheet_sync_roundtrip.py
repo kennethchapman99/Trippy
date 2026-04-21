@@ -136,7 +136,21 @@ def _pulls_from_fixture(path: Path) -> dict[str, list[list[str]]]:
             ]
         )
 
-    hotel_rows = [["Stay ID", "Type", "Property", "City", "Country", "Check-in", "Check-out", "Nights", "Cost (CAD)", "Confirmation", "Notes"]]
+    hotel_rows = [
+        [
+            "Stay ID",
+            "Type",
+            "Property",
+            "City",
+            "Country",
+            "Check-in",
+            "Check-out",
+            "Nights",
+            "Cost (CAD)",
+            "Confirmation",
+            "Notes",
+        ]
+    ]
     for row in payload.get("hotels", []):
         hotel_rows.append(
             [

@@ -2,7 +2,8 @@
 
 ## Purpose
 Analyse a set of canonical trip records and derive durable family travel preferences.
-Write those preferences to Hermes memory with confidence scores based on evidence strength.
+Create review-gated Hermes learning proposals with confidence scores based on evidence strength.
+Do not mutate durable memory until a human approves the proposal.
 
 This skill distinguishes durable preferences ("we consistently avoid 6 AM departures")
 from one-off exceptions ("took a 5 AM flight once for a very cheap deal").
@@ -30,28 +31,31 @@ If `trip_ids` omitted, loads all lived trips from `~/.trippy/trips/`.
 5. Analyse pacing (number of destinations per week)
 6. Identify what changed: did they upgrade cabin? book direct more often?
 7. Distinguish patterns (seen in ≥min_evidence_trips) from outliers
-8. Write durable preferences to memory with source_trips reference
-9. Write family profile updates (passport expiry from traveler data)
+8. Propose durable preferences with source_trips reference
+9. Propose family profile updates (passport expiry from traveler data)
+10. Wait for `trippy learn approve <proposal-id>` before memory changes
 
 ## Outputs
 ```json
 {
-  "preferences_written": {
+  "preferences_proposed": {
     "departure_time": "Earliest acceptable 07:30 (conf=75%, 4 trips)",
     "min_connection_international": "110 min (conf=80%, 3 trips)",
     "nights_per_destination": "3+ preferred (conf=70%, 5 stays)"
   },
+  "learning_proposals": ["lp-..."],
   "profile_updates": ["Ken passport expiry updated"],
   "skip_reason": null
 }
 ```
 
 ## Persistence After Success
-- All inferred preferences written to memory under category: "preference"
-- Family profile updates written under category: "profile"
-- Write timestamp to memory: "pref:last_extraction_date"
+- All inferred preferences become pending proposals under category: "preference"
+- Family profile updates become pending proposals under category: "profile"
+- Approval through `trippy learn approve <proposal-id>` is required before persistence
 
 ## Do NOT Write to Memory
+- Any inferred preference before explicit review approval
 - Trip-specific confirmation codes or booking details
 - Costs for specific trips (averages only, if relevant)
 - One-off decisions that don't generalize

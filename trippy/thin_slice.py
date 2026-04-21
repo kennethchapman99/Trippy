@@ -2,8 +2,8 @@
 
 This script proves the architecture by running the complete flow:
 1. Load a past trip from canonical state (or seed from JSON)
-2. Extract durable preferences from the trip
-3. Create/update family profile in memory
+2. Propose durable preferences from the trip
+3. Propose family profile updates
 4. Start a new trip from a rough idea
 5. Create a Google Sheet from template (mocked if no credentials)
 6. Ingest one booking confirmation email (from fixture or Gmail)
@@ -42,8 +42,6 @@ def run_thin_slice(
 ) -> dict[str, Any]:
     """Execute the complete thin-slice flow. Returns a results dict."""
     from trippy import config
-    from trippy.memory.preference_writer import PreferenceWriter
-    from trippy.memory.profile_manager import ProfileManager
     from trippy.memory.store import MemoryStore
     from trippy.models.trip import (
         ChecklistItem,
@@ -59,6 +57,7 @@ def run_thin_slice(
     )
     from trippy.services.friction_detector import FrictionDetector
     from trippy.services.trip_state import TripStateService
+    from trippy.skills.runners.preference_extractor import PreferenceExtractorRunner
 
     trips_dir = trips_dir or config.TRIPS_PATH
     memory_path = memory_path or config.MEMORY_PATH
@@ -167,28 +166,39 @@ def run_thin_slice(
     # -----------------------------------------------------------------------
     # STEP 2: Extract preferences from past trip
     # -----------------------------------------------------------------------
-    console.print(Panel("[bold]Step 2:[/bold] Extract durable preferences", style="cyan"))
+    console.print(Panel("[bold]Step 2:[/bold] Propose durable preferences", style="cyan"))
 
-    writer = PreferenceWriter(memory=memory)
     past_trip.status = TripStatus.LIVED  # treat as completed for analysis
     trip_svc.save(past_trip)
 
-    written = writer.extract_and_write([past_trip], min_trips=1)  # min=1 for demo
-    console.print(f"  [green]✓[/green] Wrote {len(written)} preference(s) to memory:")
-    for key, desc in written.items():
+    extracted = PreferenceExtractorRunner(memory_store=memory, trips_dir=trips_dir).run(
+        {
+            "trip_ids": [past_trip.trip_id],
+            "min_evidence_trips": 1,
+            "learning_dir": memory_path.parent / "learning",
+        }
+    )
+    proposed = extracted.get("preferences_proposed", {})
+    proposals = extracted.get("learning_proposals", [])
+    console.print(f"  [green]✓[/green] Proposed {len(proposed)} preference(s):")
+    for key, desc in proposed.items():
         console.print(f"    · {key}: {desc}")
-    results["step2_preferences"] = written
+    console.print(f"  Review-gated proposal(s): {len(proposals)}")
+    results["step2_preferences"] = proposed
+    results["step2_learning_proposals"] = proposals
 
     # -----------------------------------------------------------------------
-    # STEP 3: Update family profile
+    # STEP 3: Propose family profile updates
     # -----------------------------------------------------------------------
-    console.print(Panel("[bold]Step 3:[/bold] Update family profile", style="cyan"))
+    console.print(Panel("[bold]Step 3:[/bold] Propose family profile updates", style="cyan"))
 
-    profile_mgr = ProfileManager(memory=memory)
-    profile = profile_mgr.update_from_trip_travelers(past_trip.travelers)
-    console.print(f"  [green]✓[/green] Profile: {profile.num_travelers} travelers")
-    console.print(f"    {profile.to_context_string()}")
-    results["step3_profile_count"] = profile.num_travelers
+    profile_updates = extracted.get("profile_updates", [])
+    if profile_updates:
+        for update in profile_updates:
+            console.print(f"    · {update}")
+    else:
+        console.print("  [green]✓[/green] No profile changes proposed")
+    results["step3_profile_count"] = len(past_trip.travelers)
 
     # -----------------------------------------------------------------------
     # STEP 4: Start a new trip
@@ -334,8 +344,9 @@ def run_thin_slice(
         Panel(
             f"[bold green]Thin slice complete.[/bold green]\n\n"
             f"Past trip mined:  [cyan]{results['step1_trip_id']}[/cyan]\n"
-            f"Preferences saved: [cyan]{len(results['step2_preferences'])} entries[/cyan]\n"
-            f"Family profile:   [cyan]{results['step3_profile_count']} travelers[/cyan]\n"
+            f"Preferences proposed: [cyan]{len(results['step2_preferences'])} entries[/cyan]\n"
+            f"Profile evidence:     [cyan]{results['step3_profile_count']} travelers[/cyan]\n"
+            f"Learning proposals:   [cyan]{len(results['step2_learning_proposals'])}[/cyan]\n"
             f"New trip:         [cyan]{results['step4_new_trip_id']}[/cyan]\n"
             f"Sheet:            [cyan]{results['step5_sheet_url']}[/cyan]\n"
             f"Confirmation:     [cyan]{results['step6_confirmation']}[/cyan]\n"

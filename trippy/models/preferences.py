@@ -63,12 +63,54 @@ class StayPreference(BaseModel):
     preferred_checkin_hour: int = 15
     checkout_hour: int = 11
     require_family_room_setup: bool = True  # Must fit 5 people
+    min_beds_for_family: int = 3
+    prefer_king_bed_for_adults: bool = True
+    queen_requires_compelling_upside: bool = True
     preferred_room_configs: list[str] = Field(
         default_factory=lambda: ["2_queens", "2_doubles", "suite", "2_rooms"]
     )
     preferred_stay_types: list[str] = Field(default_factory=lambda: ["hotel", "house", "vrbo"])
     min_nights_per_destination: int = 2  # Avoid single-night hotel stops
     preferred_nights_per_destination: int = 3
+
+
+class LodgingContextPreference(BaseModel):
+    city_prefer_urban_core: bool = True
+    city_prefer_boutique_hotel: bool = True
+    city_airbnb_requires_exceptional_upside: bool = True
+    non_city_prefer_private_rental: bool = True
+    require_safe_location_signal: bool = True
+    require_parking_practicality_for_rentals: bool = True
+
+
+class FoodPreference(BaseModel):
+    food_is_major_objective: bool = True
+    value_street_food_to_michelin_range: bool = True
+    score_food_access_highly: bool = True
+
+
+class CrowdPreference(BaseModel):
+    avoid_huge_crowds_when_possible: bool = True
+    prefer_lower_crowd_alternatives: bool = True
+
+
+class GroundTransportPreference(BaseModel):
+    comfortable_driving_many_places: bool = True
+    avoid_cramped_roads_and_bad_parking: bool = True
+    city_public_transit_ok: bool = True
+
+
+class ActivityPreference(BaseModel):
+    prefer_safe_well_reviewed_tours: bool = True
+    prefer_small_group_experiences: bool = True
+    avoid_mass_market_crowd_experiences: bool = True
+    prefer_activity_chill_balance: bool = True
+
+
+class DestinationReadinessPreference(BaseModel):
+    require_local_currency_guidance: bool = True
+    require_entry_requirements_summary: bool = True
+    require_health_precautions_summary: bool = True
 
 
 class FlightPreference(BaseModel):
@@ -85,6 +127,14 @@ class FamilyTravelPreferences(BaseModel):
     layover: LayoverPreference = Field(default_factory=LayoverPreference)
     transfer: TransferPreference = Field(default_factory=TransferPreference)
     stay: StayPreference = Field(default_factory=StayPreference)
+    lodging_context: LodgingContextPreference = Field(default_factory=LodgingContextPreference)
+    food: FoodPreference = Field(default_factory=FoodPreference)
+    crowd: CrowdPreference = Field(default_factory=CrowdPreference)
+    ground_transport: GroundTransportPreference = Field(default_factory=GroundTransportPreference)
+    activity: ActivityPreference = Field(default_factory=ActivityPreference)
+    destination_readiness: DestinationReadinessPreference = Field(
+        default_factory=DestinationReadinessPreference
+    )
     flight: FlightPreference = Field(default_factory=FlightPreference)
 
     # Airport logistics
@@ -128,6 +178,13 @@ class FamilyTravelPreferences(BaseModel):
             f"- Cabin (long haul >{self.flight.long_haul_threshold_hours}h): {self.flight.preferred_cabin_long_haul}",
             f"- Prefer direct flights: {self.flight.prefer_direct}",
             f"- Hotel check-in expected: {self.stay.min_checkin_hour:02d}:00",
+            f"- Family sleeping fit: at least {self.stay.min_beds_for_family} beds; king bed strongly preferred",
+            f"- City lodging: central/walkable boutique hotel preferred: {self.lodging_context.city_prefer_boutique_hotel}",
+            f"- Outside major cities: private rental preferred: {self.lodging_context.non_city_prefer_private_rental}",
+            f"- Food priority: major trip objective: {self.food.food_is_major_objective}",
+            f"- Avoid huge crowds when reasonable: {self.crowd.avoid_huge_crowds_when_possible}",
+            f"- Prefer small-group safe tours: {self.activity.prefer_small_group_experiences}",
+            f"- Require cash/entry/health guidance: {self.destination_readiness.require_local_currency_guidance}",
             f"- Min nights per destination: {self.stay.min_nights_per_destination}",
             f"- Airport buffer (domestic): {self.airport_buffer_minutes_domestic} min",
             f"- Airport buffer (international): {self.airport_buffer_minutes_international} min",

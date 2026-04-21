@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from trippy.ingest.google_auth import ALL_SCOPES, GoogleAuthManager
+from trippy.ingest.google_auth import ALL_SCOPES, GoogleAuthManager, missing_required_scopes
 
 
 def _manager(tmp_path: Path, credentials: object | None = None) -> GoogleAuthManager:
@@ -132,3 +132,22 @@ class TestScopes:
             scopes=scopes,
         )
         assert list(mgr._scopes) == scopes
+
+    def test_default_scopes_include_write_capable_sheets_and_drive(self) -> None:
+        assert "https://www.googleapis.com/auth/gmail.readonly" in ALL_SCOPES
+        assert "https://www.googleapis.com/auth/spreadsheets" in ALL_SCOPES
+        assert "https://www.googleapis.com/auth/drive" in ALL_SCOPES
+        assert "https://www.googleapis.com/auth/spreadsheets.readonly" not in ALL_SCOPES
+        assert "https://www.googleapis.com/auth/drive.readonly" not in ALL_SCOPES
+
+    def test_missing_required_scopes_detects_stale_token(self, tmp_path: Path) -> None:
+        token = tmp_path / "token.json"
+        token.write_text(
+            '{"scopes": ["https://www.googleapis.com/auth/gmail.readonly"]}',
+            encoding="utf-8",
+        )
+
+        missing = missing_required_scopes(token)
+
+        assert "https://www.googleapis.com/auth/spreadsheets" in missing
+        assert "https://www.googleapis.com/auth/drive" in missing

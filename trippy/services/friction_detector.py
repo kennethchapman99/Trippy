@@ -13,10 +13,11 @@ Risk severity:
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, timedelta
 from typing import TYPE_CHECKING
 
-from trippy.models.trip import RiskFlag, RiskSeverity, Segment, Trip
+from trippy.models.trip import RiskFlag, RiskSeverity, Segment, SegmentType, Stay, StayType, Trip
 
 if TYPE_CHECKING:
     from trippy.models.preferences import FamilyTravelPreferences
@@ -125,6 +126,12 @@ class FrictionDetector:
         risks.extend(self._check_unconfirmed_stays(trip))
         risks.extend(self._check_passport_expiry(trip))
         risks.extend(self._check_missing_bags(trip))
+        risks.extend(self._check_family_sleeping_fit(trip))
+        risks.extend(self._check_lodging_context(trip))
+        risks.extend(self._check_driving_and_parking_friction(trip))
+        risks.extend(self._check_pacing(trip))
+        risks.extend(self._check_destination_readiness(trip))
+        risks.extend(self._check_tour_quality_signals(trip))
 
         logger.info("FrictionDetector: %d risk(s) found for trip %r", len(risks), trip.trip_id)
         return risks
@@ -392,6 +399,261 @@ class FrictionDetector:
                 )
         return risks
 
+    def _check_family_sleeping_fit(self, trip: Trip) -> list[RiskFlag]:
+        risks: list[RiskFlag] = []
+        if len(trip.travelers) < 5:
+            return risks
+        min_beds = self._prefs.stay.min_beds_for_family if self._prefs else 3
+        for stay in trip.stays:
+            text = _stay_text(stay)
+            bed_count = _bed_count(text)
+            if bed_count is None:
+                risks.append(
+                    RiskFlag(
+                        risk_id=f"bed-fit-unknown-{stay.stay_id}",
+                        severity=RiskSeverity.HIGH,
+                        category="lodging",
+                        description=(
+                            f"{stay.property_name} does not clearly document bed count. "
+                            f"Family of 5 needs an explicit sleeping setup with at least {min_beds} beds."
+                        ),
+                        affected_ids=[stay.stay_id],
+                        recommended_fix=(
+                            "Confirm exact bed layout before booking; reject options that cannot verify "
+                            f"{min_beds}+ beds."
+                        ),
+                    )
+                )
+            elif bed_count < min_beds:
+                risks.append(
+                    RiskFlag(
+                        risk_id=f"bed-fit-short-{stay.stay_id}",
+                        severity=RiskSeverity.HIGH,
+                        category="lodging",
+                        description=(
+                            f"{stay.property_name} appears to have {bed_count} bed(s), below the "
+                            f"family minimum of {min_beds}."
+                        ),
+                        affected_ids=[stay.stay_id],
+                        recommended_fix=f"Find a property with at least {min_beds} beds or book two rooms.",
+                    )
+                )
+
+            if (
+                (self._prefs is None or self._prefs.stay.queen_requires_compelling_upside)
+                and "queen" in text
+                and "king" not in text
+                and not _has_compelling_lodging_upside(text)
+            ):
+                risks.append(
+                    RiskFlag(
+                        risk_id=f"queen-compromise-{stay.stay_id}",
+                        severity=RiskSeverity.MEDIUM,
+                        category="lodging",
+                        description=(
+                            f"{stay.property_name} appears to rely on queen bed(s) without a clear "
+                            "offsetting benefit. King bed is strongly preferred for the primary adults."
+                        ),
+                        affected_ids=[stay.stay_id],
+                        recommended_fix="Prefer a king-bed option unless this property has exceptional location, space, or value.",
+                    )
+                )
+        return risks
+
+    def _check_lodging_context(self, trip: Trip) -> list[RiskFlag]:
+        risks: list[RiskFlag] = []
+        for stay in trip.stays:
+            text = _stay_text(stay)
+            if _looks_like_city_stay(stay):
+                if any(
+                    term in text for term in ("suburb", "outside city", "airport hotel", "remote")
+                ):
+                    risks.append(
+                        RiskFlag(
+                            risk_id=f"non-central-city-lodging-{stay.stay_id}",
+                            severity=RiskSeverity.MEDIUM,
+                            category="lodging",
+                            description=(
+                                f"{stay.property_name} has non-central location signals. "
+                                "For city stays, the family strongly prefers walkable urban-core lodging."
+                            ),
+                            affected_ids=[stay.stay_id],
+                            recommended_fix="Compare against central boutique hotels before accepting transit burden.",
+                        )
+                    )
+                if stay.stay_type in {
+                    StayType.AIRBNB,
+                    StayType.VRBO,
+                    StayType.HOUSE,
+                } and not _has_compelling_lodging_upside(text):
+                    risks.append(
+                        RiskFlag(
+                            risk_id=f"city-rental-fit-{stay.stay_id}",
+                            severity=RiskSeverity.MEDIUM,
+                            category="lodging",
+                            description=(
+                                f"{stay.property_name} is a city rental without clear upside. "
+                                "In cities, boutique hotels usually fit the family's walkability and service needs better."
+                            ),
+                            affected_ids=[stay.stay_id],
+                            recommended_fix="Require exceptional space/location/safety value or prefer a central boutique hotel.",
+                        )
+                    )
+            if stay.stay_type in {StayType.AIRBNB, StayType.VRBO, StayType.HOUSE}:
+                missing_signals = []
+                if "safe" not in text and "well-reviewed" not in text:
+                    missing_signals.append("safety/review confidence")
+                if "parking" not in text and "walkable" not in text and "transit" not in text:
+                    missing_signals.append("access/parking practicality")
+                if missing_signals:
+                    risks.append(
+                        RiskFlag(
+                            risk_id=f"rental-access-confidence-{stay.stay_id}",
+                            severity=RiskSeverity.LOW,
+                            category="lodging",
+                            description=(
+                                f"{stay.property_name} is a private rental missing explicit "
+                                f"{', '.join(missing_signals)}."
+                            ),
+                            affected_ids=[stay.stay_id],
+                            recommended_fix="Verify location safety, parking/access, and review quality before shortlisting.",
+                        )
+                    )
+        return risks
+
+    def _check_driving_and_parking_friction(self, trip: Trip) -> list[RiskFlag]:
+        risks: list[RiskFlag] = []
+        friction_terms = (
+            "narrow road",
+            "cramped road",
+            "difficult parking",
+            "no parking",
+            "limited parking",
+        )
+        for seg in trip.segments:
+            if seg.segment_type != SegmentType.CAR:
+                continue
+            text = (seg.notes or "").lower()
+            if any(term in text for term in friction_terms):
+                risks.append(
+                    RiskFlag(
+                        risk_id=f"driving-friction-{seg.segment_id}",
+                        severity=RiskSeverity.MEDIUM,
+                        category="transfer",
+                        description=(
+                            f"Driving segment {seg.segment_id} has cramped-road or parking friction signals. "
+                            "The family is comfortable driving generally, but dislikes stressful roads and parking."
+                        ),
+                        affected_ids=[seg.segment_id],
+                        recommended_fix="Confirm route/parking practicality or use train/private transfer instead.",
+                    )
+                )
+        for stay in trip.stays:
+            text = _stay_text(stay)
+            if any(term in text for term in friction_terms):
+                risks.append(
+                    RiskFlag(
+                        risk_id=f"parking-friction-{stay.stay_id}",
+                        severity=RiskSeverity.MEDIUM,
+                        category="lodging",
+                        description=f"{stay.property_name} has parking or road-access friction signals.",
+                        affected_ids=[stay.stay_id],
+                        recommended_fix="Verify parking details and arrival route before booking.",
+                    )
+                )
+        return risks
+
+    def _check_pacing(self, trip: Trip) -> list[RiskFlag]:
+        risks: list[RiskFlag] = []
+        for stay in trip.stays:
+            if stay.nights == 1:
+                risks.append(
+                    RiskFlag(
+                        risk_id=f"one-night-stop-{stay.stay_id}",
+                        severity=RiskSeverity.MEDIUM,
+                        category="pacing",
+                        description=(
+                            f"{stay.property_name} is a one-night stop. The family dislikes frequent "
+                            "hotel changes and overcompressed pacing."
+                        ),
+                        affected_ids=[stay.stay_id],
+                        recommended_fix="Combine stops or extend to at least 2 nights unless this is a necessary transit stop.",
+                    )
+                )
+        if trip.start_date and trip.end_date and trip.stays:
+            trip_days = max(1, (trip.end_date - trip.start_date).days + 1)
+            max_destinations = max(
+                1,
+                int(
+                    (trip_days / 7) * (self._prefs.max_destinations_per_week if self._prefs else 3)
+                ),
+            )
+            distinct_stops = len({(stay.city.lower(), stay.country.lower()) for stay in trip.stays})
+            if distinct_stops > max_destinations:
+                risks.append(
+                    RiskFlag(
+                        risk_id="overcompressed-itinerary",
+                        severity=RiskSeverity.MEDIUM,
+                        category="pacing",
+                        description=(
+                            f"{distinct_stops} lodging stops across {trip_days} days is likely overcompressed "
+                            "for a family trip."
+                        ),
+                        affected_ids=[stay.stay_id for stay in trip.stays],
+                        recommended_fix="Reduce destinations or add downtime between transitions.",
+                    )
+                )
+        return risks
+
+    def _check_destination_readiness(self, trip: Trip) -> list[RiskFlag]:
+        checklist_text = " ".join(
+            f"{item.category} {item.title} {item.notes or ''}" for item in trip.checklist
+        ).lower()
+        required = {
+            "cash-currency-guidance": ("cash", "currency"),
+            "entry-requirements": ("visa", "entry", "eta", "passport"),
+            "health-precautions": ("health", "vaccine", "vaccination", "medical"),
+        }
+        risks: list[RiskFlag] = []
+        for risk_key, terms in required.items():
+            if not any(term in checklist_text for term in terms):
+                risks.append(
+                    RiskFlag(
+                        risk_id=f"missing-{risk_key}",
+                        severity=RiskSeverity.LOW,
+                        category="readiness",
+                        description=(
+                            f"Trip is missing explicit {risk_key.replace('-', ' ')}. "
+                            "Trippy should surface this before final recommendations or booking."
+                        ),
+                        affected_ids=[],
+                        recommended_fix="Add researched destination guidance to the planning sheet checklist.",
+                    )
+                )
+        return risks
+
+    def _check_tour_quality_signals(self, trip: Trip) -> list[RiskFlag]:
+        risks: list[RiskFlag] = []
+        tour_terms = ("tour", "excursion", "outing", "adventure")
+        bad_terms = ("large group", "mass market", "crowded", "weak review", "safety unknown")
+        for item in trip.checklist:
+            text = f"{item.category} {item.title} {item.notes or ''}".lower()
+            if any(term in text for term in tour_terms) and any(term in text for term in bad_terms):
+                risks.append(
+                    RiskFlag(
+                        risk_id=f"tour-quality-{item.item_id}",
+                        severity=RiskSeverity.MEDIUM,
+                        category="activity",
+                        description=(
+                            f"Activity '{item.title}' has crowd, review, or safety confidence warnings. "
+                            "The family prefers safe, well-reviewed, smaller-group outings."
+                        ),
+                        affected_ids=[item.item_id],
+                        recommended_fix="Find a smaller-group, strongly reviewed operator with clear safety signals.",
+                    )
+                )
+        return risks
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -401,3 +663,60 @@ class FrictionDetector:
             if seg.arrive_at and seg.arrive_at.date() == check_date:
                 return seg
         return None
+
+
+def _stay_text(stay: Stay) -> str:
+    return " ".join(
+        str(value or "")
+        for value in (
+            stay.property_name,
+            stay.city,
+            stay.country,
+            stay.address,
+            stay.room_type,
+            stay.parking_instructions,
+            stay.check_in_instructions,
+            stay.notes,
+        )
+    ).lower()
+
+
+def _bed_count(text: str) -> int | None:
+    if not text.strip():
+        return None
+    if "2 rooms" in text or "two rooms" in text:
+        return 3
+    explicit = re.search(r"(\d+)\s+(?:beds?|sleeping surfaces?)", text)
+    if explicit:
+        return int(explicit.group(1))
+    count = 0
+    for word in ("king", "queen", "double", "twin", "sofa bed", "bunk"):
+        if word in text:
+            multiplier = 1
+            match = re.search(rf"(\d+)\s+{re.escape(word)}", text)
+            if match:
+                multiplier = int(match.group(1))
+            count += multiplier
+    return count or None
+
+
+def _has_compelling_lodging_upside(text: str) -> bool:
+    return any(
+        term in text
+        for term in (
+            "central",
+            "walkable",
+            "suite",
+            "exceptional",
+            "spacious",
+            "safe",
+            "parking",
+            "near transit",
+            "urban core",
+        )
+    )
+
+
+def _looks_like_city_stay(stay: Stay) -> bool:
+    text = _stay_text(stay)
+    return bool(stay.city) and not any(term in text for term in ("countryside", "rural", "villa"))
