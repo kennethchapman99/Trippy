@@ -310,7 +310,9 @@ def _user_candidate_option(
         island_or_region=", ".join(intake.destination_seeds) or "destination TBD",
         lodging_type="private rental" if is_private else "hotel/listing candidate",
         room_layout="user-supplied candidate; parse and validate exact room/unit terms",
-        bed_layout="user notes suggest 3+ beds" if three_beds else "bed layout not proven from supplied notes",
+        bed_layout="user notes suggest 3+ beds"
+        if three_beds
+        else "bed layout not proven from supplied notes",
         adult_child_fit=(
             f"Evaluate for {party.adults} adult(s), {party.children} child(ren), "
             f"{traveler_count} traveler(s) total."
@@ -328,15 +330,23 @@ def _user_candidate_option(
         bed_layout_confidence=0.68 if three_beds else 0.22,
         current_availability_signal="user-supplied; live source still required",
         current_price_signal=price or "not supplied",
-        parking_practicality="parking mentioned; verify exact access" if parking_known else "not proven",
+        parking_practicality="parking mentioned; verify exact access"
+        if parking_known
+        else "not proven",
         driving_practicality="validate road access, driveway/loading, and daily drive burden",
         walkability="validate food/grocery/activity access from exact location",
-        cancellation_notes="mentioned in notes; verify deadline" if "cancel" in lower else "not supplied",
+        cancellation_notes="mentioned in notes; verify deadline"
+        if "cancel" in lower
+        else "not supplied",
         price_band=price or "not supplied",
         deep_link=link,
         validation_links={
-            "Tripadvisor": source_search_url("Tripadvisor", f"{display_name} {intake.travel_window.display()}"),
-            "Booking.com": source_search_url("Booking.com", f"{display_name} {intake.travel_window.display()}"),
+            "Tripadvisor": source_search_url(
+                "Tripadvisor", f"{display_name} {intake.travel_window.display()}"
+            ),
+            "Booking.com": source_search_url(
+                "Booking.com", f"{display_name} {intake.travel_window.display()}"
+            ),
         },
         friction_score=friction,
         family_comfort_score=comfort,

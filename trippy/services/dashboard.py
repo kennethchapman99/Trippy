@@ -225,9 +225,7 @@ def _shortlist_status(trip_id: str) -> dict[str, str]:
             validation_payload.get("confidence") if isinstance(validation_payload, dict) else None
         )
         confidence_text = f", {float(confidence):.0%} confidence" if confidence else ""
-        recommended_text = (
-            f"{label} {state.recommended_option_id}{confidence_text}"
-        )
+        recommended_text = f"{label} {state.recommended_option_id}{confidence_text}"
         statuses[state.category.value] = (
             f"{state.option_count} option(s), {live} live, {researched} researched, "
             f"{approved} approved, {recommended_text}"

@@ -370,9 +370,7 @@ def test_lodging_deep_research_enriches_existing_shortlist_state(
     """
     service = SourceResearchService(
         adapters=[
-            PlaywrightLodgingAdapter(
-                fetcher=lambda url, timeout: (html, url, ["fixture HTML"])
-            ),
+            PlaywrightLodgingAdapter(fetcher=lambda url, timeout: (html, url, ["fixture HTML"])),
             OpenClawResearchAdapter(enabled=False),
             LinkResearchAdapter(),
         ],
@@ -511,7 +509,9 @@ def test_flight_deep_research_handles_partial_secondary_source_text(
         adapter_mode="auto",
         option_ids=[candidate.option_id],
     )
-    option = next(item for item in researched.flight_options if item.option_id == candidate.option_id)
+    option = next(
+        item for item in researched.flight_options if item.option_id == candidate.option_id
+    )
 
     assert option.validation.adapter_used == SourceAdapterCapability.PLAYWRIGHT.value
     assert option.validation.verification_status in {
@@ -582,7 +582,9 @@ def test_selecting_flight_updates_recommendation_and_workspace_timeline(
 
     assert selected.recommended_option_id == state.flight_options[1].option_id
     chosen = next(
-        option for option in selected.flight_options if option.option_id == selected.recommended_option_id
+        option
+        for option in selected.flight_options
+        if option.option_id == selected.recommended_option_id
     )
     assert chosen.row_status == ShortlistRowStatus.APPROVED
     assert chosen.recommendation_label.startswith("Selected")
@@ -616,9 +618,7 @@ def test_selected_plan_shapes_research_targets(
     assert lodging.lodging_options
     assert cars.car_options
     assert activities.activity_options
-    assert all(
-        "Sao Miguel" in option.island_or_region for option in lodging.lodging_options
-    )
+    assert all("Sao Miguel" in option.island_or_region for option in lodging.lodging_options)
     assert all("Pico" not in option.pickup_location for option in cars.car_options)
     assert all("Pico" not in option.island_location for option in activities.activity_options)
     assert all("Faial" not in option.island_location for option in activities.activity_options)

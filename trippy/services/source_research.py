@@ -119,7 +119,13 @@ class SourceResearchService:
                 if state.category == ShortlistCategory.LODGING
                 else _request_for_flight_option(state, option, mode)
             )
-            option_dir = self._research_dir / state.trip_id / state.category.value / run_id / option.option_id
+            option_dir = (
+                self._research_dir
+                / state.trip_id
+                / state.category.value
+                / run_id
+                / option.option_id
+            )
             result = self._research_request(request, mode=mode, artifact_dir=option_dir)
             if state.category == ShortlistCategory.LODGING:
                 _apply_lodging_observations(option, result, run_id=run_id)
@@ -133,7 +139,9 @@ class SourceResearchService:
                 "ended_at": datetime.utcnow().isoformat(),
                 "option_count": len(run_results),
                 "adapters_used": sorted({result.adapter_used.value for result in run_results}),
-                "artifact_root": str(self._research_dir / state.trip_id / state.category.value / run_id),
+                "artifact_root": str(
+                    self._research_dir / state.trip_id / state.category.value / run_id
+                ),
             }
         )
         state.next_actions.insert(
@@ -188,7 +196,11 @@ class SourceResearchService:
 
     def _candidate_adapters(self, mode: SourceResearchMode) -> list[SourceResearchAdapter]:
         if mode == SourceResearchMode.LINK:
-            return [adapter for adapter in self._adapters if adapter.capability == SourceAdapterCapability.LINK]
+            return [
+                adapter
+                for adapter in self._adapters
+                if adapter.capability == SourceAdapterCapability.LINK
+            ]
         if mode == SourceResearchMode.PLAYWRIGHT:
             return [
                 adapter
@@ -255,7 +267,9 @@ class LinkResearchAdapter:
             status=SourceResearchStatus.PARTIAL,
             confidence=0.25,
             evidence_artifacts=[artifact],
-            notes=["Link adapter preserved handoff evidence without claiming extracted live details."],
+            notes=[
+                "Link adapter preserved handoff evidence without claiming extracted live details."
+            ],
             missing_fields=_missing_fields_for_category(request.category),
         )
 
@@ -600,7 +614,9 @@ def _request_for_lodging_option(
         option_id=str(option.option_id),
         source_name=str(option.source),
         source_url=str(option.deep_link),
-        source_type=str(option.validation.source_type.value if option.validation else "live_search"),
+        source_type=str(
+            option.validation.source_type.value if option.validation else "live_search"
+        ),
         query=" ".join(
             item
             for item in [
@@ -629,7 +645,9 @@ def _request_for_flight_option(
         option_id=str(option.option_id),
         source_name=str(option.booking_source),
         source_url=str(option.deep_link),
-        source_type=str(option.validation.source_type.value if option.validation else "live_search"),
+        source_type=str(
+            option.validation.source_type.value if option.validation else "live_search"
+        ),
         query=" ".join(
             item
             for item in [
@@ -841,9 +859,11 @@ def _fetch_html(url: str, timeout: float) -> HtmlFetchResult:
         path = Path(parsed.path)
         return path.read_text(encoding="utf-8"), url, ["Read local fixture HTML."]
     if parsed.scheme in {"", "."} and Path(url).exists():
-        return Path(url).read_text(encoding="utf-8"), str(Path(url).resolve()), [
-            "Read local fixture HTML."
-        ]
+        return (
+            Path(url).read_text(encoding="utf-8"),
+            str(Path(url).resolve()),
+            ["Read local fixture HTML."],
+        )
     request = Request(
         url,
         headers={
@@ -854,13 +874,17 @@ def _fetch_html(url: str, timeout: float) -> HtmlFetchResult:
     with urlopen(request, timeout=timeout) as response:  # noqa: S310 - user-requested source research
         raw = response.read(1_000_000)
         charset = response.headers.get_content_charset() or "utf-8"
-        return raw.decode(charset, errors="replace"), response.geturl(), [
-            "Fetched source HTML snapshot with read-only request.",
-            (
-                "Browser extraction can be enabled later with Playwright-specific fetchers; "
-                "this run used deterministic HTML extraction."
-            ),
-        ]
+        return (
+            raw.decode(charset, errors="replace"),
+            response.geturl(),
+            [
+                "Fetched source HTML snapshot with read-only request.",
+                (
+                    "Browser extraction can be enabled later with Playwright-specific fetchers; "
+                    "this run used deterministic HTML extraction."
+                ),
+            ],
+        )
 
 
 def _fetch_html_with_playwright(url: str, timeout: float) -> HtmlFetchResult:
@@ -1008,9 +1032,7 @@ def _extract_lodging_observations(
         )
     location = _location_signal(cleaned, request)
     if location:
-        observations.append(
-            _observation("location_signal", location, 0.45, request, evidence_refs)
-        )
+        observations.append(_observation("location_signal", location, 0.45, request, evidence_refs))
     return observations
 
 
@@ -1220,7 +1242,15 @@ def _flight_availability_signal(lower: str) -> str:
         return "unavailable/no-flight signal visible; choose another date or route"
     if any(
         term in lower
-        for term in ["select", "choose", "book", "view deal", "available", "round trip", "departing"]
+        for term in [
+            "select",
+            "choose",
+            "book",
+            "view deal",
+            "available",
+            "round trip",
+            "departing",
+        ]
     ):
         return "flight result/listing signal visible; final inventory still needs source review"
     return ""
@@ -1325,7 +1355,9 @@ def _availability_signal(lower: str) -> str:
     if any(term in lower for term in ["sold out", "not available", "unavailable"]):
         return "unavailable signal visible; do not advance without another date/property"
     if any(term in lower for term in ["reserve", "book now", "availability", "available"]):
-        return "availability/search-result signal visible; final inventory still needs source review"
+        return (
+            "availability/search-result signal visible; final inventory still needs source review"
+        )
     return ""
 
 
@@ -1457,8 +1489,7 @@ def _missing_high_value_fields(result: SourceResearchResult) -> bool:
             & set(result.missing_fields)
         )
     return bool(
-        {"final_total_price", "bed_layout", "min_three_beds_satisfied"}
-        & set(result.missing_fields)
+        {"final_total_price", "bed_layout", "min_three_beds_satisfied"} & set(result.missing_fields)
     )
 
 
@@ -1593,7 +1624,11 @@ def _parse_openclaw_observations(
                 notes=_raw_notes(raw.get("notes")),
             )
         )
-    notes = [str(note) for note in payload.get("notes", [])] if isinstance(payload.get("notes"), list) else []
+    notes = (
+        [str(note) for note in payload.get("notes", [])]
+        if isinstance(payload.get("notes"), list)
+        else []
+    )
     return observations, notes
 
 

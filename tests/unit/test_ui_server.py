@@ -128,7 +128,9 @@ def test_ui_suggest_ideas_returns_concepts_and_records_workflow(
 
     logs = service.logs()
     assert any(event["title"] == "ui-trip-ideas-suggest" for event in logs["events"])
-    suggest_events = [event for event in logs["events"] if event["title"] == "ui-trip-ideas-suggest"]
+    suggest_events = [
+        event for event in logs["events"] if event["title"] == "ui-trip-ideas-suggest"
+    ]
     assert suggest_events[-1]["metrics"]["concepts"] == 3
 
 
@@ -165,9 +167,7 @@ def test_ui_lodging_candidate_is_evaluated_in_shortlist(
     assert candidate["deep_link"].startswith("https://www.booking.com/")
 
     logs = service.logs(trip_id=trip_id)
-    assert any(
-        event["title"] == "ui-trip-plan-lodging-candidate" for event in logs["events"]
-    )
+    assert any(event["title"] == "ui-trip-plan-lodging-candidate" for event in logs["events"])
 
 
 def test_ui_flight_candidate_is_evaluated_in_shortlist(

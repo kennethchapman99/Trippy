@@ -152,15 +152,11 @@ class FlightShortlistService:
         state.recommended_option_id = option_id
         for option in state.flight_options:
             option.row_status = (
-                ShortlistRowStatus.APPROVED
-                if option.option_id == option_id
-                else option.row_status
+                ShortlistRowStatus.APPROVED if option.option_id == option_id else option.row_status
             )
             if option.option_id == option_id:
                 option.recommendation_label = "Selected"
-                option.planning_next_step = (
-                    "Use this flight timing to verify lodging check-in, car pickup, and first/last day pacing."
-                )
+                option.planning_next_step = "Use this flight timing to verify lodging check-in, car pickup, and first/last day pacing."
         _refresh_flight_recommendations(state, ctx, preserve_selection=True)
         state.next_actions.insert(
             0,
@@ -345,7 +341,9 @@ def _user_candidate_option(
     source = _source_from_link(link)
     friction = min(90, 16 + len(flags) * 8 + (12 if (stops or 0) > 1 else 0))
     comfort = max(35, 92 - len(flags) * 8 - (10 if (stops or 0) > 1 else 0))
-    display_name = name or _airline_from_notes(notes) or _name_from_link(link) or "User flight candidate"
+    display_name = (
+        name or _airline_from_notes(notes) or _name_from_link(link) or "User flight candidate"
+    )
     return FlightOption(
         option_id=option_id,
         rank=rank,
@@ -434,7 +432,9 @@ def _refresh_flight_recommendations(
         for option in state.flight_options
         if _duration_hours(option.total_travel_duration) > 0
     ]
-    shortest = min(durations, key=lambda option: _duration_hours(option.total_travel_duration), default=None)
+    shortest = min(
+        durations, key=lambda option: _duration_hours(option.total_travel_duration), default=None
+    )
     lowest_friction = min(state.flight_options, key=lambda option: option.friction_score)
     state.recommended_option_id = best.option_id
     for option in state.flight_options:
@@ -443,9 +443,17 @@ def _refresh_flight_recommendations(
             labels.append("Selected" if preserve_selection else "Recommended")
         if runner and option.option_id == runner.option_id:
             labels.append("Runner-up")
-        if budget_best and option.option_id == budget_best.option_id and option.option_id != best.option_id:
+        if (
+            budget_best
+            and option.option_id == budget_best.option_id
+            and option.option_id != best.option_id
+        ):
             labels.append("Budget-best")
-        if shortest and option.option_id == shortest.option_id and option.option_id != best.option_id:
+        if (
+            shortest
+            and option.option_id == shortest.option_id
+            and option.option_id != best.option_id
+        ):
             labels.append("Shortest")
         if (
             lowest_friction.option_id == option.option_id
@@ -453,7 +461,9 @@ def _refresh_flight_recommendations(
             and "Shortest" not in labels
         ):
             labels.append("Lowest-friction")
-        option.recommendation_label = " · ".join(labels) or option.recommendation_grade.value.title()
+        option.recommendation_label = (
+            " · ".join(labels) or option.recommendation_grade.value.title()
+        )
         option.recommendation_rationale = _recommendation_rationale(
             option,
             ctx,
@@ -493,7 +503,11 @@ def _refresh_flight_recommendations(
 def _recommendation_score(option: FlightOption, ctx: ShortlistContext) -> float:
     score = float(option.family_comfort_score - option.friction_score)
     score += option.validation.confidence * 12
-    if option.validation.verification_status.value in {"live_verified", "partial", "link_validated"}:
+    if option.validation.verification_status.value in {
+        "live_verified",
+        "partial",
+        "link_validated",
+    }:
         score += 5
     if option.stops == 0:
         score += 8
@@ -502,7 +516,10 @@ def _recommendation_score(option: FlightOption, ctx: ShortlistContext) -> float:
     duration_hours = _duration_hours(option.total_travel_duration)
     if ctx.intake.max_travel_time_hours and duration_hours > ctx.intake.max_travel_time_hours:
         score -= min(18, (duration_hours - ctx.intake.max_travel_time_hours) * 3)
-    if any("multi-ticket" in flag.lower() or "recheck" in flag.lower() for flag in option.friction_flags):
+    if any(
+        "multi-ticket" in flag.lower() or "recheck" in flag.lower()
+        for flag in option.friction_flags
+    ):
         score -= 10
     if option.row_status == ShortlistRowStatus.APPROVED:
         score += 18
@@ -520,7 +537,9 @@ def _recommendation_rationale(
     if is_best:
         parts.append("Best current fit because it has the strongest comfort-to-friction balance.")
     elif option.friction_score < best.friction_score:
-        parts.append("Lower friction than the current top pick, but weaker on overall confidence or comfort.")
+        parts.append(
+            "Lower friction than the current top pick, but weaker on overall confidence or comfort."
+        )
     elif (
         _price_amount(option.price_band)
         and _price_amount(best.price_band)
@@ -530,19 +549,27 @@ def _recommendation_rationale(
     if option.stops == 0:
         parts.append("Nonstop shape protects the first day and avoids layover baggage risk.")
     elif option.stops == 1:
-        parts.append("One-stop option is workable only if the connection is protected and buffered.")
+        parts.append(
+            "One-stop option is workable only if the connection is protected and buffered."
+        )
     else:
         parts.append("Multi-stop or unclear routing adds travel-day and baggage uncertainty.")
     arrival_hour = _time_hour(option.arrival_time)
     if arrival_hour is not None and arrival_hour < 11:
-        parts.append("Early arrival may require luggage storage, early check-in, or prior-night lodging.")
+        parts.append(
+            "Early arrival may require luggage storage, early check-in, or prior-night lodging."
+        )
     elif arrival_hour is not None and arrival_hour >= 20:
         parts.append("Late arrival raises car pickup, food, fatigue, and self-check-in risk.")
     duration_hours = _duration_hours(option.total_travel_duration)
     if ctx.intake.duration_max_days and duration_hours >= 10 and ctx.intake.duration_max_days <= 8:
-        parts.append("Longer travel time hurts a short trip more than the fare savings may justify.")
+        parts.append(
+            "Longer travel time hurts a short trip more than the fare savings may justify."
+        )
     if option.validation.confidence < 0.6:
-        parts.append("Confidence is still partial; verify exact fare, dates, baggage, and schedule before booking.")
+        parts.append(
+            "Confidence is still partial; verify exact fare, dates, baggage, and schedule before booking."
+        )
     return " ".join(parts)
 
 
@@ -593,9 +620,7 @@ def _flight_summary(
     ctx: ShortlistContext,
 ) -> str:
     runner_text = (
-        f" Runner-up: {runner.airline} if the tradeoff is worth it."
-        if runner is not None
-        else ""
+        f" Runner-up: {runner.airline} if the tradeoff is worth it." if runner is not None else ""
     )
     date_text = best.date_viability_signal
     return (
@@ -689,7 +714,11 @@ def _stops_from_notes(lower: str) -> int | None:
 
 def _layovers_from_notes(notes: str) -> list[str]:
     values = []
-    for match in re.finditer(r"(?:layover|connection|via)\s+(?:in|at|through)?\s*([A-Z]{3})\b", notes, flags=re.IGNORECASE):
+    for match in re.finditer(
+        r"(?:layover|connection|via)\s+(?:in|at|through)?\s*([A-Z]{3})\b",
+        notes,
+        flags=re.IGNORECASE,
+    ):
         value = match.group(1).upper()
         if value not in values:
             values.append(value)
@@ -764,7 +793,9 @@ def _airline_from_notes(notes: str) -> str:
 
 def _flight_numbers(notes: str) -> list[str]:
     values = []
-    for match in re.finditer(r"\b(?:AC|TP|S4|SATA|UA|DL|WS|PD|AA|LH)\s?-?\s?\d{2,4}\b", notes, flags=re.IGNORECASE):
+    for match in re.finditer(
+        r"\b(?:AC|TP|S4|SATA|UA|DL|WS|PD|AA|LH)\s?-?\s?\d{2,4}\b", notes, flags=re.IGNORECASE
+    ):
         value = re.sub(r"\s+", "", match.group(0).upper().replace("-", ""))
         if value not in values:
             values.append(value)
