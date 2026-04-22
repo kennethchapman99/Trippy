@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from typer.testing import CliRunner
@@ -19,6 +21,7 @@ from trippy.models.shortlists import (
     VerificationStatus,
 )
 from trippy.models.source_research import SourceAdapterCapability, SourceResearchStatus
+from trippy.models.trip import Trip
 from trippy.models.trip_planning import (
     TravelerAgeBand,
     TravelWindow,
@@ -28,6 +31,7 @@ from trippy.models.trip_planning import (
     TripPartyType,
     TripTraveler,
     WorkspaceStatus,
+    WorkspaceTab,
 )
 from trippy.services.activity_shortlist import ActivityShortlistService
 from trippy.services.car_shortlist import CarShortlistService
@@ -96,8 +100,12 @@ def test_azores_golden_path_services(
     assert tabs["Flights"].rows[0][1] in {"researched", "verified_live"}
     assert tabs["Flights"].rows[0][2] == "yes"
     assert tabs["Lodging"].rows[0][1] in {"recommended", "researched"}
-    assert tabs["Cars"].rows[0][7] >= 5
-    assert any(row[5] == "activity" for row in tabs["Master Timeline"].rows)
+    assert tabs["Cars"].rows[0][8] >= 5
+    timeline = tabs["Master Timeline"].rows
+    assert any(row[5] == "activity" for row in timeline)
+    assert [int(row[0]) for row in timeline] == sorted(int(row[0]) for row in timeline)
+    assert all(row[1] for row in timeline)
+    assert all("summer 2027" in row[1] for row in timeline)
     assert any("Traveler Roster" in row for row in tabs["Overview"].rows)
 
     canonical = TripStateService().load(intake.trip_id)
@@ -121,7 +129,23 @@ def test_azores_golden_path_services(
 
     assert flights.category == ShortlistCategory.FLIGHTS
     assert flights.recommended_option_id == "flight-direct-yyz-pdl"
-    assert "google.com/travel/flights" in flights.flight_options[0].deep_link
+    flight_link = flights.flight_options[0].deep_link
+    flight_params = parse_qs(urlparse(flight_link).query)
+    assert "google.com/travel/flights" in flight_link
+    assert "?q=" not in flight_link
+    assert flight_params["tfu"] == ["EgIIACIA"]
+    assert flight_params["origin"] == ["YYZ"]
+    assert flight_params["destination"] == ["PDL"]
+    assert flight_params["departure"] == ["2027-06-15"]
+    assert "f=0" not in flight_params["tfs"][0]
+    tfs_padding = "=" * (-len(flight_params["tfs"][0]) % 4)
+    tfs_payload = base64.urlsafe_b64decode(flight_params["tfs"][0] + tfs_padding)
+    assert b"YYZ" in tfs_payload
+    assert b"PDL" in tfs_payload
+    assert b"2027-06-15" in tfs_payload
+    assert any(
+        "placeholder search dates" in note for note in flights.flight_options[0].confidence_notes
+    )
     assert lodging.lodging_options
     assert lodging.recommended_option_id is not None
     assert cars.car_options[0].booking_source == "Booking.com"
@@ -153,6 +177,92 @@ def test_azores_golden_path_services(
     planned = next(tile for tile in dashboard.planned_trips if tile.trip_id == intake.trip_id)
     assert planned.planning_status["workspace"] == "prepared_local"
     assert planned.shortlist_status["flights"].startswith("3 option")
+    assert planned.planning_completeness < 100
+
+
+def test_google_workspace_updates_existing_sheet_instead_of_creating_new() -> None:
+    class _Request:
+        def __init__(self, response: dict[str, object]) -> None:
+            self.response = response
+
+        def execute(self) -> dict[str, object]:
+            return self.response
+
+    class _Values:
+        def __init__(self) -> None:
+            self.batch_clears: list[dict[str, object]] = []
+            self.batch_updates: list[dict[str, object]] = []
+
+        def batchClear(self, spreadsheetId: str, body: dict[str, object]) -> _Request:  # noqa: N803
+            self.batch_clears.append({"spreadsheetId": spreadsheetId, "body": body})
+            return _Request({})
+
+        def batchUpdate(self, spreadsheetId: str, body: dict[str, object]) -> _Request:  # noqa: N803
+            self.batch_updates.append({"spreadsheetId": spreadsheetId, "body": body})
+            return _Request({})
+
+    class _Spreadsheets:
+        def __init__(self) -> None:
+            self.created: list[dict[str, object]] = []
+            self.batch_updates: list[dict[str, object]] = []
+            self.values_api = _Values()
+
+        def create(self, body: dict[str, object]) -> _Request:
+            self.created.append(body)
+            return _Request({"spreadsheetId": "new-sheet", "spreadsheetUrl": "new-url"})
+
+        def get(self, spreadsheetId: str, fields: str) -> _Request:  # noqa: N803
+            return _Request(
+                {
+                    "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/sheet-123",
+                    "sheets": [
+                        {"properties": {"sheetId": 1, "title": "Overview"}},
+                        {"properties": {"sheetId": 2, "title": "Flights"}},
+                    ],
+                }
+            )
+
+        def batchUpdate(self, spreadsheetId: str, body: dict[str, object]) -> _Request:  # noqa: N803
+            self.batch_updates.append({"spreadsheetId": spreadsheetId, "body": body})
+            return _Request({})
+
+        def values(self) -> _Values:
+            return self.values_api
+
+    class _SheetsService:
+        def __init__(self) -> None:
+            self.spreadsheets_api = _Spreadsheets()
+
+        def spreadsheets(self) -> _Spreadsheets:
+            return self.spreadsheets_api
+
+    class _Auth:
+        def __init__(self) -> None:
+            self.service = _SheetsService()
+
+        def build_service(self, name: str, version: str) -> _SheetsService:
+            assert (name, version) == ("sheets", "v4")
+            return self.service
+
+    auth = _Auth()
+    workspace = TripWorkspaceService(auth_manager=auth)
+    result = workspace._try_create_google_sheet(
+        Trip(trip_id="azores-2027", name="Azores 2027"),
+        [
+            WorkspaceTab(name="Overview", headers=["Field", "Value"], rows=[["Trip", "Azores"]]),
+            WorkspaceTab(name="Flights", headers=["Airline"], rows=[["TAP"]]),
+        ],
+        folder_id=None,
+        existing_sheet_id="sheet-123",
+        existing_sheet_url="https://docs.google.com/spreadsheets/d/sheet-123",
+    )
+
+    sheets = auth.service.spreadsheets_api
+    assert result["spreadsheet_id"] == "sheet-123"
+    assert result["operation"] == "updated"
+    assert sheets.created == []
+    assert sheets.values_api.batch_clears[0]["spreadsheetId"] == "sheet-123"
+    assert sheets.values_api.batch_updates[0]["spreadsheetId"] == "sheet-123"
 
 
 def test_cli_azores_golden_path(
@@ -248,6 +358,11 @@ def test_cli_azores_golden_path(
     assert map_result.exit_code == 0, map_result.output
     map_payload = json.loads(map_result.output)
     assert map_payload["map"]["pins"]
+    assert map_payload["map"]["pins"][0]["label"].startswith("01 ·")
+    assert "google.com/maps/dir" in map_payload["map"]["primary_google_maps_url"]
+    assert Path(map_payload["map"]["exports"]["kml"]).exists()
+    assert Path(map_payload["map"]["exports"]["csv"]).exists()
+    assert "01," in Path(map_payload["map"]["exports"]["csv"]).read_text(encoding="utf-8")
     assert map_payload["workflow_id"].startswith("wf-")
 
     for command in ("flights", "lodging", "cars", "activities"):
@@ -598,6 +713,58 @@ def test_selecting_flight_updates_recommendation_and_workspace_timeline(
     timeline = tabs["Master Timeline"].rows
     assert any(row[0] == "Best Flight Rationale" and row[1] for row in overview)
     assert any(chosen.airline in row[6] for row in timeline)
+
+
+def test_selecting_lodging_and_manual_split_drives_workspace_timeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-sao-miguel-easy")
+
+    lodging_service = LodgingShortlistService(intake_service, planner)
+    lodging = lodging_service.build(intake.trip_id)
+    option_id = lodging.lodging_options[0].option_id
+    selected = lodging_service.select_lodging(intake.trip_id, option_id)
+    assert selected.recommended_option_id == option_id
+    assert selected.lodging_options[0].row_status == ShortlistRowStatus.APPROVED
+
+    updated = lodging_service.update_stay_structure(
+        intake.trip_id,
+        strategy="split_stay",
+        night_plan=[
+            {
+                "region": "Ponta Delgada",
+                "nights": 4,
+                "lodging_option_id": option_id,
+                "notes": "central first base",
+            },
+            {
+                "region": "Furnas",
+                "nights": 3,
+                "notes": "second base to reduce backtracking",
+            },
+        ],
+        notes="Manual same-island split test.",
+    )
+    structure = updated.artifacts["lodging_structure"]
+    assert structure["strategy"] == "split_stay"
+    assert structure["data_status"] == "manual_override"
+
+    workspace = TripWorkspaceService(intake_service, planner).prepare(
+        intake.trip_id,
+        create_google_sheet=False,
+    )
+    tabs = {tab.name: tab for tab in workspace.tabs}
+    stay_plan = tabs["Stay Plan"].rows
+    timeline = tabs["Master Timeline"].rows
+    assert any(row[1] == "Furnas" and row[2] == 3 for row in stay_plan)
+    assert any(row[6] == "Check in: Furnas" for row in timeline)
+    assert any("second base" in row[18] for row in timeline)
 
 
 def test_selected_plan_shapes_research_targets(

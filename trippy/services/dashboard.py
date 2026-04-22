@@ -169,16 +169,36 @@ def _budget_band(trip: Trip) -> str:
 
 
 def _planning_completeness(trip: Trip) -> int:
+    """Estimate true booking readiness, not scaffold creation.
+
+    A trip should only reach 100% when real booking state exists: confirmed
+    flights/lodging plus an operational sheet. Placeholder research rows count
+    as progress, but they are intentionally capped below full completion.
+    """
+    planning_status = _planning_status(trip.trip_id)
+    shortlist_status = _shortlist_status(trip.trip_id)
+    approved_categories = sum(
+        1 for value in shortlist_status.values() if " approved" in value or "booked" in value
+    )
+    booked_flights = bool(trip.segments) and not trip.unconfirmed_segments
+    booked_lodging = bool(trip.stays) and not trip.unconfirmed_stays
+    sheet_ready = bool(trip.sync.google_sheet_url or trip.sync.google_sheet_id)
     checks = [
-        bool(trip.segments),
-        bool(trip.stays),
+        "intake" in planning_status,
+        planning_status.get("draft") == "selected",
+        len(shortlist_status) >= 4,
+        approved_categories >= 1,
+        approved_categories >= 2,
+        sheet_ready,
+        booked_flights,
+        booked_lodging,
+        booked_flights and booked_lodging and sheet_ready,
         bool(trip.travelers),
-        bool(trip.sync.google_sheet_url or trip.sync.google_sheet_id),
-        not trip.unconfirmed_segments,
-        not trip.unconfirmed_stays,
-        any(item.category in {"visa", "document", "logistics"} for item in trip.checklist),
     ]
-    return int(sum(1 for item in checks if item) / len(checks) * 100)
+    score = int(sum(1 for item in checks if item) / len(checks) * 100)
+    if not (booked_flights and booked_lodging and sheet_ready):
+        score = min(score, 85)
+    return score
 
 
 def _planning_status(trip_id: str) -> dict[str, str]:

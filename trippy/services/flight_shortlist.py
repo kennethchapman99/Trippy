@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import re
-from urllib.parse import urlparse
+from datetime import date, timedelta
+from urllib.parse import urlencode, urlparse
 
 from trippy.models.shortlists import (
     FlightOption,
@@ -169,13 +171,15 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
     origin = ctx.intake.departure_airports[0] if ctx.intake.departure_airports else "YYZ"
     traveler_count = ctx.intake.party.total_travelers
     party_note = ctx.intake.party.summary()
+    date_hint = _flight_date_hint(ctx)
     query_base = trip_query(
         ctx.intake,
         f"flights {origin} to {gateway} {traveler_count} travelers",
     )
     comparison = {
-        "Kayak.ca": source_search_url("Kayak.ca", query_base),
-        "Expedia": source_search_url("Expedia", query_base),
+        "Google Flights": _flight_source_url("Google Flights", origin, gateway, ctx),
+        "Kayak.ca": _flight_source_url("Kayak.ca", origin, gateway, ctx),
+        "Expedia": _flight_source_url("Expedia", origin, gateway, ctx),
         "Flighthub": source_search_url("Flighthub", query_base),
     }
     return [
@@ -200,7 +204,7 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
             price_band="CAD 900-1,600 pp live-verify band",
             baggage_cabin_notes="Validate included bags, seat selection, and family seating before booking.",
             booking_source="Google Flights",
-            deep_link=source_search_url("Google Flights", query_base + " nonstop Azores Airlines"),
+            deep_link=_flight_source_url("Google Flights", origin, gateway, ctx),
             traveler_count=traveler_count,
             traveler_fit=f"Best fit for {party_note}: one plane, no layover, simplest baggage/seat path.",
             comparison_links=comparison,
@@ -216,7 +220,10 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
                 "seasonal availability must be verified",
                 "baggage and seat terms unknown",
             ],
-            confidence_notes=["This is a source-linked candidate, not a confirmed fare."],
+            confidence_notes=[
+                "This is a source-linked candidate, not a confirmed fare.",
+                date_hint,
+            ],
             live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
         ),
         FlightOption(
@@ -237,7 +244,7 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
             price_band="CAD 850-1,500 pp live-verify band",
             baggage_cabin_notes="Prefer same-ticket baggage through-check and long-haul seat selection clarity.",
             booking_source="Google Flights",
-            deep_link=source_search_url("Google Flights", query_base + " Air Canada TAP Lisbon"),
+            deep_link=_flight_source_url("Google Flights", origin, gateway, ctx),
             traveler_count=traveler_count,
             traveler_fit=f"Acceptable for {party_note} only with same-ticket baggage and sane Lisbon buffer.",
             comparison_links=comparison,
@@ -254,7 +261,8 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
                 "avoid overnight or very tight Lisbon transfer",
             ],
             confidence_notes=[
-                "Use as the best backup if nonstop is unavailable or irrationally expensive."
+                "Use as the best backup if nonstop is unavailable or irrationally expensive.",
+                date_hint,
             ],
         ),
         FlightOption(
@@ -275,12 +283,12 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
             price_band="CAD 700-1,400 pp live-verify band",
             baggage_cabin_notes="Do not accept unprotected baggage recheck with a tight family connection.",
             booking_source="Kayak.ca",
-            deep_link=source_search_url("Kayak.ca", query_base + " via Boston"),
+            deep_link=_flight_source_url("Kayak.ca", origin, gateway, ctx),
             traveler_count=traveler_count,
             traveler_fit=f"Weak fit for {party_note} unless protected, because luggage/recheck risk scales with party size.",
             comparison_links={
-                "Google Flights": source_search_url("Google Flights", query_base + " via Boston"),
-                "Expedia": source_search_url("Expedia", query_base + " via Boston"),
+                "Google Flights": _flight_source_url("Google Flights", origin, gateway, ctx),
+                "Expedia": _flight_source_url("Expedia", origin, gateway, ctx),
             },
             aeroplan_relevance="Possible on the Toronto-Boston leg only; weak overall unless same-ticket.",
             friction_score=48,
@@ -295,7 +303,10 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
                 "delay protection risk",
                 "family luggage burden",
             ],
-            confidence_notes=["Use mainly as a price sanity check, not default recommendation."],
+            confidence_notes=[
+                "Use mainly as a price sanity check, not default recommendation.",
+                date_hint,
+            ],
         ),
     ]
 
@@ -368,14 +379,8 @@ def _user_candidate_option(
             f"User-supplied flight for {intake.party.summary()}; verify timing, fare, baggage, and source evidence."
         ),
         comparison_links={
-            "Google Flights": source_search_url(
-                "Google Flights",
-                trip_query(intake, f"flights {origin} to {destination} {traveler_count} travelers"),
-            ),
-            "Kayak.ca": source_search_url(
-                "Kayak.ca",
-                trip_query(intake, f"flights {origin} to {destination} {traveler_count} travelers"),
-            ),
+            "Google Flights": _flight_source_url("Google Flights", origin, destination, ctx),
+            "Kayak.ca": _flight_source_url("Kayak.ca", origin, destination, ctx),
         },
         aeroplan_relevance="User-supplied candidate; verify carrier, fare class, and Aeroplan earning.",
         friction_score=friction,
@@ -394,6 +399,213 @@ def _user_candidate_option(
         ],
         live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
     )
+
+
+def _flight_source_url(
+    source: str,
+    origin: str,
+    destination: str,
+    ctx: ShortlistContext,
+) -> str:
+    """Build route-specific flight handoff URLs instead of generic query pages.
+
+    Google Flights ignores the old natural-language ``?q=`` URLs. Its share/search
+    links need structured route data, so fuzzy trips receive deterministic placeholder
+    dates from the intake window and carry confidence notes explaining that the dates
+    must be adjusted before booking.
+    """
+    origin_code = _iata_or_text(origin)
+    destination_code = _iata_or_text(destination)
+    departure_date, return_date = _flight_dates(ctx)
+    adults = max(1, ctx.intake.party.adults or ctx.intake.party.total_travelers or 1)
+    total_travelers = max(1, ctx.intake.party.total_travelers or ctx.intake.travelers or adults)
+    if source == "Google Flights":
+        tfs = _google_flights_tfs(
+            origin_code,
+            destination_code,
+            departure_date.isoformat(),
+            return_date.isoformat(),
+            adults=adults,
+        )
+        return "https://www.google.com/travel/flights/search?" + urlencode(
+            {
+                "tfs": tfs,
+                "tfu": "EgIIACIA",
+                "hl": "en-CA",
+                "gl": "ca",
+                "curr": "CAD",
+                "origin": origin_code,
+                "destination": destination_code,
+                "departure": departure_date.isoformat(),
+                "return": return_date.isoformat(),
+            }
+        )
+    if source == "Kayak.ca":
+        return (
+            "https://www.ca.kayak.com/flights/"
+            f"{origin_code}-{destination_code}/{departure_date.isoformat()}/{return_date.isoformat()}"
+            f"/{total_travelers}adults?sort=bestflight_a"
+        )
+    if source == "Expedia":
+        return "https://www.expedia.ca/Flights-Search?" + urlencode(
+            {
+                "trip": "roundtrip",
+                "leg1": f"from:{origin_code},to:{destination_code},departure:{departure_date.isoformat()}TANYT",
+                "leg2": f"from:{destination_code},to:{origin_code},departure:{return_date.isoformat()}TANYT",
+                "passengers": f"adults:{adults}",
+                "mode": "search",
+            }
+        )
+    query = trip_query(
+        ctx.intake,
+        f"flights {origin_code} to {destination_code} {total_travelers} travelers "
+        f"{departure_date.isoformat()} return {return_date.isoformat()}",
+    )
+    return source_search_url(source, query)
+
+
+def _flight_date_hint(ctx: ShortlistContext) -> str:
+    window = ctx.intake.travel_window
+    if window.start_date and window.end_date:
+        return "Source links use the exact intake date range."
+    departure_date, return_date = _flight_dates(ctx)
+    return (
+        "Source links use placeholder search dates "
+        f"{departure_date.isoformat()} to {return_date.isoformat()} from the fuzzy intake window; "
+        "adjust dates in the source before treating fares as real."
+    )
+
+
+def _google_flights_tfs(
+    origin: str,
+    destination: str,
+    departure_date: str,
+    return_date: str,
+    *,
+    adults: int,
+) -> str:
+    """Build the Google Flights ``tfs`` search payload for a basic round trip.
+
+    Google ignores readable natural-language query params on the flights page.
+    The accepted handoff is a URL-safe protobuf blob; this encoder intentionally
+    stays narrow and only represents facts Trippy knows: route, dates, economy,
+    and adult passenger count.
+    """
+    info = (
+        _protobuf_varint_field(1, 28)
+        + _protobuf_varint_field(2, 2)
+        + _protobuf_len_field(3, _google_flight_leg(departure_date, origin, destination))
+        + _protobuf_len_field(3, _google_flight_leg(return_date, destination, origin))
+    )
+    for _ in range(max(1, adults)):
+        info += _protobuf_varint_field(8, 1)
+    info += _protobuf_varint_field(9, 1)  # economy
+    info += _protobuf_varint_field(14, 1)
+    info += _protobuf_len_field(16, b"\x08" + b"\xff" * 9 + b"\x01")
+    info += _protobuf_varint_field(19, 1)  # round trip
+    return base64.urlsafe_b64encode(info).rstrip(b"=").decode("ascii")
+
+
+def _google_flight_leg(leg_date: str, origin: str, destination: str) -> bytes:
+    return (
+        _protobuf_len_field(2, leg_date.encode())
+        + _protobuf_len_field(13, _google_airport(origin))
+        + _protobuf_len_field(14, _google_airport(destination))
+    )
+
+
+def _google_airport(code: str) -> bytes:
+    return _protobuf_varint_field(1, 1) + _protobuf_len_field(2, code.upper().encode())
+
+
+def _protobuf_varint_field(field_no: int, value: int) -> bytes:
+    return _protobuf_varint((field_no << 3) | 0) + _protobuf_varint(value)
+
+
+def _protobuf_len_field(field_no: int, value: bytes) -> bytes:
+    return _protobuf_varint((field_no << 3) | 2) + _protobuf_varint(len(value)) + value
+
+
+def _protobuf_varint(value: int) -> bytes:
+    chunks: list[int] = []
+    while value > 0x7F:
+        chunks.append((value & 0x7F) | 0x80)
+        value >>= 7
+    chunks.append(value & 0x7F)
+    return bytes(chunks)
+
+
+def _flight_dates(ctx: ShortlistContext) -> tuple[date, date]:
+    window = ctx.intake.travel_window
+    departure_date = window.start_date or _representative_departure_date(window.display())
+    duration_days = (
+        ctx.intake.duration_days or ctx.intake.duration_min_days or ctx.option.duration_days or 7
+    )
+    if window.end_date and window.start_date:
+        return_date = window.end_date
+    else:
+        return_date = departure_date + timedelta(days=max(1, duration_days))
+    if return_date <= departure_date:
+        return_date = departure_date + timedelta(days=max(1, duration_days))
+    return departure_date, return_date
+
+
+def _representative_departure_date(label: str) -> date:
+    cleaned = label.lower()
+    year_match = re.search(r"\b(20\d{2})\b", cleaned)
+    year = int(year_match.group(1)) if year_match else date.today().year
+    month_lookup = {
+        "jan": 1,
+        "january": 1,
+        "feb": 2,
+        "february": 2,
+        "mar": 3,
+        "march": 3,
+        "apr": 4,
+        "april": 4,
+        "may": 5,
+        "jun": 6,
+        "june": 6,
+        "jul": 7,
+        "july": 7,
+        "aug": 8,
+        "august": 8,
+        "sep": 9,
+        "sept": 9,
+        "september": 9,
+        "oct": 10,
+        "october": 10,
+        "nov": 11,
+        "november": 11,
+        "dec": 12,
+        "december": 12,
+    }
+    month_positions = [
+        (match.start(), month)
+        for name, month in month_lookup.items()
+        if (match := re.search(rf"\b{name}\b", cleaned))
+    ]
+    if not month_positions:
+        return date(year, 6, 15)
+    index, month = min(month_positions, key=lambda item: item[0])
+    nearby = cleaned[max(0, index - 18) : index + 24]
+    if "late" in nearby:
+        day = 24
+    elif "early" in nearby:
+        day = 5
+    elif "mid" in nearby:
+        day = 15
+    else:
+        day = 15
+    return date(year, month, day)
+
+
+def _iata_or_text(value: str) -> str:
+    match = re.search(r"\b[A-Z]{3}\b", value.upper())
+    if match:
+        return match.group(0)
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "-", value.strip()).strip("-").upper()
+    return cleaned or "DEST"
 
 
 def _refresh_flight_recommendations(

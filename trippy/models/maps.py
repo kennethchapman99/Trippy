@@ -52,6 +52,8 @@ class TripMapArtifact(BaseModel):
     trip_id: str
     title: str
     generated_at: datetime = Field(default_factory=datetime.utcnow)
+    primary_google_maps_url: str | None = None
+    google_my_maps_url: str = "https://www.google.com/maps/d/u/0/"
     pins: list[MapPin] = Field(default_factory=list)
     routes: list[MapRoute] = Field(default_factory=list)
     day_groups: dict[str, list[str]] = Field(default_factory=dict)

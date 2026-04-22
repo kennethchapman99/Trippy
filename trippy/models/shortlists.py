@@ -210,6 +210,8 @@ class CarOption(BaseModel):
     pickup_location: str
     dropoff_location: str
     vehicle_class: str
+    price_band: str = "live quote required"
+    current_price_signal: str = ""
     seating_capacity: int | None = None
     passenger_fit: str
     luggage_fit: str
@@ -253,6 +255,17 @@ class ActivityOption(BaseModel):
     age_family_fit: str = ""
     price_band: str
     duration: str
+    suggested_day: int | None = None
+    suggested_date: str = ""
+    suggested_start_time: str = ""
+    suggested_end_time: str = ""
+    scheduling_rationale: str = ""
+    scheduled_day: int | None = None
+    scheduled_date: str = ""
+    scheduled_start_time: str = ""
+    scheduled_end_time: str = ""
+    scheduled_flexibility: str = "flexible"
+    scheduling_notes: str = ""
     deep_link: str
     validation_links: dict[str, str] = Field(default_factory=dict)
     family_pace_fit_score: int

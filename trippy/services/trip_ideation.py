@@ -31,6 +31,80 @@ class _ConceptTemplate:
 
 _TEMPLATES = [
     _ConceptTemplate(
+        concept_id="azores-sao-miguel-short-comfort",
+        title="Azores Sao Miguel Easy Week",
+        countries=["Portugal"],
+        destinations=["Ponta Delgada", "Furnas", "Sete Cidades"],
+        recommended_duration_days=6,
+        best_season="late summer or early fall",
+        estimated_cost_band_cad="CAD 12k-20k for a couple before final flights and lodging",
+        estimated_flight_hours=5.8,
+        direct_flight_friendliness=7,
+        base_family_fit=86,
+        base_comfort=84,
+        food_score=78,
+        crowd_risk=36,
+        tags={"nature", "food", "island", "short-flight", "low-crowd", "chill"},
+        risks=[
+            "Weather can disrupt outdoor plans; keep flexible hot springs, food, and scenic backup days."
+        ],
+    ),
+    _ConceptTemplate(
+        concept_id="quebec-city-montreal-food-short",
+        title="Quebec City + Montreal Food Long Weekend",
+        countries=["Canada"],
+        destinations=["Montreal", "Quebec City"],
+        recommended_duration_days=5,
+        best_season="summer or fall",
+        estimated_cost_band_cad="CAD 5k-10k for a couple depending on hotels and dining",
+        estimated_flight_hours=1.5,
+        direct_flight_friendliness=10,
+        base_family_fit=84,
+        base_comfort=88,
+        food_score=90,
+        crowd_risk=45,
+        tags={"food", "culture", "city", "walkable", "short-flight", "low-friction"},
+        risks=[
+            "Old Quebec can feel crowded in peak windows; pick shoulder dates and central lodging."
+        ],
+    ),
+    _ConceptTemplate(
+        concept_id="mexico-city-food-short",
+        title="Mexico City Food + Neighborhoods",
+        countries=["Mexico"],
+        destinations=["Roma Norte", "Condesa", "Centro or Polanco"],
+        recommended_duration_days=6,
+        best_season="winter or early spring",
+        estimated_cost_band_cad="CAD 8k-15k for a couple depending on dining and hotel level",
+        estimated_flight_hours=5.0,
+        direct_flight_friendliness=8,
+        base_family_fit=80,
+        base_comfort=82,
+        food_score=97,
+        crowd_risk=55,
+        tags={"food", "culture", "city", "walkable", "short-flight"},
+        risks=[
+            "Neighborhood choice and private transfers matter; avoid turning this into a stressful driving trip."
+        ],
+    ),
+    _ConceptTemplate(
+        concept_id="belize-reef-jungle-short",
+        title="Belize Reef + Easy Adventure",
+        countries=["Belize"],
+        destinations=["Ambergris Caye or Caye Caulker", "San Ignacio optional"],
+        recommended_duration_days=6,
+        best_season="winter or spring dry season",
+        estimated_cost_band_cad="CAD 9k-18k for a couple before final tours and lodging",
+        estimated_flight_hours=4.8,
+        direct_flight_friendliness=6,
+        base_family_fit=82,
+        base_comfort=78,
+        food_score=76,
+        crowd_risk=42,
+        tags={"beach", "nature", "adventure", "short-flight", "water", "chill"},
+        risks=["Extra hops to islands can eat time; keep the route simple for only six days."],
+    ),
+    _ConceptTemplate(
         concept_id="portugal-food-cities-coast",
         title="Portugal Food Cities + Coast",
         countries=["Portugal"],
@@ -134,23 +208,33 @@ class TripIdeationService:
 
     def compare(self, request: TripIdeaRequest, *, limit: int = 5) -> TripComparison:
         concepts = [self._score_template(template, request) for template in _TEMPLATES]
+        filtered = _duration_filtered_concepts(concepts, request, limit)
+        if filtered:
+            concepts = filtered
         ranked = sorted(concepts, key=lambda concept: concept.total_score, reverse=True)[:limit]
         recommendation = ranked[0].concept_id if ranked else None
+        scoring_notes = [
+            "Scores are deterministic first-pass estimates, not live prices or availability.",
+            "Visa, entry, vaccination, exact fare, and listing availability require live research before booking.",
+            "Family smoothness, central lodging, food access, bed fit, and crowd/transport friction are weighted above raw price.",
+        ]
+        if request.duration_days:
+            scoring_notes.insert(
+                0,
+                f"Requested duration is {request.duration_days} day(s); suggestions are duration-fit first, not generic best trips.",
+            )
         return TripComparison(
             request=request,
             concepts=ranked,
             recommended_concept_id=recommendation,
-            scoring_notes=[
-                "Scores are deterministic first-pass estimates, not live prices or availability.",
-                "Visa, entry, vaccination, exact fare, and listing availability require live research before booking.",
-                "Family smoothness, central lodging, food access, bed fit, and crowd/transport friction are weighted above raw price.",
-            ],
+            scoring_notes=scoring_notes,
         )
 
     def _score_template(self, template: _ConceptTemplate, request: TripIdeaRequest) -> TripConcept:
         score = template.base_family_fit + template.base_comfort + template.food_score
+        party_label = "family" if request.travelers >= 3 else "couple"
         rationale = [
-            "Fits comfort-first family travel better than lowest-price optimization.",
+            f"Fits comfort-first {party_label} travel better than lowest-price optimization.",
             "Food access is scored as a major trip objective.",
         ]
         why_not = list(template.risks)
@@ -176,12 +260,22 @@ class TripIdeationService:
 
         if request.duration_days:
             diff = abs(request.duration_days - template.recommended_duration_days)
-            if diff <= 2:
-                score += 12
-                rationale.append("Duration is close to the recommended pacing.")
+            if diff == 0:
+                score += 18
+                rationale.append("Duration matches the requested trip length.")
+            elif diff <= 1:
+                score += 10
+                rationale.append("Duration is close to the requested trip length.")
+            elif diff <= 2:
+                score += 4
+                rationale.append("Duration is workable but needs pacing discipline.")
             elif request.duration_days < template.recommended_duration_days:
-                score -= 14
-                why_not.append("Requested duration may compress the itinerary too much.")
+                score -= 20 + (template.recommended_duration_days - request.duration_days) * 8
+                why_not.append(
+                    f"Ideal version is {template.recommended_duration_days} days, which does not respect the requested {request.duration_days}-day constraint without cutting scope."
+                )
+            else:
+                score -= diff * 2
 
         if request.max_flight_hours and template.estimated_flight_hours > request.max_flight_hours:
             penalty = int((template.estimated_flight_hours - request.max_flight_hours) * 4)
@@ -249,3 +343,24 @@ def _travel_burden(flight_hours: float) -> str:
     if flight_hours <= 9:
         return "meaningful"
     return "high"
+
+
+def _duration_filtered_concepts(
+    concepts: list[TripConcept],
+    request: TripIdeaRequest,
+    limit: int,
+) -> list[TripConcept]:
+    """Prefer concepts that fit the requested trip length before generic ranking.
+
+    If the user asks for six days, a nine- or ten-day concept should not show up
+    just because it scores well on food or country priors. Longer concepts are
+    only allowed back in when there are not enough duration-fit ideas.
+    """
+    if not request.duration_days:
+        return []
+    tolerance = 0 if request.duration_days <= 6 else 1 if request.duration_days <= 8 else 2
+    max_days = request.duration_days + tolerance
+    duration_fit = [
+        concept for concept in concepts if concept.recommended_duration_days <= max_days
+    ]
+    return duration_fit if len(duration_fit) >= limit else []

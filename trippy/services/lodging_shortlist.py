@@ -11,9 +11,10 @@ from trippy.models.shortlists import (
     RecommendationGrade,
     ResearchShortlistState,
     ShortlistCategory,
+    ShortlistRowStatus,
 )
 from trippy.models.sources import TravelSourceCategory
-from trippy.models.trip_planning import TripIntake
+from trippy.models.trip_planning import TripIntake, TripPlanOption
 from trippy.services.destination_profiles import profile_for_intake
 from trippy.services.live_validation import LiveValidationService
 from trippy.services.shortlist_store import (
@@ -63,6 +64,9 @@ class LodgingShortlistService:
         )
         plan = source_plan(category)
         options = _options_from_profile(profile, ctx.intake, ctx.option.regions)
+        requires_three_beds = (
+            ctx.intake.party.total_travelers >= 5 or ctx.intake.party.children >= 2
+        )
         recommended = next(
             (
                 option.option_id
@@ -79,22 +83,139 @@ class LodgingShortlistService:
             lodging_options=options,
             recommended_option_id=recommended,
             recommendation_summary=(
-                "Prioritize lodging that proves 3+ beds, parking/access clarity, and safe practical "
+                "Prioritize lodging that proves king-bed comfort, parking/access clarity, and safe practical "
+                "location before optimizing price."
+                if not requires_three_beds
+                else "Prioritize lodging that proves 3+ beds, parking/access clarity, and safe practical "
                 "location before optimizing price. Queen-bed compromises remain conditional."
             ),
             warnings=[
-                "Exact room/rental availability and bed layout must be verified live before recommendation handoff.",
-                "Two-room hotel solutions can work, but only if total comfort beats a private rental.",
+                (
+                    "Exact room availability, king-bed signal, cancellation, and location/access must be verified live."
+                    if not requires_three_beds
+                    else "Exact room/rental availability and bed layout must be verified live before recommendation handoff."
+                ),
+                (
+                    "For a couple trip, avoid overpaying for unnecessary space unless the location or experience is exceptional."
+                    if not requires_three_beds
+                    else "Two-room hotel solutions can work, but only if total comfort beats a private rental."
+                ),
             ],
             next_actions=[
-                "Open the recommended option source link and validate 5-person occupancy.",
-                "Reject any option that cannot explicitly prove 3+ beds.",
+                (
+                    f"Open the recommended option source link and validate occupancy for {ctx.intake.party.total_travelers} traveler(s)."
+                    if not requires_three_beds
+                    else "Open the recommended option source link and validate 5-person occupancy."
+                ),
+                (
+                    "Confirm king-bed or clearly worthwhile queen-bed tradeoff."
+                    if not requires_three_beds
+                    else "Reject any option that cannot explicitly prove 3+ beds."
+                ),
                 "Cross-check location and review/safety signals on Tripadvisor or Booking.com.",
             ],
+            artifacts={
+                "lodging_structure": _lodging_structure_guidance(ctx.option, ctx.intake),
+            },
         )
         LiveValidationService().validate_state(state, attempt_network=validate_live)
         if deep_research:
             SourceResearchService().research_state(state, adapter_mode=adapter_mode)
+        return self._store.save(state)
+
+    def select_lodging(self, trip_id: str, option_id: str) -> ResearchShortlistState:
+        """Promote a lodging option as the current human-preferred planning choice."""
+        ctx = ShortlistContext(
+            trip_id,
+            intake_service=self._intakes,
+            planner_service=self._planner,
+        )
+        state = self._store.load(trip_id, ShortlistCategory.LODGING)
+        if state is None:
+            state = self.build(trip_id, validate_live=False)
+        option_ids = {option.option_id for option in state.lodging_options}
+        if option_id not in option_ids:
+            raise ValueError(f"Lodging option {option_id!r} was not found for trip {trip_id!r}")
+        state.recommended_option_id = option_id
+        for option in state.lodging_options:
+            if option.option_id == option_id:
+                option.row_status = ShortlistRowStatus.APPROVED
+            elif option.row_status == ShortlistRowStatus.APPROVED:
+                option.row_status = ShortlistRowStatus.RESEARCHED
+        structure = state.artifacts.setdefault(
+            "lodging_structure",
+            _lodging_structure_guidance(ctx.option, ctx.intake),
+        )
+        if isinstance(structure, dict):
+            structure["selected_lodging_option_id"] = option_id
+            structure["data_status"] = (
+                "manual_lodging_selection"
+                if structure.get("data_status") != "manual_override"
+                else "manual_override"
+            )
+        state.next_actions.insert(
+            0,
+            "Selected lodging now drives stay-structure review, workspace timeline, and map planning.",
+        )
+        return self._store.save(state)
+
+    def update_stay_structure(
+        self,
+        trip_id: str,
+        *,
+        strategy: str,
+        night_plan: list[dict[str, object]],
+        notes: str = "",
+    ) -> ResearchShortlistState:
+        """Persist a manual one-base or split-stay lodging structure override."""
+        ctx = ShortlistContext(
+            trip_id,
+            intake_service=self._intakes,
+            planner_service=self._planner,
+        )
+        state = self._store.load(trip_id, ShortlistCategory.LODGING)
+        if state is None:
+            state = self.build(trip_id, validate_live=False)
+        normalized = _normalize_night_plan(night_plan)
+        if not normalized:
+            raise ValueError("Stay structure requires at least one region/night row.")
+        strategy_value = strategy if strategy in {"single_stay", "split_stay"} else "split_stay"
+        expected_nights = (
+            ctx.intake.duration_days or ctx.intake.duration_min_days or ctx.option.duration_days
+        )
+        total_nights = sum(int(str(item["nights"])) for item in normalized)
+        reasoning = [
+            "Manual stay structure saved from the UI.",
+            "Use this to test one-base vs split-stay tradeoffs before booking lodging.",
+        ]
+        if total_nights != expected_nights:
+            reasoning.append(
+                f"Manual stay nights total {total_nights}; current trip duration signal is {expected_nights}."
+            )
+        if notes:
+            reasoning.append(notes)
+        selected_lodging = state.recommended_option_id
+        state.artifacts["lodging_structure"] = {
+            "strategy": strategy_value,
+            "confidence": "manual",
+            "data_status": "manual_override",
+            "summary": _manual_structure_summary(strategy_value, normalized, total_nights),
+            "reasoning": reasoning,
+            "night_plan": normalized,
+            "selected_plan_option_id": ctx.option.option_id,
+            "selected_plan_title": ctx.option.title,
+            "lodging_strategy": ctx.option.lodging_strategy,
+            "selected_lodging_option_id": selected_lodging,
+            "manual_notes": notes,
+            "tradeoffs": [
+                ctx.option.island_region_movement_friction,
+                "Manual split plans still need exact check-in/out, luggage, parking, and transfer validation.",
+            ],
+        }
+        state.next_actions.insert(
+            0,
+            "Review the manual stay structure against flights, check-in/out times, driving burden, and activities.",
+        )
         return self._store.save(state)
 
     def add_candidate(
@@ -128,6 +249,10 @@ class LodgingShortlistService:
         )
         state.lodging_options.append(option)
         state.lodging_options.sort(key=lambda item: item.rank)
+        state.artifacts.setdefault(
+            "lodging_structure",
+            _lodging_structure_guidance(ctx.option, ctx.intake),
+        )
         state.recommendation_summary = (
             state.recommendation_summary
             + " User-supplied candidates are scored in the same lodging model and should be validated against sourced options."
@@ -169,9 +294,10 @@ def _options_from_profile(
     options: list[LodgingOption] = []
     for idx, target in enumerate(targets[:5], start=1):
         source = "Booking.com" if target.get("lodging_type") != "private rental" else "Airbnb"
+        query = _query_for_party(str(target["query"]), requires_three_beds)
         validation = {
-            "Tripadvisor": source_search_url("Tripadvisor", str(target["query"])),
-            "Booking.com": source_search_url("Booking.com", str(target["query"])),
+            "Tripadvisor": source_search_url("Tripadvisor", query),
+            "Booking.com": source_search_url("Booking.com", query),
         }
         is_private = target.get("lodging_type") == "private rental"
         bed_fit_known = True if is_private else None
@@ -211,7 +337,11 @@ def _options_from_profile(
                 room_layout="whole-home/unit target"
                 if is_private
                 else "hotel room or two-room setup; live-verify",
-                bed_layout="target 3+ beds; exact layout must be live-verified",
+                bed_layout=(
+                    "target 3+ beds; exact layout must be live-verified"
+                    if requires_three_beds
+                    else "king bed strongly preferred; queen compromise needs a clear upside"
+                ),
                 adult_child_fit=(
                     f"Validate {party.adults} adult(s), {party.children} child(ren), "
                     f"{traveler_count} traveler(s) total."
@@ -236,7 +366,7 @@ def _options_from_profile(
                 walkability="validate restaurants/groceries and whether driving is required every meal",
                 cancellation_notes="live-verify free cancellation/refund deadline before handoff",
                 price_band="live verify; compare total stay cost including taxes/fees",
-                deep_link=source_search_url(source, str(target["query"])),
+                deep_link=source_search_url(source, query),
                 validation_links=validation,
                 friction_score=score,
                 family_comfort_score=comfort,
@@ -257,6 +387,119 @@ def _options_from_profile(
             )
         )
     return options
+
+
+def _query_for_party(query: str, requires_three_beds: bool) -> str:
+    if requires_three_beds:
+        return query
+    replacements = {
+        "family room 3 beds": "king room",
+        "family room": "king room",
+        "3 bedroom vacation rental family": "comfortable stay king bed",
+        "family parking": "parking",
+        "family": "couple",
+        "3 beds": "king bed",
+    }
+    adjusted = query
+    for old, new in replacements.items():
+        adjusted = adjusted.replace(old, new)
+    return adjusted
+
+
+def _lodging_structure_guidance(
+    option: TripPlanOption,
+    intake: TripIntake,
+) -> dict[str, object]:
+    night_plan = [
+        {"region": region, "nights": nights}
+        for region, nights in option.nights_by_region.items()
+        if nights
+    ]
+    stay_count = len(night_plan) or len(option.regions) or 1
+    duration = intake.duration_display()
+    traveler_summary = intake.party.summary()
+    if stay_count <= 1:
+        strategy = "single_stay"
+        summary = (
+            f"One stay is the cleaner default for {duration}: it protects downtime, unpacking ease, "
+            "and first/last-day simplicity unless exact flight or lodging evidence proves a split is worth it."
+        )
+        reasoning = [
+            "The selected plan has one primary region/base.",
+            "One lodging search reduces bed-layout, parking, cancellation, and check-in risk.",
+            f"Still validate that the property comfortably fits {traveler_summary}.",
+        ]
+    else:
+        strategy = "split_stay"
+        summary = (
+            f"Split stays are expected for this selected shape: {stay_count} base(s) reduce backtracking "
+            "but add check-in, luggage, transfer, and bed-validation risk."
+        )
+        reasoning = [
+            "The selected plan covers multiple regions where one base may create wasted driving.",
+            "Only keep the split if each stay has clear comfort upside and enough nights to justify repacking.",
+            "Avoid same-day tight transfers around inter-island flights, ferries, tours, or early returns.",
+        ]
+    return {
+        "strategy": strategy,
+        "confidence": "plan-based",
+        "data_status": "inferred_from_selected_plan",
+        "summary": summary,
+        "reasoning": reasoning,
+        "night_plan": night_plan
+        or [{"region": region, "nights": "TBD"} for region in option.regions],
+        "selected_plan_option_id": option.option_id,
+        "selected_plan_title": option.title,
+        "lodging_strategy": option.lodging_strategy,
+        "tradeoffs": [
+            option.island_region_movement_friction,
+            "Exact property availability, bed layout, cancellation, and access remain manual/live-verification items.",
+        ],
+    }
+
+
+def _normalize_night_plan(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    for index, row in enumerate(rows, start=1):
+        region = str(row.get("region") or row.get("location") or "").strip()
+        if not region:
+            raise ValueError(f"Stay row {index} is missing a region/location.")
+        nights_raw = row.get("nights")
+        try:
+            nights = int(str(nights_raw))
+        except (TypeError, ValueError):
+            raise ValueError(f"Stay row {index} has invalid nights {nights_raw!r}.") from None
+        if nights < 1:
+            raise ValueError(f"Stay row {index} must have at least one night.")
+        lodging_option_id = str(row.get("lodging_option_id") or "").strip()
+        notes = str(row.get("notes") or "").strip()
+        normalized.append(
+            {
+                "region": region,
+                "nights": nights,
+                "lodging_option_id": lodging_option_id,
+                "notes": notes,
+            }
+        )
+    return normalized
+
+
+def _manual_structure_summary(
+    strategy: str,
+    night_plan: list[dict[str, object]],
+    total_nights: int,
+) -> str:
+    if strategy == "single_stay" or len(night_plan) == 1:
+        region = str(night_plan[0]["region"])
+        return (
+            f"Manual one-stay plan: {total_nights} night(s) based in {region}. "
+            "This favors unpacking ease and fewer check-in transitions."
+        )
+    labels = ", ".join(f"{item['region']} ({item['nights']}n)" for item in night_plan)
+    return (
+        f"Manual split-stay plan across {len(night_plan)} base(s): {labels}. "
+        "This can reduce backtracking, but adds luggage, parking, and check-in friction."
+    )
 
 
 def _user_candidate_option(

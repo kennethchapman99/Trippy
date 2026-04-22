@@ -134,6 +134,47 @@ def test_ui_suggest_ideas_returns_concepts_and_records_workflow(
     assert suggest_events[-1]["metrics"]["concepts"] == 3
 
 
+def test_ui_suggest_ideas_respects_six_day_prompt_and_can_capture_idea_feedback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_ui_paths(tmp_path, monkeypatch)
+    service = TrippyUIService()
+
+    result = service.suggest_ideas(
+        {
+            "party_type": "couple",
+            "travelers": 2,
+            "adults": 2,
+            "children": 0,
+            "time_of_year": "late summer",
+            "duration_days": 6,
+            "max_flight_hours": 8,
+            "goals": "great food, nature, low friction",
+            "avoidances": "huge crowds, stressful transfers",
+        }
+    )
+
+    comparison = result["comparison"]
+    assert len(comparison["concepts"]) == 3
+    assert all(concept["recommended_duration_days"] <= 6 for concept in comparison["concepts"])
+
+    too_long_feedback = service.add_feedback(
+        {
+            "workflow_id": result["workflow_id"],
+            "rating": "needs-work",
+            "notes": "One of the generated ideas ignored the 6-day constraint.",
+            "correction": "Respect the requested duration before ranking generated ideas.",
+            "future_learning": True,
+        }
+    )
+
+    assert too_long_feedback["learning_proposals"]
+    logs = service.logs()
+    assert any(event["title"] == "ui-trip-ideas-suggest" for event in logs["events"])
+    assert any(event["event_type"] == "user_feedback" for event in logs["events"])
+
+
 def test_ui_lodging_candidate_is_evaluated_in_shortlist(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -157,6 +198,10 @@ def test_ui_lodging_candidate_is_evaluated_in_shortlist(
         for option in result["shortlist"]["lodging_options"]
         if option["option_id"].startswith("user-lodging-")
     ]
+    structure = result["shortlist"]["artifacts"]["lodging_structure"]
+    assert structure["strategy"] in {"single_stay", "split_stay"}
+    assert structure["data_status"] == "inferred_from_selected_plan"
+    assert structure["night_plan"]
     assert len(candidates) == 1
     candidate = candidates[0]
     assert candidate["source"] == "Booking.com"
@@ -168,6 +213,145 @@ def test_ui_lodging_candidate_is_evaluated_in_shortlist(
 
     logs = service.logs(trip_id=trip_id)
     assert any(event["title"] == "ui-trip-plan-lodging-candidate" for event in logs["events"])
+
+
+def test_ui_can_select_lodging_and_override_stay_structure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_ui_paths(tmp_path, monkeypatch)
+    service = TrippyUIService()
+    trip_id = _create_selected_trip(service)
+    lodging = service.build_shortlist(trip_id, "lodging")
+    option_id = lodging["shortlist"]["lodging_options"][0]["option_id"]
+
+    selected = service.select_lodging({"trip_id": trip_id, "option_id": option_id})
+    assert selected["shortlist"]["recommended_option_id"] == option_id
+    chosen = next(
+        option
+        for option in selected["shortlist"]["lodging_options"]
+        if option["option_id"] == option_id
+    )
+    assert chosen["row_status"] == "approved"
+
+    updated = service.update_lodging_structure(
+        {
+            "trip_id": trip_id,
+            "strategy": "split_stay",
+            "night_plan": [
+                {
+                    "region": "Ponta Delgada",
+                    "nights": 4,
+                    "lodging_option_id": option_id,
+                    "notes": "central first base",
+                },
+                {
+                    "region": "Furnas",
+                    "nights": 3,
+                    "notes": "hot springs side of the island",
+                },
+            ],
+            "notes": "Testing whether a same-island split reduces backtracking.",
+        }
+    )
+
+    structure = updated["shortlist"]["artifacts"]["lodging_structure"]
+    assert structure["strategy"] == "split_stay"
+    assert structure["data_status"] == "manual_override"
+    assert structure["night_plan"][0]["region"] == "Ponta Delgada"
+    assert structure["night_plan"][1]["nights"] == 3
+    assert structure["selected_lodging_option_id"] == option_id
+
+    logs = service.logs(trip_id=trip_id)
+    assert any(event["title"] == "ui-trip-plan-lodging-select" for event in logs["events"])
+    assert any(event["title"] == "ui-trip-plan-lodging-structure" for event in logs["events"])
+
+
+def test_ui_lodging_for_couple_does_not_force_family_bed_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_ui_paths(tmp_path, monkeypatch)
+    service = TrippyUIService()
+    intake_result = service.create_intake(
+        {
+            "trip_name": "Azores Couple 2027",
+            "destinations": "Azores",
+            "travel_window": "September 2027 flexible",
+            "duration": "6 to 8 days",
+            "party_type": "couple",
+            "travelers": 2,
+            "adults": 2,
+            "children": 0,
+            "roster": "Ken|adult, Sue|adult",
+            "departure_airports": "YYZ",
+            "goals": "food, scenery, low friction",
+            "avoidances": "huge crowds, stressful transfers",
+        }
+    )
+    trip_id = intake_result["intake"]["trip_id"]
+    draft = service.draft_plan(trip_id)
+    service.select_plan(trip_id, draft["draft"]["recommended_option_id"])
+
+    result = service.build_shortlist(trip_id, "lodging")
+
+    first = result["shortlist"]["lodging_options"][0]
+    assert "king" in first["bed_layout"]
+    assert "family+room+3+beds" not in first["deep_link"]
+    assert "king+room" in first["deep_link"]
+
+
+def test_ui_can_approve_and_schedule_activity_for_timeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_ui_paths(tmp_path, monkeypatch)
+    service = TrippyUIService()
+    trip_id = _create_selected_trip(service)
+    activities = service.build_shortlist(trip_id, "activities")
+    option_id = activities["shortlist"]["activity_options"][0]["option_id"]
+
+    approved = service.select_activity({"trip_id": trip_id, "option_id": option_id})
+    chosen = next(
+        option
+        for option in approved["shortlist"]["activity_options"]
+        if option["option_id"] == option_id
+    )
+    assert chosen["row_status"] == "approved"
+    assert chosen["scheduled_day"] == chosen["suggested_day"]
+    assert approved["shortlist"]["artifacts"]["activity_schedule"]["entries"]
+
+    scheduled = service.schedule_activity(
+        {
+            "trip_id": trip_id,
+            "option_id": option_id,
+            "day": 4,
+            "date": "2027-06-18",
+            "start_time": "10:15",
+            "end_time": "13:00",
+            "fixed": True,
+            "notes": "Manual move after reviewing lodging base.",
+        }
+    )
+    moved = next(
+        option
+        for option in scheduled["shortlist"]["activity_options"]
+        if option["option_id"] == option_id
+    )
+    assert moved["scheduled_day"] == 4
+    assert moved["scheduled_start_time"] == "10:15"
+    assert moved["scheduled_flexibility"] == "fixed"
+
+    workspace = service.build_workspace(trip_id, create_google_sheet=False)
+    timeline = next(
+        tab for tab in workspace["workspace"]["tabs"] if tab["name"] == "Master Timeline"
+    )["rows"]
+    assert any(row[5] == "activity" and row[2] == "10:15" for row in timeline)
+    assert any("Manual move" in row[18] for row in timeline)
+
+    logs = service.logs(trip_id=trip_id)
+    assert any(event["title"] == "ui-trip-plan-activity-select" for event in logs["events"])
+    assert any(event["title"] == "ui-trip-plan-activity-schedule" for event in logs["events"])
 
 
 def test_ui_flight_candidate_is_evaluated_in_shortlist(
@@ -231,6 +415,35 @@ def test_ui_select_flight_updates_canonical_shortlist(
     assert chosen["date_viability_signal"]
     logs = service.logs(trip_id=trip_id)
     assert any(event["title"] == "ui-trip-plan-flight-select" for event in logs["events"])
+
+
+def test_ui_can_select_car_for_local_movement_planning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_ui_paths(tmp_path, monkeypatch)
+    service = TrippyUIService()
+    trip_id = _create_selected_trip(service)
+    cars = service.build_shortlist(trip_id, "cars")
+    option_id = cars["shortlist"]["car_options"][1]["option_id"]
+
+    result = service.select_car({"trip_id": trip_id, "option_id": option_id})
+
+    assert result["shortlist"]["recommended_option_id"] == option_id
+    chosen = [
+        option for option in result["shortlist"]["car_options"] if option["option_id"] == option_id
+    ][0]
+    assert chosen["row_status"] == "approved"
+    assert chosen["price_band"]
+    assert chosen["comparison_links"]["Expedia"].startswith("https://www.expedia.ca/Cars-Search")
+    assert result["shortlist"]["artifacts"]["selected_car_option_id"] == option_id
+
+    workspace = service.build_workspace(trip_id, create_google_sheet=False)
+    cars_tab = next(tab for tab in workspace["workspace"]["tabs"] if tab["name"] == "Cars")
+    assert any(row[1] == "approved" for row in cars_tab["rows"])
+
+    logs = service.logs(trip_id=trip_id)
+    assert any(event["title"] == "ui-trip-plan-car-select" for event in logs["events"])
 
 
 def test_ui_lodging_candidate_can_run_deep_source_research(

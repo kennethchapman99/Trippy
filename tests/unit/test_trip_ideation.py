@@ -38,6 +38,27 @@ def test_trip_ideas_penalize_long_flights_for_short_max() -> None:
     assert any("exceeds requested max" in reason for reason in japan.why_it_may_not_fit)
 
 
+def test_trip_ideas_respect_short_duration_before_generic_ranking() -> None:
+    comparison = TripIdeationService().compare(
+        TripIdeaRequest(
+            duration_days=6,
+            travelers=2,
+            max_flight_hours=8,
+            goals=["food", "nature", "low-friction"],
+            avoid=["too long", "huge crowds"],
+        ),
+        limit=3,
+    )
+
+    assert len(comparison.concepts) == 3
+    assert all(concept.recommended_duration_days <= 6 for concept in comparison.concepts)
+    assert not any(
+        concept.concept_id in {"mexico-city-oaxaca-food", "portugal-food-cities-coast"}
+        for concept in comparison.concepts
+    )
+    assert any("Requested duration is 6" in note for note in comparison.scoring_notes)
+
+
 def test_trip_ideas_include_country_prior_rationale() -> None:
     comparison = TripIdeationService().compare(
         TripIdeaRequest(duration_days=14, goals=["food", "culture"]),
