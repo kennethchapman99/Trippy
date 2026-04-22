@@ -202,14 +202,33 @@ def _planning_status(trip_id: str) -> dict[str, str]:
 def _shortlist_status(trip_id: str) -> dict[str, str]:
     statuses: dict[str, str] = {}
     for state in ShortlistStore().load_all(trip_id):
+        recommended = next(
+            (
+                option
+                for option in state.options_as_dicts()
+                if option.get("option_id") == state.recommended_option_id
+            ),
+            {},
+        )
         live = sum(
             1 for option in state.options_as_dicts() if option.get("row_status") == "verified_live"
         )
         researched = sum(
             1 for option in state.options_as_dicts() if option.get("row_status") == "researched"
         )
+        approved = sum(
+            1 for option in state.options_as_dicts() if option.get("row_status") == "approved"
+        )
+        label = recommended.get("recommendation_label") or "recommended"
+        validation_payload = recommended.get("validation")
+        confidence = (
+            validation_payload.get("confidence") if isinstance(validation_payload, dict) else None
+        )
+        confidence_text = f", {float(confidence):.0%} confidence" if confidence else ""
+        recommended_text = f"{label} {state.recommended_option_id}{confidence_text}"
         statuses[state.category.value] = (
-            f"{state.option_count} option(s), {live} live, {researched} researched, recommended {state.recommended_option_id}"
+            f"{state.option_count} option(s), {live} live, {researched} researched, "
+            f"{approved} approved, {recommended_text}"
             if state.recommended_option_id
             else f"{state.option_count} option(s), {live} live, {researched} researched"
         )

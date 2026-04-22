@@ -18,6 +18,7 @@ from trippy.models.shortlists import (
     ShortlistRowStatus,
     VerificationStatus,
 )
+from trippy.models.source_research import SourceAdapterCapability, SourceResearchStatus
 from trippy.models.trip_planning import (
     TravelerAgeBand,
     TravelWindow,
@@ -35,6 +36,13 @@ from trippy.services.flight_shortlist import FlightShortlistService
 from trippy.services.live_validation import LiveValidationService
 from trippy.services.lodging_shortlist import LodgingShortlistService
 from trippy.services.shortlist_store import ShortlistStore
+from trippy.services.source_research import (
+    LinkResearchAdapter,
+    OpenClawResearchAdapter,
+    PlaywrightFlightAdapter,
+    PlaywrightLodgingAdapter,
+    SourceResearchService,
+)
 from trippy.services.trip_intake import TripIntakeService
 from trippy.services.trip_map_builder import TripMapBuilder
 from trippy.services.trip_planner import TripPlannerService
@@ -340,6 +348,282 @@ def test_live_validation_marks_reachable_rows_without_claiming_inventory(
     assert any("exact inventory" in note for note in first.validation.notes)
 
 
+def test_lodging_deep_research_enriches_existing_shortlist_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    lodging = LodgingShortlistService(intake_service, planner).build(intake.trip_id)
+
+    html = """
+    <html><title>Octant Ponta Delgada</title>
+    <body>
+      <h1>Octant Ponta Delgada</h1>
+      CAD 780 total. Free cancellation. Available rooms.
+      3 bedrooms, king bed, parking available. Ponta Delgada waterfront.
+    </body></html>
+    """
+    service = SourceResearchService(
+        adapters=[
+            PlaywrightLodgingAdapter(fetcher=lambda url, timeout: (html, url, ["fixture HTML"])),
+            OpenClawResearchAdapter(enabled=False),
+            LinkResearchAdapter(),
+        ],
+        research_dir=tmp_path / "research",
+    )
+    researched = service.research_state(lodging, adapter_mode="auto")
+    first = researched.lodging_options[0]
+
+    assert first.validation.adapter_used == SourceAdapterCapability.PLAYWRIGHT.value
+    assert first.validation.verification_status in {
+        VerificationStatus.PARTIAL,
+        VerificationStatus.LIVE_VERIFIED,
+    }
+    assert first.row_status == ShortlistRowStatus.VERIFIED_LIVE
+    assert first.current_price_signal == "CAD 780 total"
+    assert first.min_three_beds_satisfied is True
+    assert first.king_bed_preference_satisfied is True
+    assert first.validation.evidence_artifacts
+    assert first.validation.extracted_fields["price_signal"] == "CAD 780 total"
+    assert researched.artifacts["deep_research"]["adapters_used"] == ["playwright"]
+
+
+def test_lodging_deep_research_falls_back_when_openclaw_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    lodging = LodgingShortlistService(intake_service, planner).build(intake.trip_id)
+
+    def blocked_fetcher(_url: str, _timeout: float) -> tuple[str, str, list[str]]:
+        raise OSError("blocked fixture")
+
+    service = SourceResearchService(
+        adapters=[
+            PlaywrightLodgingAdapter(fetcher=blocked_fetcher),
+            OpenClawResearchAdapter(enabled=False),
+            LinkResearchAdapter(),
+        ],
+        research_dir=tmp_path / "research",
+    )
+    researched = service.research_state(lodging, adapter_mode="auto")
+    first = researched.lodging_options[0]
+
+    assert first.validation.adapter_used == SourceAdapterCapability.LINK.value
+    assert first.validation.verification_status == VerificationStatus.MANUAL_REQUIRED
+    assert first.row_status == ShortlistRowStatus.RESEARCHED
+    assert "final_total_price" in first.validation.missing_fields
+    assert researched.artifacts["deep_research"]["status"] == SourceResearchStatus.PARTIAL.value
+
+
+def test_flight_deep_research_enriches_existing_shortlist_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
+
+    html = """
+    <html><body>
+      Google Flights result. Azores Airlines S4 332. Nonstop.
+      Departure 9:15 PM. Arrival 7:20 AM. Total duration 5h 55m.
+      CAD 1,180 pp. Economy. Checked bag included. Select flight.
+    </body></html>
+    """
+    service = SourceResearchService(
+        adapters=[
+            PlaywrightFlightAdapter(
+                fetcher=lambda url, timeout: (html, url, ["fixture flight HTML"])
+            ),
+            OpenClawResearchAdapter(enabled=False),
+            LinkResearchAdapter(),
+        ],
+        research_dir=tmp_path / "research",
+    )
+    researched = service.research_state(flights, adapter_mode="auto")
+    first = researched.flight_options[0]
+
+    assert first.validation.adapter_used == SourceAdapterCapability.PLAYWRIGHT.value
+    assert first.row_status == ShortlistRowStatus.VERIFIED_LIVE
+    assert first.departure_time == "9:15 PM"
+    assert first.arrival_time == "7:20 AM"
+    assert first.total_travel_duration == "5h 55m"
+    assert first.price_band == "CAD 1,180 pp"
+    assert first.stops == 0
+    assert first.flight_numbers == ["S4332"]
+    assert "exact_fare" not in first.validation.missing_fields
+    assert "exact_departure_time" not in first.validation.missing_fields
+    assert first.validation.evidence_artifacts
+    assert researched.artifacts["deep_research"]["adapters_used"] == ["playwright"]
+    assert first.recommendation_rationale
+    assert first.date_viability_signal
+
+
+def test_flight_deep_research_handles_partial_secondary_source_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
+    candidate = flights.flight_options[1]
+
+    html = """
+    <html><body>
+      Kayak.ca flight result. Air Canada AC880 with TAP Portugal TP1861.
+      9:15 PM - 2:20 PM. 10 hr 35 min. 1 stop via LIS.
+      C$1,180 per person. Carry-on included. Select.
+    </body></html>
+    """
+    service = SourceResearchService(
+        adapters=[
+            PlaywrightFlightAdapter(
+                fetcher=lambda url, timeout: (html, url, ["fixture Kayak-like flight HTML"])
+            ),
+            OpenClawResearchAdapter(enabled=False),
+            LinkResearchAdapter(),
+        ],
+        research_dir=tmp_path / "research",
+    )
+    researched = service.research_state(
+        flights,
+        adapter_mode="auto",
+        option_ids=[candidate.option_id],
+    )
+    option = next(
+        item for item in researched.flight_options if item.option_id == candidate.option_id
+    )
+
+    assert option.validation.adapter_used == SourceAdapterCapability.PLAYWRIGHT.value
+    assert option.validation.verification_status in {
+        VerificationStatus.PARTIAL,
+        VerificationStatus.LIVE_VERIFIED,
+    }
+    assert option.departure_time == "9:15 PM"
+    assert option.arrival_time == "2:20 PM"
+    assert option.total_travel_duration == "10 hr 35 min"
+    assert option.price_band == "C$1,180 per person"
+    assert option.layover_airports == ["LIS"]
+    assert option.recommendation_rationale
+    assert "check-in" in option.timing_implication.lower() or option.stops == 1
+
+
+def test_user_supplied_flight_candidate_flows_through_same_shortlist_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+
+    state = FlightShortlistService(intake_service, planner).add_candidate(
+        intake.trip_id,
+        link="https://www.google.com/travel/flights/search?tfs=sample",
+        name="Air Canada / TAP candidate",
+        notes=(
+            "Air Canada AC880 and TAP Portugal TP1861, depart 9:15 PM, arrive 2:20 PM, "
+            "duration 10h 35m, 1 stop via LIS, layover 2h 20m, CAD 1180 pp, checked bag included."
+        ),
+    )
+
+    candidate = [
+        option for option in state.flight_options if option.option_id.startswith("user-flight-")
+    ][0]
+    assert candidate.booking_source == "Google Flights"
+    assert candidate.departure_time == "9:15 PM"
+    assert candidate.arrival_time == "2:20 PM"
+    assert candidate.layover_airports == ["LIS"]
+    assert candidate.layover_duration == "2h 20m"
+    assert candidate.flight_numbers == ["AC880", "TP1861"]
+    assert candidate.price_band == "CAD 1180 pp"
+    assert candidate.row_status == ShortlistRowStatus.RESEARCHED
+    assert candidate.validation.verification_status == VerificationStatus.MANUAL_REQUIRED
+    assert candidate.date_viability_signal
+
+
+def test_selecting_flight_updates_recommendation_and_workspace_timeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+
+    state = FlightShortlistService(intake_service, planner).build(intake.trip_id)
+    selected = FlightShortlistService(intake_service, planner).select_flight(
+        intake.trip_id,
+        state.flight_options[1].option_id,
+    )
+
+    assert selected.recommended_option_id == state.flight_options[1].option_id
+    chosen = next(
+        option
+        for option in selected.flight_options
+        if option.option_id == selected.recommended_option_id
+    )
+    assert chosen.row_status == ShortlistRowStatus.APPROVED
+    assert chosen.recommendation_label.startswith("Selected")
+
+    workspace = TripWorkspaceService(intake_service, planner).prepare(
+        intake.trip_id,
+        create_google_sheet=False,
+    )
+    tabs = {tab.name: tab for tab in workspace.tabs}
+    overview = tabs["Overview"].rows
+    timeline = tabs["Master Timeline"].rows
+    assert any(row[0] == "Best Flight Rationale" and row[1] for row in overview)
+    assert any(chosen.airline in row[6] for row in timeline)
+
+
+def test_selected_plan_shapes_research_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-sao-miguel-easy")
+
+    lodging = LodgingShortlistService(intake_service, planner).build(intake.trip_id)
+    cars = CarShortlistService(intake_service, planner).build(intake.trip_id)
+    activities = ActivityShortlistService(intake_service, planner).build(intake.trip_id)
+
+    assert lodging.lodging_options
+    assert cars.car_options
+    assert activities.activity_options
+    assert all("Sao Miguel" in option.island_or_region for option in lodging.lodging_options)
+    assert all("Pico" not in option.pickup_location for option in cars.car_options)
+    assert all("Pico" not in option.island_location for option in activities.activity_options)
+    assert all("Faial" not in option.island_location for option in activities.activity_options)
+
+
 def test_trip_party_edge_cases_are_visible() -> None:
     couple = TripIntake(
         mode=TripIntakeMode.SELECTED_DESTINATION,
@@ -390,6 +674,7 @@ def _patch_planning_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(config, "PLANS_PATH", tmp_path / "plans")
     monkeypatch.setattr(config, "WORKSPACES_PATH", tmp_path / "workspaces")
     monkeypatch.setattr(config, "SHORTLISTS_PATH", tmp_path / "shortlists")
+    monkeypatch.setattr(config, "RESEARCH_PATH", tmp_path / "research")
     monkeypatch.setattr(config, "TRIPS_PATH", tmp_path / "trips")
     monkeypatch.setattr(config, "EXPORT_PATH", tmp_path / "export")
     monkeypatch.setattr(config, "LEARNING_PATH", tmp_path / "learning")

@@ -23,6 +23,7 @@ access, and a learning loop that persists lessons across trips.
 | **Validate shortlists** | Adds provenance, freshness, confidence, availability, and verification status to shortlist rows, with optional live source-link checks |
 | **Generate maps** | Creates practical Google Maps links plus JSON, GeoJSON, and KML artifacts for trip navigation |
 | **Show dashboard** | Builds a static Past Trips / Planned Trips / Ideas dashboard from canonical state |
+| **Use local UI** | Runs a bright local planning dashboard and trip wizard with stage-by-stage feedback, run logs, and review-gated learning proposals |
 | **Reconcile Gmail** | Reads booking confirmations, matches them to the correct trip, updates canonical state, pushes to Google Sheets |
 | **Audit for friction** | Proactively flags tight layovers, hotel check-in mismatches, family bed fit, city lodging burden, crowded tours, pacing issues, and missing entry/health/cash research |
 | **Self-improve** | Records workflow outcomes, retrospectives, and user feedback, then creates review-gated memory and skill proposals |
@@ -80,6 +81,7 @@ trippy/
     retrospective.py    Post-trip retrospective proposal workflow
     sheet_sync.py       Trip state ↔ Google Sheets bidirectional sync
     friction_detector.py  Deterministic rule-based risk auditing
+  ui/                   Local browser UI, wizard, assets, and service-backed API
   db/                   SQLite persistence (SQLAlchemy 2.x + Alembic)
   ingest/               Email ingestion pipeline (Gmail → confirmation → trip)
   importers/            Sheet importing pipeline (Drive → parse → canonical)
@@ -122,7 +124,7 @@ uv run trippy trip-plan select --trip-id azores-2027 --option-id azores-two-isla
 uv run trippy trip-plan workspace --trip-id azores-2027
 uv run trippy trip-map build --trip-id azores-2027
 uv run trippy trip-plan flights --trip-id azores-2027
-uv run trippy trip-plan lodging --trip-id azores-2027
+uv run trippy trip-plan lodging --trip-id azores-2027 --deep-research --adapter auto
 uv run trippy trip-plan cars --trip-id azores-2027
 uv run trippy trip-plan activities --trip-id azores-2027
 uv run trippy trip-plan propose-learning --trip-id azores-2027
@@ -132,6 +134,7 @@ uv run trippy trip-plan propose-learning --trip-id azores-2027
 # trip-plan workspace hydrates Flights, Lodging, Cars, Activities, Maps, Risks, Overview, and Master Timeline tabs.
 # Add --validate-live to shortlist or workspace commands to attempt conservative source-link validation.
 # A verified_live row means the live source page was reachable, not that final inventory/payment terms are proven.
+# Add --deep-research --adapter auto on lodging to extract read-only source observations and evidence artifacts.
 
 # Inspect country-level historical priors
 uv run trippy country-priors Japan
@@ -140,6 +143,12 @@ uv run trippy country-priors Japan
 uv run trippy sources --category flights
 uv run trippy maps <trip-id>
 uv run trippy dashboard
+
+# Start the local browser UI
+uv run trippy ui
+uv run trippy ui --port 8788 --no-open
+# UI logs are visible in the Run Log panel and as JSON at /api/logs.
+# The backend source of truth is ~/.trippy/learning/events.jsonl.
 
 # Capture post-trip lessons as review-gated proposals
 uv run trippy retro <trip-id> --worked "..." --friction "..." --hard-rule "..."
@@ -168,10 +177,17 @@ TRIPPY_INTAKES_PATH=~/.trippy/intakes
 TRIPPY_PLANS_PATH=~/.trippy/plans
 TRIPPY_WORKSPACES_PATH=~/.trippy/workspaces
 TRIPPY_SHORTLISTS_PATH=~/.trippy/shortlists
+TRIPPY_RESEARCH_PATH=~/.trippy/research
 TRIPPY_VAULT_PATH=~/.trippy/vault
+TRIPPY_EXPORT_PATH=~/.trippy/export
 TRIPPY_LEARNING_PATH=~/.trippy/learning
 TRIPPY_LIVE_VALIDATION_ENABLED=false
 TRIPPY_LIVE_VALIDATION_TIMEOUT_SECONDS=4
+TRIPPY_SOURCE_RESEARCH_TIMEOUT_SECONDS=12
+TRIPPY_SOURCE_RESEARCH_PLAYWRIGHT_ENABLED=false
+TRIPPY_SOURCE_RESEARCH_OPENCLAW_ENABLED=false
+TRIPPY_OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
+TRIPPY_OPENCLAW_COMMAND=openclaw
 GMAIL_CREDENTIALS_PATH=~/.trippy/gmail_credentials.json
 GOOGLE_TOKEN_PATH=~/.trippy/google_token.json
 ```
@@ -196,7 +212,7 @@ Six Hermes skills are registered and callable by the agent:
 ## Development
 
 ```bash
-uv run pytest            # 245 passing tests, 5 skipped
+uv run pytest            # 248 passing tests, 5 skipped
 uv run mypy trippy/      # type checking
 uv run ruff check .      # lint
 uv run ruff format .     # format
@@ -257,7 +273,7 @@ The full architecture is in place and all CI checks pass:
 - [x] Country-level priors from historical ratings and notes
 - [x] Past-trip intelligence mining and trip idea comparison
 - [x] Source registry, map artifact generation, dashboard export, and retrospective proposals
-- [x] 245 passing tests, 5 skipped, mypy clean, ruff clean
+- [x] 248 passing tests, 5 skipped, mypy clean, ruff clean
 
 ---
 

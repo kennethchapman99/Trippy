@@ -245,6 +245,12 @@ def _skill_tools() -> list[dict[str, Any]]:
                     "option_id": {"type": "string"},
                     "no_google": {"type": "boolean", "default": False},
                     "validate_live": {"type": "boolean", "default": False},
+                    "deep_research": {"type": "boolean", "default": False},
+                    "adapter": {
+                        "type": "string",
+                        "enum": ["auto", "link", "playwright", "openclaw"],
+                        "default": "auto",
+                    },
                 },
             },
         },
@@ -324,6 +330,8 @@ def _run_planning_service(inputs: dict[str, Any]) -> str:
     trip_id = str(inputs.get("trip_id") or "")
     option_id = str(inputs.get("option_id") or "")
     validate_live = bool(inputs.get("validate_live", False))
+    deep_research = bool(inputs.get("deep_research", False))
+    adapter = str(inputs.get("adapter") or "auto")
     try:
         if action == "create_intake":
             from trippy.models.trip_planning import (
@@ -407,7 +415,12 @@ def _run_planning_service(inputs: dict[str, Any]) -> str:
 
             return (
                 FlightShortlistService()
-                .build(trip_id, validate_live=validate_live)
+                .build(
+                    trip_id,
+                    validate_live=validate_live,
+                    deep_research=deep_research,
+                    adapter_mode=adapter,
+                )
                 .model_dump_json(indent=2)
             )
         if action == "lodging":
@@ -415,7 +428,12 @@ def _run_planning_service(inputs: dict[str, Any]) -> str:
 
             return (
                 LodgingShortlistService()
-                .build(trip_id, validate_live=validate_live)
+                .build(
+                    trip_id,
+                    validate_live=validate_live,
+                    deep_research=deep_research,
+                    adapter_mode=adapter,
+                )
                 .model_dump_json(indent=2)
             )
         if action == "cars":
@@ -423,7 +441,12 @@ def _run_planning_service(inputs: dict[str, Any]) -> str:
 
             return (
                 CarShortlistService()
-                .build(trip_id, validate_live=validate_live)
+                .build(
+                    trip_id,
+                    validate_live=validate_live,
+                    deep_research=deep_research,
+                    adapter_mode=adapter,
+                )
                 .model_dump_json(indent=2)
             )
         if action == "activities":
@@ -431,7 +454,12 @@ def _run_planning_service(inputs: dict[str, Any]) -> str:
 
             return (
                 ActivityShortlistService()
-                .build(trip_id, validate_live=validate_live)
+                .build(
+                    trip_id,
+                    validate_live=validate_live,
+                    deep_research=deep_research,
+                    adapter_mode=adapter,
+                )
                 .model_dump_json(indent=2)
             )
         if action == "propose_learning":

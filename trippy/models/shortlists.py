@@ -8,6 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from trippy.models.source_research import EvidenceArtifact
+
 
 class ShortlistCategory(StrEnum):
     FLIGHTS = "flights"
@@ -94,6 +96,10 @@ class SourceValidation(BaseModel):
     price_status: PriceStatus = PriceStatus.ESTIMATED_BAND
     confidence: float = 0.45
     evidence_url: str = ""
+    adapter_used: str = ""
+    research_run_id: str = ""
+    evidence_artifacts: list[EvidenceArtifact] = Field(default_factory=list)
+    extracted_fields: dict[str, Any] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
 
@@ -110,10 +116,18 @@ class FlightOption(BaseModel):
     flight_numbers: list[str] = Field(default_factory=list)
     departure_airport: str
     arrival_airport: str
+    departure_time: str = ""
+    arrival_time: str = ""
     stops: int
     layover_airports: list[str] = Field(default_factory=list)
     layover_duration: str | None = None
     total_travel_duration: str
+    timing_fit: str = ""
+    timing_implication: str = ""
+    date_viability_signal: str = ""
+    recommendation_label: str = ""
+    recommendation_rationale: str = ""
+    planning_next_step: str = ""
     fare_estimate_cad: str
     price_band: str
     baggage_cabin_notes: str

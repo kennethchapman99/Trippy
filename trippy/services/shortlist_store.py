@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -136,3 +137,41 @@ def trip_query(intake: TripIntake, extra: str) -> str:
 
 def selected_regions(option: TripPlanOption) -> str:
     return ", ".join(option.regions)
+
+
+def target_matches_selected_regions(
+    target: dict[str, str],
+    selected: list[str],
+    known_region_terms: list[str],
+) -> bool:
+    """Return whether a destination-profile target fits the selected plan geography.
+
+    Targets that do not name a known region stay eligible for generic destinations. Targets
+    that name a known region only stay eligible when the selected plan includes that region.
+    """
+    if not selected:
+        return True
+    target_text = _normalize_region_text(" ".join(str(value) for value in target.values()))
+    selected_terms = _selected_region_terms(selected)
+    if any(term and term in target_text for term in selected_terms):
+        return True
+    known_terms = [_normalize_region_text(term) for term in known_region_terms]
+    return not any(term and term in target_text for term in known_terms)
+
+
+def _normalize_region_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+    return " ".join(ascii_value.lower().replace("/", " ").replace("-", " ").split())
+
+
+def _selected_region_terms(selected: list[str]) -> list[str]:
+    terms: list[str] = []
+    for region in selected:
+        terms.append(_normalize_region_text(region))
+        raw = region.replace("/", " or ")
+        for piece in raw.split(" or "):
+            normalized = _normalize_region_text(piece)
+            if normalized:
+                terms.append(normalized)
+    return terms
