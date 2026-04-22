@@ -19,7 +19,9 @@ from trippy.services.shortlist_store import (
     source_plan,
     source_plan_payload,
     source_search_url,
+    target_matches_selected_regions,
 )
+from trippy.services.source_research import SourceResearchService
 from trippy.services.trip_intake import TripIntakeService
 from trippy.services.trip_planner import TripPlannerService
 
@@ -42,6 +44,8 @@ class CarShortlistService:
         trip_id: str,
         *,
         validate_live: bool | None = None,
+        deep_research: bool = False,
+        adapter_mode: str = "auto",
     ) -> ResearchShortlistState:
         ctx = ShortlistContext(
             trip_id,
@@ -50,7 +54,7 @@ class CarShortlistService:
         )
         profile = profile_for_intake(ctx.intake)
         plan = source_plan(TravelSourceCategory.CAR_RENTALS)
-        options = _options_from_profile(profile, ctx.intake)
+        options = _options_from_profile(profile, ctx.intake, ctx.option.regions)
         state = ResearchShortlistState(
             trip_id=trip_id,
             category=ShortlistCategory.CARS,
@@ -73,11 +77,25 @@ class CarShortlistService:
             ],
         )
         LiveValidationService().validate_state(state, attempt_network=validate_live)
+        if deep_research:
+            SourceResearchService().research_state(state, adapter_mode=adapter_mode)
         return self._store.save(state)
 
 
-def _options_from_profile(profile: object, intake: TripIntake) -> list[CarOption]:
-    targets = getattr(profile, "car_search_targets", [])
+def _options_from_profile(
+    profile: object,
+    intake: TripIntake,
+    selected_regions: list[str],
+) -> list[CarOption]:
+    targets = [
+        target
+        for target in getattr(profile, "car_search_targets", [])
+        if target_matches_selected_regions(
+            target,
+            selected_regions,
+            getattr(profile, "island_or_region_terms", []),
+        )
+    ]
     party = intake.party
     traveler_count = party.total_travelers
     sources = ["Booking.com", "Expedia", "Kayak.ca"]

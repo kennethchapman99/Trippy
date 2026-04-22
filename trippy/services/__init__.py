@@ -14,6 +14,7 @@ from trippy.services.retrospective import RetrospectiveService
 from trippy.services.setup import SetupDoctor
 from trippy.services.skill_learning import SkillLearningService
 from trippy.services.source_registry import TravelSourceRegistry
+from trippy.services.source_research import SourceResearchService
 from trippy.services.travel_intelligence import TravelIntelligenceService
 from trippy.services.trip_ideation import TripIdeationService
 from trippy.services.trip_intake import TripIntakeService
@@ -35,6 +36,7 @@ __all__ = [
     "RetrospectiveService",
     "SetupDoctor",
     "SkillLearningService",
+    "SourceResearchService",
     "TravelSourceRegistry",
     "TripIdeationService",
     "TripIntakeService",

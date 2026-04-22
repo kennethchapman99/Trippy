@@ -68,10 +68,11 @@ class LiveValidationService:
         validation.source_name = source_name
         validation.source_type = _source_type(option)
         validation.evidence_url = url
-        validation.missing_fields = _missing_fields(option, state)
-        validation.notes = _base_notes(option, state)
+        validation.missing_fields = _missing_fields(option, state, validation)
+        validation.notes = _dedupe_notes([*_base_notes(option, state), *validation.notes])
         if not attempt_network:
-            validation.verification_status = VerificationStatus.MANUAL_REQUIRED
+            if validation.verification_status != VerificationStatus.LIVE_VERIFIED:
+                validation.verification_status = VerificationStatus.MANUAL_REQUIRED
             validation.freshness_status = FreshnessStatus.UNKNOWN
             validation.availability_status = AvailabilityStatus.UNKNOWN
             validation.price_status = _price_status(option)
@@ -87,7 +88,8 @@ class LiveValidationService:
         validation.notes.append(message)
         if ok:
             validation.freshness_status = FreshnessStatus.CURRENT
-            validation.verification_status = VerificationStatus.LINK_VALIDATED
+            if validation.verification_status != VerificationStatus.LIVE_VERIFIED:
+                validation.verification_status = VerificationStatus.LINK_VALIDATED
             validation.availability_status = AvailabilityStatus.SEARCH_AVAILABLE
             validation.confidence = min(0.82, max(validation.confidence, 0.62))
             option.row_status = ShortlistRowStatus.VERIFIED_LIVE
@@ -168,7 +170,11 @@ def _base_notes(option: Any, state: ResearchShortlistState) -> list[str]:
     return notes
 
 
-def _missing_fields(option: Any, state: ResearchShortlistState) -> list[str]:
+def _missing_fields(
+    option: Any,
+    state: ResearchShortlistState,
+    validation: SourceValidation,
+) -> list[str]:
     missing: list[str] = []
     if state.category.value == "flights":
         if not getattr(option, "flight_numbers", []):
@@ -185,4 +191,35 @@ def _missing_fields(option: Any, state: ResearchShortlistState) -> list[str]:
         )
     elif state.category.value == "activities":
         missing.extend(["exact_schedule", "remaining_capacity", "operator_safety_details"])
-    return missing
+    return _remove_extracted_fields(missing, validation.extracted_fields)
+
+
+def _remove_extracted_fields(missing: list[str], extracted: dict[str, Any]) -> list[str]:
+    resolved = {
+        "price_signal": {"exact_fare", "final_total_price"},
+        "departure_time": {"exact_departure_time"},
+        "arrival_time": {"exact_arrival_time"},
+        "total_duration": {"total_duration"},
+        "flight_numbers": {"flight_numbers"},
+        "baggage_signal": {"baggage_terms"},
+        "cabin_signal": {"fare_rules"},
+        "availability_signal": {"exact_availability"},
+        "cancellation_signal": {"cancellation_deadline"},
+        "bed_layout_signal": {"bed_layout"},
+        "min_three_beds_satisfied": {"min_three_beds_satisfied"},
+        "king_bed_preference_satisfied": {"king_bed_preference_satisfied"},
+        "parking_signal": {"parking_access"},
+    }
+    remaining = set(missing)
+    for field, removes in resolved.items():
+        if field in extracted:
+            remaining -= removes
+    return sorted(remaining)
+
+
+def _dedupe_notes(notes: list[str]) -> list[str]:
+    deduped: list[str] = []
+    for note in notes:
+        if note and note not in deduped:
+            deduped.append(note)
+    return deduped

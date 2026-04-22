@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Trippy</title>
+    <link rel="icon" href="/static/trippy-logo.png">
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand-lockup">
+        <img src="/static/trippy-logo.png" alt="Trippy logo" class="brand-logo">
+        <div>
+          <p class="eyebrow">Chapman family travel</p>
+          <h1>Trippy</h1>
+        </div>
+      </div>
+      <nav class="top-actions" aria-label="Primary">
+        <button id="refreshButton" type="button">Refresh</button>
+        <a id="dashboardJsonLink" href="/api/state">Data</a>
+        <a id="logsJsonLink" href="/api/logs">Logs</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="command-band">
+        <div>
+          <p class="eyebrow">Active trip</p>
+          <h2 id="activeTripTitle">Loading trips</h2>
+          <p id="activeTripSubhead" class="subhead"></p>
+        </div>
+        <div class="status-strip" id="statusStrip"></div>
+      </section>
+
+      <section class="layout">
+        <aside class="trip-rail" aria-label="Trips">
+          <div class="rail-head">
+            <h2>Trips</h2>
+            <button id="newTripButton" type="button">New</button>
+          </div>
+          <div id="tripList" class="trip-list"></div>
+        </aside>
+
+        <section class="wizard-panel" aria-label="Planning wizard">
+          <div class="wizard-head">
+            <div>
+              <p class="eyebrow">Planner</p>
+              <h2>Trip Wizard</h2>
+            </div>
+            <p id="nextStep" class="next-step">Create or select a trip.</p>
+          </div>
+
+          <div class="stage-tabs" id="stageTabs"></div>
+          <div id="stageBody"></div>
+        </section>
+      </section>
+
+      <section class="visual-section">
+        <div class="section-head">
+          <h2>Current Picks</h2>
+          <span id="pickCount">0 ready</span>
+        </div>
+        <div id="pickGrid" class="pick-grid"></div>
+      </section>
+
+      <section class="visual-section">
+        <div class="section-head">
+          <h2>Run Log</h2>
+          <span id="logCount">0 events</span>
+        </div>
+        <p id="backendLogPath" class="log-path"></p>
+        <div id="runLog" class="run-log"></div>
+      </section>
+
+      <section class="visual-section">
+        <div class="section-head">
+          <h2>Ideas Bucket</h2>
+          <span id="ideaCount">0 ideas</span>
+        </div>
+        <div id="ideaGrid" class="pick-grid"></div>
+      </section>
+    </main>
+
+    <template id="feedbackTemplate">
+      <form class="feedback-form">
+        <input type="hidden" name="workflow_id">
+        <div class="rating-row" role="group" aria-label="Feedback rating">
+          <label><input type="radio" name="rating" value="helpful" checked> Helpful</label>
+          <label><input type="radio" name="rating" value="needs-work"> Needs work</label>
+          <label><input type="radio" name="rating" value="wrong"> Wrong</label>
+        </div>
+        <label>
+          Notes
+          <textarea name="notes" rows="2" placeholder="What should Trippy remember about this stage?"></textarea>
+        </label>
+        <label>
+          Correction
+          <textarea name="correction" rows="2" placeholder="What should change before the next step?"></textarea>
+        </label>
+        <label class="check-row">
+          <input type="checkbox" name="future_learning">
+          Propose this as future learning
+        </label>
+        <button type="submit">Send feedback</button>
+        <p class="feedback-result"></p>
+      </form>
+    </template>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -107,6 +107,10 @@ class LearningEventStore:
         self._append_event("workflow_outcome", outcome.model_dump(mode="json"))
         return outcome
 
+    def record_event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Append a structured operational event to the learning log."""
+        return self._append_event(event_type, payload)
+
     def add_feedback(self, feedback: UserFeedback) -> list[LearningProposal]:
         self._append_event("user_feedback", feedback.model_dump(mode="json"))
         proposals = self._proposals_from_feedback(feedback)
@@ -130,6 +134,13 @@ class LearningEventStore:
             if event.get("event_type") == "workflow_outcome":
                 workflows.append(WorkflowOutcome.model_validate(event["payload"]))
         return workflows
+
+    def list_events(self, limit: int | None = None) -> list[dict[str, Any]]:
+        """Return raw append-only events for diagnostics and UI run logs."""
+        events = self._read_events()
+        if limit is None:
+            return events
+        return events[-max(limit, 0) :]
 
     def get_workflow(self, workflow_id: str) -> WorkflowOutcome | None:
         for outcome in reversed(self.list_workflows()):
@@ -299,7 +310,7 @@ class LearningEventStore:
         entry = MemoryStore(self._memory_path).get(key)
         return entry.model_dump(mode="json") if entry else None
 
-    def _append_event(self, event_type: str, payload: dict[str, Any]) -> None:
+    def _append_event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         self._dir.mkdir(parents=True, exist_ok=True)
         event = {
             "event_id": _new_id("evt"),
@@ -309,6 +320,7 @@ class LearningEventStore:
         }
         with self._events_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(event, sort_keys=True) + "\n")
+        return event
 
     def _read_events(self) -> list[dict[str, Any]]:
         if not self._events_path.exists():
@@ -345,4 +357,5 @@ EventPayload = Literal[
     "learning_proposal",
     "learning_proposal_approved",
     "learning_proposal_rejected",
+    "ui_error",
 ]

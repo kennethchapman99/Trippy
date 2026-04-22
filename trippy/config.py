@@ -30,6 +30,7 @@ INTAKES_PATH: Path = _expand("TRIPPY_INTAKES_PATH", "~/.trippy/intakes")
 PLANS_PATH: Path = _expand("TRIPPY_PLANS_PATH", "~/.trippy/plans")
 WORKSPACES_PATH: Path = _expand("TRIPPY_WORKSPACES_PATH", "~/.trippy/workspaces")
 SHORTLISTS_PATH: Path = _expand("TRIPPY_SHORTLISTS_PATH", "~/.trippy/shortlists")
+RESEARCH_PATH: Path = _expand("TRIPPY_RESEARCH_PATH", "~/.trippy/research")
 VAULT_PATH: Path = _expand("TRIPPY_VAULT_PATH", "~/.trippy/vault")
 EXPORT_PATH: Path = _expand("TRIPPY_EXPORT_PATH", "~/.trippy/export")
 LEARNING_PATH: Path = _expand("TRIPPY_LEARNING_PATH", "~/.trippy/learning")
@@ -51,6 +52,13 @@ LIVE_VALIDATION_ENABLED: bool = _bool("TRIPPY_LIVE_VALIDATION_ENABLED", False)
 LIVE_VALIDATION_TIMEOUT_SECONDS: float = float(
     os.environ.get("TRIPPY_LIVE_VALIDATION_TIMEOUT_SECONDS", "4")
 )
+SOURCE_RESEARCH_TIMEOUT_SECONDS: float = float(
+    os.environ.get("TRIPPY_SOURCE_RESEARCH_TIMEOUT_SECONDS", "12")
+)
+SOURCE_RESEARCH_PLAYWRIGHT_ENABLED: bool = _bool("TRIPPY_SOURCE_RESEARCH_PLAYWRIGHT_ENABLED", False)
+SOURCE_RESEARCH_OPENCLAW_ENABLED: bool = _bool("TRIPPY_SOURCE_RESEARCH_OPENCLAW_ENABLED", False)
+OPENCLAW_GATEWAY_URL: str = os.environ.get("TRIPPY_OPENCLAW_GATEWAY_URL", "http://127.0.0.1:18789")
+OPENCLAW_COMMAND: str = os.environ.get("TRIPPY_OPENCLAW_COMMAND", "openclaw")
 
 DATABASE_URL: str = f"sqlite:///{DB_PATH}"
 

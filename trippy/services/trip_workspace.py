@@ -260,7 +260,10 @@ class TripWorkspaceService:
                     "Rank",
                     "Status",
                     "Recommended",
+                    "Recommendation",
                     "Airline",
+                    "Departure",
+                    "Arrival",
                     "Route",
                     "Stops",
                     "Layovers",
@@ -268,6 +271,8 @@ class TripWorkspaceService:
                     "Price Band",
                     "Source",
                     "Traveler Fit",
+                    "Timing Implication",
+                    "Date Fit",
                     "Friction Score",
                     "Rationale / Notes",
                     "Deep Link",
@@ -275,6 +280,7 @@ class TripWorkspaceService:
                     "Freshness",
                     "Availability",
                     "Confidence",
+                    "Evidence",
                     "Missing / Uncertain",
                 ],
                 rows=_flight_rows(shortlists.get("flights")),
@@ -305,6 +311,8 @@ class TripWorkspaceService:
                     "Freshness",
                     "Availability",
                     "Confidence",
+                    "Adapter",
+                    "Evidence",
                     "Fit Category",
                     "Missing / Uncertain",
                 ],
@@ -724,6 +732,8 @@ def _overview_rows(
         ["Crowd Tolerance", intake.crowd_tolerance.value],
         ["Food Priority", intake.food_priority.value],
         ["Best Flight", _option_summary(best_flight)],
+        ["Best Flight Rationale", getattr(best_flight, "recommendation_rationale", "")],
+        ["Best Flight Date Fit", getattr(best_flight, "date_viability_signal", "")],
         ["Best Lodging", _option_summary(best_lodging)],
         ["Best Car", _option_summary(best_car)],
         ["Best Activities", "; ".join(_option_summary(option) for option in activities)],
@@ -742,7 +752,10 @@ def _flight_rows(state: Any | None) -> list[list[Any]]:
                 option.rank,
                 option.row_status.value,
                 _yes_no(option.option_id == recommended_id),
+                option.recommendation_label,
                 option.airline,
+                option.departure_time,
+                option.arrival_time,
                 f"{option.departure_airport} to {option.arrival_airport}",
                 option.stops,
                 ", ".join(option.layover_airports) or "",
@@ -750,6 +763,8 @@ def _flight_rows(state: Any | None) -> list[list[Any]]:
                 option.price_band,
                 option.booking_source,
                 option.traveler_fit,
+                option.timing_implication,
+                option.date_viability_signal,
                 option.friction_score,
                 _notes(option.tradeoffs, option.friction_flags, option.confidence_notes),
                 option.deep_link,
@@ -757,6 +772,7 @@ def _flight_rows(state: Any | None) -> list[list[Any]]:
                 option.validation.freshness_status.value,
                 option.validation.availability_status.value,
                 f"{option.validation.confidence:.0%}",
+                _evidence_summary(option.validation.evidence_artifacts),
                 ", ".join(option.validation.missing_fields),
             ]
         )
@@ -774,7 +790,14 @@ def _flight_rows(state: Any | None) -> list[list[Any]]:
             "",
             "",
             "",
+            "",
+            "",
+            "",
+            "",
+            "",
             "Run trip-plan flights.",
+            "",
+            "",
             "",
             "",
             "",
@@ -813,6 +836,8 @@ def _lodging_rows(state: Any | None) -> list[list[Any]]:
                 option.validation.freshness_status.value,
                 option.validation.availability_status.value,
                 f"{option.validation.confidence:.0%}",
+                option.validation.adapter_used,
+                _evidence_summary(option.validation.evidence_artifacts),
                 option.fit_category.value,
                 ", ".join(option.validation.missing_fields),
             ]
@@ -843,8 +868,19 @@ def _lodging_rows(state: Any | None) -> list[list[Any]]:
             "",
             "",
             "",
+            "",
+            "",
         ]
     ]
+
+
+def _evidence_summary(artifacts: list[Any]) -> str:
+    values = []
+    for artifact in artifacts[:3]:
+        path = getattr(artifact, "path", "")
+        url = getattr(artifact, "url", "")
+        values.append(path or url)
+    return "; ".join(value for value in values if value)
 
 
 def _car_rows(state: Any | None) -> list[list[Any]]:
@@ -1042,6 +1078,8 @@ def _timeline_rows(
             provider=getattr(best_flight, "booking_source", ""),
             status="recommended" if best_flight is not None else "seeded",
             fixed="flexible",
+            start_time=getattr(best_flight, "departure_time", ""),
+            end_time=getattr(best_flight, "arrival_time", ""),
             travel_time=getattr(best_flight, "total_travel_duration", ""),
             buffer_after="same-day lodging/car buffer required",
             friction_flags=_combine_flags(
@@ -1049,7 +1087,11 @@ def _timeline_rows(
                 ["arrival/check-in timing unverified", "first-day pacing risk"],
             ),
             confidence=_option_confidence(best_flight),
-            notes=getattr(best_flight, "traveler_fit", ""),
+            notes=_notes(
+                [getattr(best_flight, "recommendation_rationale", "")],
+                [getattr(best_flight, "timing_implication", "")],
+                [getattr(best_flight, "date_viability_signal", "")],
+            ),
             link=getattr(best_flight, "deep_link", ""),
         )
     )
@@ -1169,6 +1211,8 @@ def _timeline_row(
     provider: str = "",
     status: str = "seeded",
     fixed: str = "flexible",
+    start_time: str = "",
+    end_time: str = "",
     travel_time: str = "",
     buffer_before: str = "",
     buffer_after: str = "",
@@ -1180,8 +1224,8 @@ def _timeline_row(
     return [
         day,
         str(date_value) if date_value else "",
-        "",
-        "",
+        start_time,
+        end_time,
         travel_time,
         event_type,
         title,

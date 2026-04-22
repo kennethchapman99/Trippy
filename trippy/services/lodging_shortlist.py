@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from trippy.models.shortlists import (
     LiveDataStatus,
     LodgingFitCategory,
@@ -20,7 +22,9 @@ from trippy.services.shortlist_store import (
     source_plan,
     source_plan_payload,
     source_search_url,
+    target_matches_selected_regions,
 )
+from trippy.services.source_research import SourceResearchService
 from trippy.services.trip_intake import TripIntakeService
 from trippy.services.trip_planner import TripPlannerService
 
@@ -43,6 +47,8 @@ class LodgingShortlistService:
         trip_id: str,
         *,
         validate_live: bool | None = None,
+        deep_research: bool = False,
+        adapter_mode: str = "auto",
     ) -> ResearchShortlistState:
         ctx = ShortlistContext(
             trip_id,
@@ -56,7 +62,7 @@ class LodgingShortlistService:
             else TravelSourceCategory.CITY_LODGING
         )
         plan = source_plan(category)
-        options = _options_from_profile(profile, ctx.intake)
+        options = _options_from_profile(profile, ctx.intake, ctx.option.regions)
         recommended = next(
             (
                 option.option_id
@@ -87,11 +93,73 @@ class LodgingShortlistService:
             ],
         )
         LiveValidationService().validate_state(state, attempt_network=validate_live)
+        if deep_research:
+            SourceResearchService().research_state(state, adapter_mode=adapter_mode)
+        return self._store.save(state)
+
+    def add_candidate(
+        self,
+        trip_id: str,
+        *,
+        link: str,
+        notes: str = "",
+        name: str = "",
+        validate_live: bool | None = None,
+        deep_research: bool = False,
+        adapter_mode: str = "auto",
+    ) -> ResearchShortlistState:
+        """Add a user-supplied lodging candidate into the canonical lodging shortlist."""
+        if not link.strip() and not notes.strip():
+            raise ValueError("lodging candidate requires a link or notes")
+        ctx = ShortlistContext(
+            trip_id,
+            intake_service=self._intakes,
+            planner_service=self._planner,
+        )
+        state = self._store.load(trip_id, ShortlistCategory.LODGING)
+        if state is None:
+            state = self.build(trip_id, validate_live=False)
+        option = _user_candidate_option(
+            state,
+            ctx.intake,
+            link=link.strip(),
+            notes=notes.strip(),
+            name=name.strip(),
+        )
+        state.lodging_options.append(option)
+        state.lodging_options.sort(key=lambda item: item.rank)
+        state.recommendation_summary = (
+            state.recommendation_summary
+            + " User-supplied candidates are scored in the same lodging model and should be validated against sourced options."
+        )
+        state.next_actions.insert(
+            0,
+            "Review the user-supplied lodging candidate against bed, location, parking, cancellation, and value.",
+        )
+        LiveValidationService().validate_state(state, attempt_network=validate_live)
+        if deep_research:
+            SourceResearchService().research_state(
+                state,
+                adapter_mode=adapter_mode,
+                option_ids=[option.option_id],
+            )
         return self._store.save(state)
 
 
-def _options_from_profile(profile: object, intake: TripIntake) -> list[LodgingOption]:
-    targets = getattr(profile, "lodging_search_targets", [])
+def _options_from_profile(
+    profile: object,
+    intake: TripIntake,
+    selected_regions: list[str],
+) -> list[LodgingOption]:
+    targets = [
+        target
+        for target in getattr(profile, "lodging_search_targets", [])
+        if target_matches_selected_regions(
+            target,
+            selected_regions,
+            getattr(profile, "island_or_region_terms", []),
+        )
+    ]
     party = intake.party
     traveler_count = party.total_travelers
     requires_three_beds = traveler_count >= 5 or getattr(party, "children", 0) >= 2
@@ -189,6 +257,164 @@ def _options_from_profile(profile: object, intake: TripIntake) -> list[LodgingOp
             )
         )
     return options
+
+
+def _user_candidate_option(
+    state: ResearchShortlistState,
+    intake: TripIntake,
+    *,
+    link: str,
+    notes: str,
+    name: str,
+) -> LodgingOption:
+    party = intake.party
+    traveler_count = party.total_travelers
+    source = _source_from_link(link)
+    lower = f"{link} {notes} {name}".lower()
+    is_private = any(token in lower for token in ["airbnb", "vrbo", "villa", "home", "rental"])
+    three_beds = _mentions_three_beds(lower)
+    king = True if "king" in lower else None
+    parking_known = "parking" in lower or "park" in lower
+    privacy_needed = bool(party.separate_rooms_preferred or party.privacy_needs)
+    flags = []
+    if traveler_count >= 5 and three_beds is not True:
+        flags.append("user candidate does not yet prove 3+ beds for the roster")
+    if king is None:
+        flags.append("king-bed preference not proven")
+    if privacy_needed and not is_private:
+        flags.append("privacy/separate-room fit is not proven")
+    if not parking_known:
+        flags.append("parking/access practicality not proven")
+    if "cancel" not in lower and "refundable" not in lower:
+        flags.append("cancellation terms not provided")
+
+    rank = max((option.rank for option in state.lodging_options), default=0) + 1
+    option_id = f"user-lodging-{rank}"
+    fit_category = (
+        LodgingFitCategory.PREFERRED
+        if three_beds and (king or traveler_count < 5) and parking_known
+        else LodgingFitCategory.COMFORTABLE
+        if three_beds
+        else LodgingFitCategory.TECHNICAL
+    )
+    friction = min(90, 18 + len(flags) * 10)
+    comfort = max(35, 88 - len(flags) * 9 + (4 if is_private else 0))
+    display_name = name or _name_from_link(link) or "User lodging candidate"
+    price = _price_signal(notes)
+    return LodgingOption(
+        option_id=option_id,
+        rank=rank,
+        source=source,
+        name=display_name,
+        location_area=_location_hint(notes, intake),
+        island_or_region=", ".join(intake.destination_seeds) or "destination TBD",
+        lodging_type="private rental" if is_private else "hotel/listing candidate",
+        room_layout="user-supplied candidate; parse and validate exact room/unit terms",
+        bed_layout="user notes suggest 3+ beds" if three_beds else "bed layout not proven from supplied notes",
+        adult_child_fit=(
+            f"Evaluate for {party.adults} adult(s), {party.children} child(ren), "
+            f"{traveler_count} traveler(s) total."
+        ),
+        traveler_roster_supported=True if three_beds else None,
+        min_three_beds_satisfied=True if three_beds else None,
+        king_bed_preference_satisfied=king,
+        family_of_five_fit=True if traveler_count >= 5 and three_beds else None,
+        separate_room_privacy_fit=True if is_private and privacy_needed else None,
+        occupancy_fit=(
+            f"User candidate may fit {traveler_count} traveler(s); exact occupancy must be confirmed on source."
+        ),
+        comfort_fit=_comfort_fit(fit_category, party.summary()),
+        fit_category=fit_category,
+        bed_layout_confidence=0.68 if three_beds else 0.22,
+        current_availability_signal="user-supplied; live source still required",
+        current_price_signal=price or "not supplied",
+        parking_practicality="parking mentioned; verify exact access" if parking_known else "not proven",
+        driving_practicality="validate road access, driveway/loading, and daily drive burden",
+        walkability="validate food/grocery/activity access from exact location",
+        cancellation_notes="mentioned in notes; verify deadline" if "cancel" in lower else "not supplied",
+        price_band=price or "not supplied",
+        deep_link=link,
+        validation_links={
+            "Tripadvisor": source_search_url("Tripadvisor", f"{display_name} {intake.travel_window.display()}"),
+            "Booking.com": source_search_url("Booking.com", f"{display_name} {intake.travel_window.display()}"),
+        },
+        friction_score=friction,
+        family_comfort_score=comfort,
+        recommendation_grade=RecommendationGrade.GOOD
+        if fit_category in {LodgingFitCategory.PREFERRED, LodgingFitCategory.COMFORTABLE}
+        else RecommendationGrade.CONDITIONAL,
+        tradeoffs=[
+            "User-supplied option is compared in the same shortlist model as sourced options.",
+            "Promote only after exact bed layout, total price, cancellation, location, and access are verified.",
+        ],
+        friction_flags=flags,
+        confidence_notes=[
+            "Candidate came from user input, not autonomous sourcing.",
+            notes or "No extra user notes supplied.",
+        ],
+        live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
+    )
+
+
+def _source_from_link(link: str) -> str:
+    host = urlparse(link).netloc.lower()
+    if "booking" in host:
+        return "Booking.com"
+    if "airbnb" in host:
+        return "Airbnb"
+    if "vrbo" in host:
+        return "VRBO"
+    if "expedia" in host:
+        return "Expedia"
+    if "tripadvisor" in host:
+        return "Tripadvisor"
+    return "User supplied"
+
+
+def _name_from_link(link: str) -> str:
+    parsed = urlparse(link)
+    pieces = [piece for piece in parsed.path.split("/") if piece]
+    if pieces:
+        return pieces[-1].replace("-", " ").replace("_", " ").title()[:80]
+    return parsed.netloc or ""
+
+
+def _mentions_three_beds(text: str) -> bool:
+    return any(
+        token in text
+        for token in [
+            "3 bed",
+            "three bed",
+            "3-bedroom",
+            "3 bedroom",
+            "3br",
+            "4 bed",
+            "4-bedroom",
+            "4 bedroom",
+            "4br",
+        ]
+    )
+
+
+def _price_signal(notes: str) -> str:
+    tokens = [token.strip(",.;") for token in notes.replace("\n", " ").split()]
+    for index, token in enumerate(tokens):
+        upper = token.upper()
+        if "$" in token:
+            return token
+        if upper in {"CAD", "USD", "EUR"} and index + 1 < len(tokens):
+            return f"{token} {tokens[index + 1]}"
+        if upper.startswith(("CAD", "USD", "EUR")):
+            return token
+    return ""
+
+
+def _location_hint(notes: str, intake: TripIntake) -> str:
+    if notes:
+        first = notes.split(".")[0].strip()
+        if first:
+            return first[:90]
+    return ", ".join(intake.destination_seeds) or "location TBD"
 
 
 def _fit_category(

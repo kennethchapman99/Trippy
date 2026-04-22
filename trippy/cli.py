@@ -69,6 +69,22 @@ def run_agent() -> None:
     agent_main()
 
 
+@app.command("ui")
+def run_ui(
+    host: str = typer.Option("127.0.0.1", "--host", help="Host for the local UI server"),
+    port: int = typer.Option(8787, "--port", help="Port for the local UI server"),
+    open_browser: bool = typer.Option(
+        True,
+        "--open/--no-open",
+        help="Open the UI in the default browser",
+    ),
+) -> None:
+    """Start the local Trippy planning UI."""
+    from trippy.ui.server import serve_ui
+
+    serve_ui(host=host, port=port, open_browser=open_browser)
+
+
 @app.command("thin-slice")
 def thin_slice(
     real_google: bool = typer.Option(False, "--real-google", help="Use real Google credentials"),
@@ -573,6 +589,16 @@ def trip_plan_flights(
         "--validate-live",
         help="Attempt live source link validation for shortlist rows",
     ),
+    deep_research: bool = typer.Option(
+        False,
+        "--deep-research",
+        help="Run read-only source adapters for richer evidence where supported",
+    ),
+    adapter: str = typer.Option(
+        "auto",
+        "--adapter",
+        help="Source adapter mode: auto, link, playwright, or openclaw",
+    ),
     propose_learning: bool = typer.Option(
         False,
         "--propose-learning",
@@ -587,8 +613,33 @@ def trip_plan_flights(
         trip_id=trip_id,
         workflow_name="trip-plan-flights",
         summary="Generated flight shortlist",
-        state=FlightShortlistService().build(trip_id, validate_live=validate_live),
+        state=FlightShortlistService().build(
+            trip_id,
+            validate_live=validate_live,
+            deep_research=deep_research,
+            adapter_mode=adapter,
+        ),
         propose_learning=propose_learning,
+        json_output=json_output,
+    )
+
+
+@trip_plan_app.command("select-flight")
+def trip_plan_select_flight(
+    trip_id: str = typer.Option(..., "--trip-id", help="Trip intake ID"),
+    option_id: str = typer.Option(..., "--option-id", help="Flight option ID to use for planning"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """Select a flight option so timing can drive workspace and timeline planning."""
+    from trippy.services.flight_shortlist import FlightShortlistService
+
+    state = FlightShortlistService().select_flight(trip_id, option_id)
+    _run_shortlist_command(
+        trip_id=trip_id,
+        workflow_name="trip-plan-select-flight",
+        summary=f"Selected flight {option_id}",
+        state=state,
+        propose_learning=False,
         json_output=json_output,
     )
 
@@ -600,6 +651,16 @@ def trip_plan_lodging(
         False,
         "--validate-live",
         help="Attempt live source link validation for shortlist rows",
+    ),
+    deep_research: bool = typer.Option(
+        False,
+        "--deep-research",
+        help="Run read-only source adapters for richer lodging evidence",
+    ),
+    adapter: str = typer.Option(
+        "auto",
+        "--adapter",
+        help="Source adapter mode: auto, link, playwright, or openclaw",
     ),
     propose_learning: bool = typer.Option(
         False,
@@ -615,7 +676,12 @@ def trip_plan_lodging(
         trip_id=trip_id,
         workflow_name="trip-plan-lodging",
         summary="Generated lodging shortlist",
-        state=LodgingShortlistService().build(trip_id, validate_live=validate_live),
+        state=LodgingShortlistService().build(
+            trip_id,
+            validate_live=validate_live,
+            deep_research=deep_research,
+            adapter_mode=adapter,
+        ),
         propose_learning=propose_learning,
         json_output=json_output,
     )
@@ -628,6 +694,16 @@ def trip_plan_cars(
         False,
         "--validate-live",
         help="Attempt live source link validation for shortlist rows",
+    ),
+    deep_research: bool = typer.Option(
+        False,
+        "--deep-research",
+        help="Run read-only source adapters for richer evidence where supported",
+    ),
+    adapter: str = typer.Option(
+        "auto",
+        "--adapter",
+        help="Source adapter mode: auto, link, playwright, or openclaw",
     ),
     propose_learning: bool = typer.Option(
         False,
@@ -643,7 +719,12 @@ def trip_plan_cars(
         trip_id=trip_id,
         workflow_name="trip-plan-cars",
         summary="Generated car rental shortlist",
-        state=CarShortlistService().build(trip_id, validate_live=validate_live),
+        state=CarShortlistService().build(
+            trip_id,
+            validate_live=validate_live,
+            deep_research=deep_research,
+            adapter_mode=adapter,
+        ),
         propose_learning=propose_learning,
         json_output=json_output,
     )
@@ -656,6 +737,16 @@ def trip_plan_activities(
         False,
         "--validate-live",
         help="Attempt live source link validation for shortlist rows",
+    ),
+    deep_research: bool = typer.Option(
+        False,
+        "--deep-research",
+        help="Run read-only source adapters for richer evidence where supported",
+    ),
+    adapter: str = typer.Option(
+        "auto",
+        "--adapter",
+        help="Source adapter mode: auto, link, playwright, or openclaw",
     ),
     propose_learning: bool = typer.Option(
         False,
@@ -671,7 +762,12 @@ def trip_plan_activities(
         trip_id=trip_id,
         workflow_name="trip-plan-activities",
         summary="Generated activity shortlist",
-        state=ActivityShortlistService().build(trip_id, validate_live=validate_live),
+        state=ActivityShortlistService().build(
+            trip_id,
+            validate_live=validate_live,
+            deep_research=deep_research,
+            adapter_mode=adapter,
+        ),
         propose_learning=propose_learning,
         json_output=json_output,
     )
@@ -1866,6 +1962,7 @@ def _print_shortlist(state: Any) -> None:
     table.add_column("Source")
     table.add_column("Status")
     table.add_column("Verification")
+    table.add_column("Adapter")
     table.add_column("Freshness")
     table.add_column("Confidence")
     table.add_column("Score")
@@ -1889,13 +1986,24 @@ def _print_shortlist(state: Any) -> None:
         tradeoffs = option.get("tradeoffs", [])
         flags = option.get("friction_flags", [])
         validation = option.get("validation", {}) or {}
-        details = "; ".join([*(tradeoffs or [])[:2], *(flags or [])[:2]])
+        details = "; ".join(
+            item
+            for item in [
+                str(option.get("recommendation_label", "")),
+                str(option.get("recommendation_rationale", "")),
+                str(option.get("date_viability_signal", "")),
+                *(tradeoffs or [])[:1],
+                *(flags or [])[:2],
+            ]
+            if item
+        )
         table.add_row(
             str(option.get("rank", "")),
             f"{name}\n[dim]{option.get('option_id')}[/dim]",
             str(source),
             str(option.get("row_status", "")),
             str(validation.get("verification_status", "")),
+            str(validation.get("adapter_used", "")),
             str(validation.get("freshness_status", "")),
             f"{float(validation.get('confidence', 0)):.0%}" if validation else "",
             str(score),

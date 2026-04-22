@@ -42,6 +42,15 @@ from trippy.models.shortlists import (
     SourceValidation,
     VerificationStatus,
 )
+from trippy.models.source_research import (
+    EvidenceArtifact,
+    SourceAdapterCapability,
+    SourceObservation,
+    SourceResearchMode,
+    SourceResearchRequest,
+    SourceResearchResult,
+    SourceResearchStatus,
+)
 from trippy.models.sources import (
     SourceAccessMode,
     SourceConfidence,
@@ -103,6 +112,7 @@ __all__ = [
     "DashboardTripTile",
     "DepartureTimePreference",
     "EvidenceRef",
+    "EvidenceArtifact",
     "EvidenceSourceType",
     "FamilyProfile",
     "FamilyTravelPreferences",
@@ -132,8 +142,14 @@ __all__ = [
     "StayType",
     "SyncMetadata",
     "SourceAccessMode",
+    "SourceAdapterCapability",
     "SourceConfidence",
+    "SourceObservation",
     "SourcePlan",
+    "SourceResearchMode",
+    "SourceResearchRequest",
+    "SourceResearchResult",
+    "SourceResearchStatus",
     "SourceRole",
     "TransferPreference",
     "ShortlistCategory",
