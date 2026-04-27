@@ -91,3 +91,17 @@ def test_help_command_returns_usage_hint() -> None:
 
     assert api.sent
     assert "Text Trippy questions" in api.sent[0][1]
+    assert "/whoami" in api.sent[0][1]
+
+
+def test_whoami_command_returns_chat_id() -> None:
+    api = FakeTelegramApi()
+    bot = TelegramTrippyBot(
+        TelegramBotSettings(token="test", allowed_chat_ids=frozenset({123})),
+        api_client=api,
+        agent_factory=FakeAgent,
+    )
+
+    bot.handle_update({"message": {"chat": {"id": 123}, "text": "/whoami"}})
+
+    assert api.sent == [(123, "Telegram chat ID: 123")]
