@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -10,6 +12,9 @@ class TripIdeaRequest(BaseModel):
     duration_days: int | None = None
     budget_cad: float | None = None
     travelers: int = 5
+    party_type: str | None = None
+    adults: int | None = None
+    children: int | None = None
     max_flight_hours: float | None = None
     direct_flight_preferred: bool = True
     goals: list[str] = Field(default_factory=list)
@@ -46,3 +51,4 @@ class TripComparison(BaseModel):
     concepts: list[TripConcept]
     recommended_concept_id: str | None = None
     scoring_notes: list[str] = Field(default_factory=list)
+    advisor: dict[str, Any] = Field(default_factory=dict)

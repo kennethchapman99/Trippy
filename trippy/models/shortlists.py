@@ -40,6 +40,7 @@ class ShortlistRowStatus(StrEnum):
     REJECTED = "rejected"
     APPROVED = "approved"
     BOOKED = "booked"
+    CONFIRMED = "confirmed"
 
 
 class VerificationStatus(StrEnum):
@@ -114,6 +115,8 @@ class FlightOption(BaseModel):
     rank: int
     airline: str
     flight_numbers: list[str] = Field(default_factory=list)
+    departure_date: str = ""
+    arrival_date: str = ""
     departure_airport: str
     arrival_airport: str
     departure_time: str = ""

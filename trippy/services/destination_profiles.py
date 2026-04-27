@@ -51,14 +51,54 @@ def profile_for_intake(intake: TripIntake) -> DestinationProfile:
                 "query": f"{destination} car rental SUV minivan family luggage",
             }
         ],
-        activity_search_targets=[
-            {
-                "name": f"{destination} small-group family activities",
-                "location": destination,
-                "query": f"{destination} small group family activities",
-            }
-        ],
+        activity_search_targets=_generic_activity_search_targets(intake, destination),
     )
+
+
+def _generic_activity_search_targets(
+    intake: TripIntake,
+    destination: str,
+) -> list[dict[str, str]]:
+    seeds = [seed.strip() for seed in intake.destination_seeds if seed.strip()] or [destination]
+    targets: list[dict[str, str]] = []
+    for seed in seeds[:5]:
+        lower = seed.lower()
+        if "stingray" in lower:
+            name = f"{seed} family stingray and sandbar tour"
+            query = f"{seed} small group family stingray sandbar tour"
+        elif "rum point" in lower:
+            name = f"{seed} family boat and beach day"
+            query = f"{seed} small group family boat beach tour"
+        elif any(term in lower for term in ["beach", "bay", "island", "coast"]):
+            name = f"{seed} family snorkeling or beach activity"
+            query = f"{seed} family snorkeling beach activity small group"
+        else:
+            name = f"{seed} family-friendly guided activity"
+            query = f"{seed} family friendly guided activity small group"
+        targets.append({"name": name, "location": seed, "query": query})
+    if len(targets) < 5:
+        targets.extend(
+            [
+                {
+                    "name": f"{destination} private family highlights tour",
+                    "location": destination,
+                    "query": f"{destination} private family highlights tour",
+                },
+                {
+                    "name": f"{destination} family food or culture experience",
+                    "location": destination,
+                    "query": f"{destination} family food culture experience",
+                },
+            ]
+        )
+    deduped: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for target in targets:
+        key = target["query"].lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(target)
+    return deduped[:8]
 
 
 _AZORES = DestinationProfile(

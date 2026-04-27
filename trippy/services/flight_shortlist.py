@@ -3,17 +3,27 @@
 from __future__ import annotations
 
 import base64
+import json
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
+from urllib.request import Request, urlopen
 
+from trippy import config
 from trippy.models.shortlists import (
+    AvailabilityStatus,
     FlightOption,
+    FreshnessStatus,
     LiveDataStatus,
+    PriceStatus,
     RecommendationGrade,
     ResearchShortlistState,
     ShortlistCategory,
     ShortlistRowStatus,
+    SourceType,
+    SourceValidation,
+    VerificationStatus,
 )
 from trippy.models.sources import TravelSourceCategory
 from trippy.services.destination_profiles import profile_for_intake
@@ -23,8 +33,6 @@ from trippy.services.shortlist_store import (
     ShortlistStore,
     source_plan,
     source_plan_payload,
-    source_search_url,
-    trip_query,
 )
 from trippy.services.source_research import SourceResearchService
 from trippy.services.trip_intake import TripIntakeService
@@ -59,9 +67,9 @@ class FlightShortlistService:
         )
         plan = source_plan(TravelSourceCategory.FLIGHTS)
         profile = profile_for_intake(ctx.intake)
-        options = _azores_options(
-            ctx, profile.gateway_airports[0] if profile.gateway_airports else "destination"
-        )
+        gateway = profile.gateway_airports[0] if profile.gateway_airports else "destination"
+        live_options, live_notes = _duffel_live_options(ctx, gateway)
+        options = live_options or _azores_options(ctx, gateway)
         state = ResearchShortlistState(
             trip_id=trip_id,
             category=ShortlistCategory.FLIGHTS,
@@ -74,12 +82,21 @@ class FlightShortlistService:
                 "availability, fare rules, baggage, seats, and Aeroplan eligibility before handoff."
             ),
             warnings=[
-                "Flight numbers and fares are not asserted unless the source link confirms them live.",
+                (
+                    "Live Duffel offers populated exact flight rows."
+                    if live_options
+                    else "Flight numbers and fares are not asserted unless a live provider or source link confirms them."
+                ),
+                *live_notes,
                 *profile.flight_notes,
             ],
             next_actions=[
-                "Open the Google Flights link for the top option and verify exact dates.",
-                "Cross-check the same routing on Kayak.ca, Expedia, and Flighthub.",
+                (
+                    "Review the live provider offer details, then cross-check the top option in Google Flights."
+                    if live_options
+                    else "Configure DUFFEL_ACCESS_TOKEN or add a flight candidate with exact itinerary text to replace placeholders."
+                ),
+                "Cross-check the same routing on Kayak.ca before booking.",
                 "Reject multi-ticket routings unless airport, baggage, and delay protection are clearly acceptable.",
             ],
         )
@@ -172,16 +189,7 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
     traveler_count = ctx.intake.party.total_travelers
     party_note = ctx.intake.party.summary()
     date_hint = _flight_date_hint(ctx)
-    query_base = trip_query(
-        ctx.intake,
-        f"flights {origin} to {gateway} {traveler_count} travelers",
-    )
-    comparison = {
-        "Google Flights": _flight_source_url("Google Flights", origin, gateway, ctx),
-        "Kayak.ca": _flight_source_url("Kayak.ca", origin, gateway, ctx),
-        "Expedia": _flight_source_url("Expedia", origin, gateway, ctx),
-        "Flighthub": source_search_url("Flighthub", query_base),
-    }
+    comparison = _flight_comparison_links(origin, gateway, ctx)
     return [
         FlightOption(
             option_id="flight-direct-yyz-pdl",
@@ -286,10 +294,7 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
             deep_link=_flight_source_url("Kayak.ca", origin, gateway, ctx),
             traveler_count=traveler_count,
             traveler_fit=f"Weak fit for {party_note} unless protected, because luggage/recheck risk scales with party size.",
-            comparison_links={
-                "Google Flights": _flight_source_url("Google Flights", origin, gateway, ctx),
-                "Expedia": _flight_source_url("Expedia", origin, gateway, ctx),
-            },
+            comparison_links=_flight_comparison_links(origin, gateway, ctx),
             aeroplan_relevance="Possible on the Toronto-Boston leg only; weak overall unless same-ticket.",
             friction_score=48,
             family_comfort_score=62,
@@ -311,6 +316,228 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
     ]
 
 
+def _duffel_live_options(
+    ctx: ShortlistContext,
+    gateway: str,
+) -> tuple[list[FlightOption], list[str]]:
+    token = config.DUFFEL_ACCESS_TOKEN.strip()
+    if not token:
+        return [], ["DUFFEL_ACCESS_TOKEN is not configured, so flight rows are search handoffs."]
+    origin = _iata_or_text(
+        ctx.intake.departure_airports[0] if ctx.intake.departure_airports else "YYZ"
+    )
+    destination = _iata_or_text(gateway)
+    if not _looks_like_iata(origin) or not _looks_like_iata(destination):
+        return [], [
+            f"Duffel live search skipped because route codes are not IATA: {origin} to {destination}."
+        ]
+    departure_date, return_date = _flight_dates(ctx)
+    try:
+        payload = _duffel_offer_request_payload(
+            ctx, origin, destination, departure_date, return_date
+        )
+        response = _post_duffel_offer_request(token, payload)
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+        return [], [f"Duffel live flight search failed: {exc}"]
+    offers = list((response.get("data") or {}).get("offers") or [])
+    if not offers:
+        return [], ["Duffel returned no live offers for this route/date search."]
+    comparison = _flight_comparison_links(origin, destination, ctx)
+    options = [
+        option
+        for option in (
+            _duffel_offer_to_option(offer, index, ctx, origin, destination, comparison)
+            for index, offer in enumerate(offers[:8], start=1)
+        )
+        if option is not None
+    ]
+    return options, [
+        f"Duffel returned {len(options)} exact offer row(s) for {origin}-{destination}.",
+        "Duffel prices are live offer signals but can expire; verify before booking.",
+    ]
+
+
+def _duffel_offer_request_payload(
+    ctx: ShortlistContext,
+    origin: str,
+    destination: str,
+    departure_date: date,
+    return_date: date,
+) -> dict[str, object]:
+    return {
+        "data": {
+            "slices": [
+                {
+                    "origin": origin,
+                    "destination": destination,
+                    "departure_date": departure_date.isoformat(),
+                },
+                {
+                    "origin": destination,
+                    "destination": origin,
+                    "departure_date": return_date.isoformat(),
+                },
+            ],
+            "passengers": _duffel_passengers(ctx),
+            "cabin_class": "economy",
+            "max_connections": 1,
+        }
+    }
+
+
+def _duffel_passengers(ctx: ShortlistContext) -> list[dict[str, object]]:
+    party = ctx.intake.party
+    passengers: list[dict[str, object]] = []
+    passengers.extend({"type": "adult"} for _ in range(max(1, party.adults or 1)))
+    child_ages = list(party.child_ages or [])
+    for index in range(max(0, party.children)):
+        if index < len(child_ages):
+            passengers.append({"age": int(child_ages[index])})
+        else:
+            passengers.append({"type": "child"})
+    total = ctx.intake.party.total_travelers or ctx.intake.travelers or len(passengers)
+    while len(passengers) < total:
+        passengers.append({"type": "adult"})
+    return passengers
+
+
+def _post_duffel_offer_request(token: str, payload: dict[str, object]) -> dict[str, object]:
+    body = json.dumps(payload).encode("utf-8")
+    request = Request(
+        "https://api.duffel.com/air/offer_requests?return_offers=true&supplier_timeout=10000",
+        data=body,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Duffel-Version": "v2",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "Trippy/0.2 flight-offer-search",
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=max(15, config.SOURCE_RESEARCH_TIMEOUT_SECONDS)) as response:  # noqa: S310 - configured authenticated API endpoint
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _duffel_offer_to_option(
+    offer: dict[str, object],
+    rank: int,
+    ctx: ShortlistContext,
+    origin: str,
+    destination: str,
+    comparison: dict[str, str],
+) -> FlightOption | None:
+    slices = [item for item in offer.get("slices", []) if isinstance(item, dict)]
+    if not slices:
+        return None
+    outbound = slices[0]
+    segments = [item for item in outbound.get("segments", []) if isinstance(item, dict)]
+    if not segments:
+        return None
+    first = segments[0]
+    last = segments[-1]
+    flight_numbers = [_segment_flight_number(segment) for segment in segments]
+    flight_numbers = [number for number in flight_numbers if number]
+    carriers = _segment_carriers(segments)
+    owner = offer.get("owner")
+    owner_name = str(owner.get("name") or "") if isinstance(owner, dict) else ""
+    airline = " / ".join(carriers) if carriers else owner_name or "Live flight offer"
+    departing_at = str(first.get("departing_at") or "")
+    arriving_at = str(last.get("arriving_at") or "")
+    departure_date, departure_time = _split_duffel_timestamp(departing_at)
+    arrival_date, arrival_time = _split_duffel_timestamp(arriving_at)
+    stops = max(0, len(segments) - 1)
+    layover_airports = [
+        str(destination.get("iata_code") or "")
+        for segment in segments[:-1]
+        if isinstance(destination := segment.get("destination"), dict)
+    ]
+    layover_airports = [airport for airport in layover_airports if airport]
+    layover_duration = _duffel_layover_duration(segments)
+    duration = _duffel_duration(outbound, first, last)
+    price = _duffel_price(offer)
+    google_link = _flight_source_url("Google Flights", origin, destination, ctx)
+    offer_id = str(offer.get("id") or f"duffel-offer-{rank}")
+    validation = SourceValidation(
+        source_name="Duffel",
+        source_type=SourceType.LIVE_SEARCH,
+        verified_at=datetime.utcnow(),
+        freshness_status=FreshnessStatus.CURRENT,
+        verification_status=VerificationStatus.LIVE_VERIFIED,
+        availability_status=AvailabilityStatus.AVAILABILITY_SIGNAL,
+        price_status=PriceStatus.LIVE_SIGNAL if price else PriceStatus.UNKNOWN,
+        confidence=0.86,
+        evidence_url=f"duffel:{offer_id}",
+        adapter_used="duffel",
+        extracted_fields={
+            "airline": airline,
+            "flight_numbers": flight_numbers,
+            "departure_date": departure_date,
+            "arrival_date": arrival_date,
+            "departure_time": departure_time,
+            "arrival_time": arrival_time,
+            "total_duration": duration,
+            "stops": stops,
+            "layover_airports": layover_airports,
+            "layover_duration": layover_duration or "",
+            "price_signal": price,
+            "availability_signal": "live offer returned",
+            "offer_id": offer_id,
+        },
+        notes=[
+            "Offer came from Duffel live flight search; fare and inventory can expire.",
+            "Cross-check public search links before booking if not purchasing through Duffel.",
+        ],
+        missing_fields=[],
+    )
+    friction = min(
+        90,
+        8 + stops * 16 + (8 if layover_duration and "overnight" in layover_duration.lower() else 0),
+    )
+    comfort = max(35, 94 - stops * 12)
+    return FlightOption(
+        option_id=f"duffel-flight-{rank}",
+        rank=rank,
+        airline=airline,
+        flight_numbers=flight_numbers,
+        departure_date=departure_date,
+        arrival_date=arrival_date,
+        departure_airport=_segment_airport(first, "origin") or origin,
+        arrival_airport=_segment_airport(last, "destination") or destination,
+        departure_time=departure_time,
+        arrival_time=arrival_time,
+        stops=stops,
+        layover_airports=layover_airports,
+        layover_duration=layover_duration,
+        total_travel_duration=duration,
+        timing_fit=_timing_fit(arrival_time, departure_time),
+        fare_estimate_cad=price,
+        price_band=price,
+        baggage_cabin_notes=_duffel_baggage_notes(offer),
+        booking_source="Duffel",
+        deep_link=google_link,
+        traveler_count=ctx.intake.party.total_travelers,
+        traveler_fit=f"Live offer for {ctx.intake.party.summary()}; verify fare expiry, baggage, seats, and booking channel.",
+        comparison_links={**comparison, "Duffel offer id": offer_id},
+        aeroplan_relevance="Verify earning by carrier and fare class before assuming Aeroplan value.",
+        friction_score=friction,
+        family_comfort_score=comfort,
+        recommendation_grade=RecommendationGrade.STRONG if stops == 0 else RecommendationGrade.GOOD,
+        tradeoffs=[
+            "Specific live offer with flight numbers, times, duration, and fare signal.",
+            "Offer may expire or reprice before booking.",
+        ],
+        friction_flags=_planning_timing_flags_for_values(stops, layover_duration),
+        confidence_notes=[
+            "Exact itinerary fields came from Duffel offer segments.",
+            f"Duffel offer id: {offer_id}",
+        ],
+        live_data_status=LiveDataStatus.LIVE_VERIFIED,
+        row_status=ShortlistRowStatus.VERIFIED_LIVE,
+        validation=validation,
+    )
+
+
 def _user_candidate_option(
     state: ResearchShortlistState,
     ctx: ShortlistContext,
@@ -329,6 +556,8 @@ def _user_candidate_option(
     duration = _duration_from_notes(notes) or "duration not supplied"
     departure = _time_from_notes(notes, ["depart", "departure", "leaves", "outbound"])
     arrival = _time_from_notes(notes, ["arrive", "arrival", "lands"])
+    departure_date = _date_from_notes(notes, ["depart", "departure", "outbound", "leave", "leaves"])
+    arrival_date = _date_from_notes(notes, ["arrive", "arrival", "lands"])
     price = _price_signal(notes) or "not supplied"
     flags = []
     if stops is None:
@@ -360,6 +589,8 @@ def _user_candidate_option(
         rank=rank,
         airline=display_name,
         flight_numbers=_flight_numbers(notes),
+        departure_date=departure_date,
+        arrival_date=arrival_date,
         departure_airport=origin,
         arrival_airport=destination,
         departure_time=departure or "not supplied",
@@ -446,22 +677,161 @@ def _flight_source_url(
             f"{origin_code}-{destination_code}/{departure_date.isoformat()}/{return_date.isoformat()}"
             f"/{total_travelers}adults?sort=bestflight_a"
         )
-    if source == "Expedia":
-        return "https://www.expedia.ca/Flights-Search?" + urlencode(
-            {
-                "trip": "roundtrip",
-                "leg1": f"from:{origin_code},to:{destination_code},departure:{departure_date.isoformat()}TANYT",
-                "leg2": f"from:{destination_code},to:{origin_code},departure:{return_date.isoformat()}TANYT",
-                "passengers": f"adults:{adults}",
-                "mode": "search",
-            }
-        )
-    query = trip_query(
-        ctx.intake,
-        f"flights {origin_code} to {destination_code} {total_travelers} travelers "
-        f"{departure_date.isoformat()} return {return_date.isoformat()}",
+    return _flight_source_url("Google Flights", origin_code, destination_code, ctx)
+
+
+def _flight_comparison_links(
+    origin: str,
+    destination: str,
+    ctx: ShortlistContext,
+) -> dict[str, str]:
+    """Only expose providers with route URLs that reliably preserve search fields."""
+    return {
+        "Google Flights": _flight_source_url("Google Flights", origin, destination, ctx),
+        "Kayak.ca": _flight_source_url("Kayak.ca", origin, destination, ctx),
+    }
+
+
+def _looks_like_iata(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z]{3}", value.strip().upper()))
+
+
+def _segment_flight_number(segment: dict[str, object]) -> str:
+    carrier = segment.get("marketing_carrier")
+    carrier_code = ""
+    if isinstance(carrier, dict):
+        carrier_code = str(carrier.get("iata_code") or "")
+    number = str(
+        segment.get("marketing_carrier_flight_number") or segment.get("flight_number") or ""
     )
-    return source_search_url(source, query)
+    return f"{carrier_code}{number}".strip().upper() if number else ""
+
+
+def _segment_carriers(segments: list[dict[str, object]]) -> list[str]:
+    carriers: list[str] = []
+    for segment in segments:
+        carrier = segment.get("operating_carrier") or segment.get("marketing_carrier")
+        name = ""
+        if isinstance(carrier, dict):
+            name = str(carrier.get("name") or carrier.get("iata_code") or "")
+        if name and name not in carriers:
+            carriers.append(name)
+    return carriers
+
+
+def _segment_airport(segment: dict[str, object], key: str) -> str:
+    airport = segment.get(key)
+    if isinstance(airport, dict):
+        return str(airport.get("iata_code") or "")
+    return ""
+
+
+def _split_duffel_timestamp(value: str) -> tuple[str, str]:
+    if not value:
+        return "", ""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value[:10], value[11:16] if len(value) >= 16 else ""
+    return parsed.date().isoformat(), parsed.strftime("%-I:%M %p")
+
+
+def _duffel_duration(
+    outbound_slice: dict[str, object],
+    first_segment: dict[str, object],
+    last_segment: dict[str, object],
+) -> str:
+    duration = str(outbound_slice.get("duration") or "")
+    if duration:
+        return _format_iso_duration(duration)
+    start = _parse_duffel_datetime(str(first_segment.get("departing_at") or ""))
+    end = _parse_duffel_datetime(str(last_segment.get("arriving_at") or ""))
+    if not start or not end:
+        return "duration unavailable"
+    return _format_minutes(int((end - start).total_seconds() // 60))
+
+
+def _duffel_layover_duration(segments: list[dict[str, object]]) -> str | None:
+    if len(segments) <= 1:
+        return None
+    pieces: list[str] = []
+    for previous, next_segment in zip(segments, segments[1:], strict=False):
+        arrival = _parse_duffel_datetime(str(previous.get("arriving_at") or ""))
+        departure = _parse_duffel_datetime(str(next_segment.get("departing_at") or ""))
+        airport = ""
+        destination = previous.get("destination")
+        if isinstance(destination, dict):
+            airport = str(destination.get("iata_code") or "")
+        if arrival and departure:
+            pieces.append(
+                f"{airport} {_format_minutes(int((departure - arrival).total_seconds() // 60))}".strip()
+            )
+    return ", ".join(pieces) or None
+
+
+def _parse_duffel_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _format_iso_duration(value: str) -> str:
+    match = re.fullmatch(r"P(?:\d+D)?T(?:(\d+)H)?(?:(\d+)M)?", value)
+    if not match:
+        return value
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    return _format_minutes(hours * 60 + minutes)
+
+
+def _format_minutes(total_minutes: int) -> str:
+    if total_minutes <= 0:
+        return "duration unavailable"
+    hours, minutes = divmod(total_minutes, 60)
+    if hours and minutes:
+        return f"{hours}h {minutes}m"
+    if hours:
+        return f"{hours}h"
+    return f"{minutes}m"
+
+
+def _duffel_price(offer: dict[str, object]) -> str:
+    amount = str(offer.get("total_amount") or "")
+    currency = str(offer.get("total_currency") or "")
+    if not amount:
+        return "live fare returned; amount unavailable"
+    if currency.upper() == "CAD":
+        return f"CAD {amount} total"
+    return f"{currency} {amount} total".strip()
+
+
+def _duffel_baggage_notes(offer: dict[str, object]) -> str:
+    conditions = offer.get("conditions")
+    notes: list[str] = []
+    if isinstance(conditions, dict):
+        for key in ("refund_before_departure", "change_before_departure"):
+            value = conditions.get(key)
+            if isinstance(value, dict) and value.get("allowed") is not None:
+                notes.append(
+                    f"{key.replace('_', ' ')}: {'allowed' if value.get('allowed') else 'not allowed'}"
+                )
+    return (
+        "; ".join(notes) or "Validate bags, seats, fare rules, and family seating before booking."
+    )
+
+
+def _planning_timing_flags_for_values(stops: int, layover_duration: str | None) -> list[str]:
+    flags: list[str] = []
+    if stops > 1:
+        flags.append("multiple connections increase travel-day friction")
+    elif stops == 1:
+        flags.append("connection timing must be checked against family luggage and delay risk")
+    if layover_duration and "overnight" in layover_duration.lower():
+        flags.append("overnight layover requires lodging plan")
+    return flags
 
 
 def _flight_date_hint(ctx: ShortlistContext) -> str:
@@ -967,6 +1337,19 @@ def _time_from_notes(notes: str, labels: list[str]) -> str:
         flags=re.IGNORECASE,
     )
     return match.group(1).strip() if match else ""
+
+
+def _date_from_notes(notes: str, labels: list[str]) -> str:
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    match = re.search(
+        rf"(?:{label_pattern})(?:ure|s|ing)?\s*(?:date)?\s*(?:on|:|-)?\s*"
+        r"((?:20\d{2}-\d{2}-\d{2})|(?:\d{4}-\d{2}-\d{2})|"
+        r"(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+20\d{2})|"
+        r"(?:\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+20\d{2}))",
+        notes,
+        flags=re.IGNORECASE,
+    )
+    return " ".join(match.group(1).replace(",", "").split()) if match else ""
 
 
 def _layover_duration_from_notes(notes: str) -> str | None:

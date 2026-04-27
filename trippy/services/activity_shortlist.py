@@ -160,15 +160,20 @@ def _options_from_profile(
     intake: TripIntake,
     selected_regions: list[str],
 ) -> list[ActivityOption]:
-    targets = [
-        target
-        for target in getattr(profile, "activity_search_targets", [])
-        if target_matches_selected_regions(
-            target,
-            selected_regions,
-            getattr(profile, "island_or_region_terms", []),
-        )
-    ]
+    raw_targets = list(getattr(profile, "activity_search_targets", []))
+    targets = (
+        raw_targets
+        if getattr(profile, "key", "") == "generic"
+        else [
+            target
+            for target in raw_targets
+            if target_matches_selected_regions(
+                target,
+                selected_regions,
+                getattr(profile, "island_or_region_terms", []),
+            )
+        ]
+    )
     party = intake.party
     traveler_count = party.total_travelers
     has_children = party.has_children
@@ -198,12 +203,11 @@ def _options_from_profile(
                     if has_children
                     else f"Must fit {traveler_count} adult traveler(s)."
                 ),
-                price_band="live verify per person/family total",
-                duration="half-day target unless explicitly planned as a full-day anchor",
+                price_band="source price required",
+                duration="source schedule required",
                 deep_link=source_search_url("GetYourGuide", query),
                 validation_links={
                     "Tripadvisor": source_search_url("Tripadvisor", query),
-                    "Airbnb Experiences": source_search_url("Airbnb Experiences", query),
                 },
                 family_pace_fit_score=88 if idx <= 3 else 74,
                 safety_confidence_score=78,
@@ -220,7 +224,7 @@ def _options_from_profile(
                 ],
                 friction_flags=flags,
                 confidence_notes=[
-                    "Source link is the start of live validation, not a confirmed booking option."
+                    "Source research must extract current cost, bookable time, duration, and availability before booking."
                 ],
                 live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
             )
@@ -245,14 +249,16 @@ def _apply_activity_schedule_suggestions(
 ) -> None:
     anchors = _stay_day_anchors(option, lodging_state)
     used_days: set[int] = set()
-    for idx, activity in enumerate(state.activity_options, start=1):
+    for activity in state.activity_options:
         anchor = _best_anchor_for_activity(activity, anchors) or anchors[0]
         day = _suggested_activity_day(
             anchor, used_days, int(getattr(option, "duration_days", 0) or 0)
         )
         used_days.add(day)
-        start_time = "09:30" if idx % 2 else "14:00"
-        end_time = _default_end_time(start_time, activity.duration)
+        start_time = _source_field(activity, "start_time")
+        end_time = _source_field(activity, "end_time") or (
+            _default_end_time(start_time, activity.duration) if start_time else ""
+        )
         date_value = _date_for_day(intake.travel_window.start_date, day)
         activity.suggested_day = day
         activity.suggested_date = date_value.isoformat() if date_value else ""
@@ -263,6 +269,13 @@ def _apply_activity_schedule_suggestions(
             "geography and avoids unnecessary backtracking."
         )
     _write_activity_schedule_artifact(state)
+
+
+def _source_field(activity: ActivityOption, field: str) -> str:
+    value = ""
+    if activity.validation and isinstance(activity.validation.extracted_fields, dict):
+        value = str(activity.validation.extracted_fields.get(field) or "").strip()
+    return value
 
 
 def _merge_existing_activity_state(
@@ -345,6 +358,13 @@ def _write_activity_schedule_artifact(state: ResearchShortlistState) -> None:
                 "notes": option.scheduling_notes,
             }
         )
+    entries.sort(
+        key=lambda entry: (
+            int(entry.get("scheduled_day") or entry.get("suggested_day") or 999),
+            str(entry.get("scheduled_start_time") or entry.get("suggested_start_time") or "99:99"),
+            str(entry.get("activity_name") or ""),
+        )
+    )
     state.artifacts["activity_schedule"] = {
         "data_status": "suggested_and_manual",
         "summary": (

@@ -23,6 +23,16 @@
           <a id="dashboardJsonLink" href="/api/state" title="Open backend state">Data</a>
           <a id="logsJsonLink" href="/api/logs" title="Open workflow logs">Logs</a>
         </nav>
+        <aside class="trip-rail" aria-label="Trips">
+          <div class="rail-head">
+            <div class="rail-actions">
+              <button id="generateTripButton" type="button" class="secondary">Generate</button>
+              <button id="newTripButton" type="button">New</button>
+            </div>
+          </div>
+          <div id="tripList" class="trip-list"></div>
+        </aside>
+        <div id="railResizeHandle" class="rail-resize-handle" aria-hidden="true"></div>
       </header>
 
       <main>
@@ -38,16 +48,6 @@
         </section>
 
         <section class="layout">
-          <aside class="trip-rail" aria-label="Trips">
-            <div class="rail-head">
-              <div class="rail-actions">
-                <button id="generateTripButton" type="button" class="secondary">Generate</button>
-                <button id="newTripButton" type="button">New</button>
-              </div>
-            </div>
-            <div id="tripList" class="trip-list"></div>
-          </aside>
-
           <section class="wizard-panel" aria-label="Planning wizard">
             <div id="stageBody"></div>
           </section>

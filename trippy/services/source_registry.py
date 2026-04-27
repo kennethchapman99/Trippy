@@ -74,7 +74,7 @@ _ROUTING: dict[TravelSourceCategory, dict[str, list[str]]] = {
     },
     TravelSourceCategory.TOURS: {
         "primary": ["GetYourGuide"],
-        "secondary": ["Airbnb Experiences"],
+        "secondary": [],
         "validation": ["Tripadvisor"],
     },
     TravelSourceCategory.CAR_RENTALS: {

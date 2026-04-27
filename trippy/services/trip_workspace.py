@@ -23,6 +23,12 @@ from trippy.models.trip import (
     Trip,
     TripStatus,
 )
+from trippy.models.trip_execution import (
+    ExecutionCategory,
+    ExecutionStatus,
+    TripPacketItem,
+    TripPacketState,
+)
 from trippy.models.trip_planning import (
     TripIntake,
     TripPlanDraft,
@@ -94,6 +100,7 @@ class TripWorkspaceService:
             self._planner,
             validate_live=validate_live,
         )
+        packet = _load_trip_packet(intake.trip_id)
         trip = self._build_canonical_trip(intake, option, shortlists)
         if existing_sync is not None:
             trip.sync = existing_sync.model_copy(deep=True)
@@ -111,6 +118,7 @@ class TripWorkspaceService:
             trip,
             validate_live=validate_live,
             shortlists=shortlists,
+            packet=packet,
         )
 
         state = TripWorkspaceState(
@@ -263,6 +271,7 @@ class TripWorkspaceService:
         *,
         validate_live: bool | None = None,
         shortlists: dict[str, Any] | None = None,
+        packet: TripPacketState | None = None,
     ) -> list[WorkspaceTab]:
         if shortlists is None:
             shortlists = _load_or_build_shortlists(
@@ -272,11 +281,13 @@ class TripWorkspaceService:
                 validate_live=validate_live,
             )
         map_artifact = _build_planning_map(intake.trip_id, self._intakes, self._planner)
+        if packet is None:
+            packet = _load_trip_packet(intake.trip_id)
         return [
             WorkspaceTab(
                 name="Overview",
                 headers=["Field", "Value"],
-                rows=_overview_rows(intake, option, shortlists, trip),
+                rows=_overview_rows(intake, option, shortlists, trip, packet),
             ),
             WorkspaceTab(
                 name="Master Timeline",
@@ -302,7 +313,24 @@ class TripWorkspaceService:
                     "Notes",
                     "Link",
                 ],
-                rows=_timeline_rows(intake, option, shortlists),
+                rows=_timeline_rows(intake, option, shortlists, packet),
+            ),
+            WorkspaceTab(
+                name="Trip Packet",
+                headers=[
+                    "Category",
+                    "Status",
+                    "Title",
+                    "Provider",
+                    "Confirmation",
+                    "Date",
+                    "Time",
+                    "Address",
+                    "Cost CAD",
+                    "Booking Link",
+                    "Notes",
+                ],
+                rows=_trip_packet_rows(packet, shortlists),
             ),
             WorkspaceTab(
                 name="Plan Options",
@@ -340,8 +368,11 @@ class TripWorkspaceService:
                     "Recommended",
                     "Recommendation",
                     "Airline",
-                    "Departure",
-                    "Arrival",
+                    "Flight Numbers",
+                    "Departure Date",
+                    "Departure Time",
+                    "Arrival Date",
+                    "Arrival Time",
                     "Route",
                     "Stops",
                     "Layovers",
@@ -901,6 +932,7 @@ def _overview_rows(
     option: TripPlanOption,
     shortlists: dict[str, Any],
     trip: Trip,
+    packet: TripPacketState | None = None,
 ) -> list[list[Any]]:
     best_flight = _recommended_option(shortlists.get("flights"))
     best_lodging = _recommended_option(shortlists.get("lodging"))
@@ -915,6 +947,8 @@ def _overview_rows(
         ["Selected Option", f"{option.option_id} - {option.title}"],
         ["Selected Plan Summary", option.summary],
         ["Planning Completeness", f"{_workspace_completeness(shortlists, trip)}%"],
+        ["Trip Packet Readiness", _packet_readiness(packet)],
+        ["Trip Packet Status", packet.status_label if packet else "not started"],
         ["Destination Seeds", ", ".join(intake.destination_seeds)],
         ["Travel Window", intake.travel_window.display()],
         ["Duration", intake.duration_display()],
@@ -936,6 +970,7 @@ def _overview_rows(
         ["Best Activities", "; ".join(_option_summary(option) for option in activities)],
         ["Top Friction Warnings", "; ".join(warnings[:4])],
         ["Unresolved Blockers", "; ".join(unresolved[:5])],
+        ["Missing Confirmation Details", "; ".join((packet.missing_items if packet else [])[:5])],
         ["Next Actions", "; ".join(_workspace_next_actions(shortlists, trip)[:5])],
     ]
 
@@ -951,7 +986,10 @@ def _flight_rows(state: Any | None) -> list[list[Any]]:
                 _yes_no(option.option_id == recommended_id),
                 option.recommendation_label,
                 option.airline,
+                " + ".join(getattr(option, "flight_numbers", [])),
+                getattr(option, "departure_date", ""),
                 option.departure_time,
+                getattr(option, "arrival_date", ""),
                 option.arrival_time,
                 f"{option.departure_airport} to {option.arrival_airport}",
                 option.stops,
@@ -1164,6 +1202,104 @@ def _evidence_summary(artifacts: list[Any]) -> str:
         url = getattr(artifact, "url", "")
         values.append(path or url)
     return "; ".join(value for value in values if value)
+
+
+def _load_trip_packet(trip_id: str) -> TripPacketState | None:
+    from trippy import config
+
+    path = config.WORKSPACES_PATH / "trip_packets" / f"{trip_id}.packet.json"
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return TripPacketState.model_validate(data)
+
+
+def _trip_packet_rows(
+    packet: TripPacketState | None,
+    shortlists: dict[str, Any],
+) -> list[list[Any]]:
+    items = list(packet.items if packet else [])
+    if not items:
+        for state in shortlists.values():
+            for option in _typed_options(state):
+                row_status = getattr(getattr(option, "row_status", ""), "value", "")
+                if row_status in {"approved", "booked", "confirmed"}:
+                    items.append(
+                        TripPacketItem(
+                            item_id=f"{state.category.value}:{getattr(option, 'option_id', '')}",
+                            category=_packet_category_for_state(state),
+                            option_id=str(getattr(option, "option_id", "")),
+                            title=_option_summary(option),
+                            provider=str(
+                                getattr(option, "booking_source", "")
+                                or getattr(option, "source", "")
+                            ),
+                            status=(
+                                ExecutionStatus.CONFIRMED
+                                if row_status == "confirmed"
+                                else ExecutionStatus.BOOKED
+                                if row_status == "booked"
+                                else ExecutionStatus.SELECTED
+                            ),
+                            source_url=str(getattr(option, "deep_link", "") or ""),
+                            booking_link=str(getattr(option, "deep_link", "") or ""),
+                        )
+                    )
+    rows = [
+        [
+            item.category.value,
+            item.status.value,
+            item.title,
+            item.provider,
+            item.confirmation_code,
+            item.date,
+            _time_range(item.start_time, item.end_time),
+            item.address,
+            item.cost_cad or "",
+            item.booking_link or item.source_url,
+            item.notes,
+        ]
+        for item in items
+    ]
+    return rows or [
+        [
+            "flight",
+            "missing",
+            "No selected flight yet",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "Select and book a flight, then add the confirmation code.",
+        ],
+        [
+            "lodging",
+            "missing",
+            "No selected lodging yet",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "Select and book lodging, then add confirmation and check-in details.",
+        ],
+    ]
+
+
+def _packet_category_for_state(state: Any) -> ExecutionCategory:
+    category = getattr(state, "category", "")
+    value = getattr(category, "value", category)
+    return {
+        "flights": ExecutionCategory.FLIGHT,
+        "lodging": ExecutionCategory.LODGING,
+        "cars": ExecutionCategory.CAR,
+        "activities": ExecutionCategory.ACTIVITY,
+    }.get(str(value), ExecutionCategory.OTHER)
 
 
 def _car_rows(state: Any | None) -> list[list[Any]]:
@@ -1380,12 +1516,16 @@ def _timeline_rows(
     intake: TripIntake,
     option: TripPlanOption,
     shortlists: dict[str, Any],
+    packet: TripPacketState | None = None,
 ) -> list[list[Any]]:
     rows: list[list[Any]] = []
     start = intake.travel_window.start_date
     best_flight = _recommended_option(shortlists.get("flights"))
     best_car = _recommended_option(shortlists.get("cars"))
     best_lodging = _recommended_option(shortlists.get("lodging"))
+    flight_packet = _packet_item_for(packet, ExecutionCategory.FLIGHT, best_flight)
+    car_packet = _packet_item_for(packet, ExecutionCategory.CAR, best_car)
+    lodging_packet = _packet_item_for(packet, ExecutionCategory.LODGING, best_lodging)
     activities = _timeline_activity_options(shortlists.get("activities"), limit=4)
     rows.append(
         _timeline_row(
@@ -1400,11 +1540,17 @@ def _timeline_rows(
             to_value=best_flight.arrival_airport
             if best_flight is not None
             else "destination gateway",
-            provider=getattr(best_flight, "booking_source", ""),
-            status="recommended" if best_flight is not None else "seeded",
-            fixed="flexible",
-            start_time=getattr(best_flight, "departure_time", ""),
-            end_time=getattr(best_flight, "arrival_time", ""),
+            provider=_packet_provider(best_flight, flight_packet),
+            status=_packet_status(
+                "recommended" if best_flight is not None else "seeded", flight_packet
+            ),
+            fixed="fixed" if flight_packet and flight_packet.is_booked else "flexible",
+            start_time=flight_packet.start_time
+            if flight_packet
+            else getattr(best_flight, "departure_time", ""),
+            end_time=flight_packet.end_time
+            if flight_packet
+            else getattr(best_flight, "arrival_time", ""),
             travel_time=getattr(best_flight, "total_travel_duration", ""),
             buffer_after="same-day lodging/car buffer required",
             friction_flags=_combine_flags(
@@ -1416,8 +1562,9 @@ def _timeline_rows(
                 [getattr(best_flight, "recommendation_rationale", "")],
                 [getattr(best_flight, "timing_implication", "")],
                 [getattr(best_flight, "date_viability_signal", "")],
+                [_packet_notes(flight_packet)],
             ),
-            link=getattr(best_flight, "deep_link", ""),
+            link=_packet_link(best_flight, flight_packet),
         )
     )
     if best_car is not None:
@@ -1428,17 +1575,19 @@ def _timeline_rows(
                 event_type="car pickup",
                 title=f"Pick up {best_car.vehicle_class}",
                 location=best_car.pickup_location,
-                provider=best_car.booking_source,
-                status=_row_status(shortlists.get("cars"), best_car.option_id),
-                fixed="flexible",
+                provider=_packet_provider(best_car, car_packet),
+                status=_packet_status(
+                    _row_status(shortlists.get("cars"), best_car.option_id), car_packet
+                ),
+                fixed="fixed" if car_packet and car_packet.is_booked else "flexible",
                 buffer_before="after baggage/arrival",
                 friction_flags=_combine_flags(
                     best_car.friction_flags,
                     ["pickup timing must account for baggage and arrival delay"],
                 ),
                 confidence=_option_confidence(best_car),
-                notes=best_car.passenger_fit,
-                link=best_car.deep_link,
+                notes=_notes([best_car.passenger_fit], [_packet_notes(car_packet)]),
+                link=_packet_link(best_car, car_packet),
             )
         )
     cursor_day = 1
@@ -1447,6 +1596,9 @@ def _timeline_rows(
         region = str(stay["region"])
         nights = int(stay["nights"])
         linked_lodging = _lodging_for_stay(shortlists.get("lodging"), stay) or best_lodging
+        linked_packet = (
+            _packet_item_for(packet, ExecutionCategory.LODGING, linked_lodging) or lodging_packet
+        )
         rows.append(
             _timeline_row(
                 day=cursor_day,
@@ -1454,9 +1606,11 @@ def _timeline_rows(
                 event_type="lodging",
                 title=f"Check in: {region}",
                 location=region,
-                provider=_option_summary(linked_lodging),
-                status="recommended" if linked_lodging is not None else "seeded",
-                fixed="flexible",
+                provider=_packet_provider(linked_lodging, linked_packet),
+                status=_packet_status(
+                    "recommended" if linked_lodging is not None else "seeded", linked_packet
+                ),
+                fixed="fixed" if linked_packet and linked_packet.is_booked else "flexible",
                 buffer_before="avoid late-arrival access risk",
                 buffer_after=f"{nights} night(s)",
                 friction_flags=_combine_flags(
@@ -1464,11 +1618,16 @@ def _timeline_rows(
                     ["check-in time must be aligned to arrival"],
                 ),
                 confidence=_option_confidence(linked_lodging),
-                notes=str(
-                    stay.get("notes")
-                    or getattr(linked_lodging, "adult_child_fit", option.lodging_strategy)
+                notes=_notes(
+                    [
+                        str(
+                            stay.get("notes")
+                            or getattr(linked_lodging, "adult_child_fit", option.lodging_strategy)
+                        )
+                    ],
+                    [_packet_notes(linked_packet)],
                 ),
-                link=getattr(linked_lodging, "deep_link", ""),
+                link=_packet_link(linked_lodging, linked_packet),
             )
         )
         cursor_day += max(1, nights)
@@ -1494,6 +1653,7 @@ def _timeline_rows(
             activity.scheduled_date or activity.suggested_date
         ) or _add_days(start, activity_day - 1)
         activity_status = _row_status(shortlists.get("activities"), activity.option_id)
+        activity_packet = _packet_item_for(packet, ExecutionCategory.ACTIVITY, activity)
         is_scheduled = activity.row_status.value in {"approved", "booked"} or bool(
             activity.scheduled_day
         )
@@ -1506,9 +1666,13 @@ def _timeline_rows(
                 event_type="activity",
                 title=activity.activity_name,
                 location=activity.island_location,
-                provider=activity.source,
-                status=activity_status,
-                fixed=activity.scheduled_flexibility if is_scheduled else "flexible",
+                provider=_packet_provider(activity, activity_packet) or activity.source,
+                status=_packet_status(activity_status, activity_packet),
+                fixed="fixed"
+                if activity_packet and activity_packet.is_booked
+                else activity.scheduled_flexibility
+                if is_scheduled
+                else "flexible",
                 travel_time=activity.duration,
                 buffer_before="half-day slack",
                 buffer_after="downtime / meal buffer",
@@ -1523,8 +1687,9 @@ def _timeline_rows(
                     [activity.scheduling_notes],
                     [activity.scheduling_rationale],
                     [activity.age_family_fit],
+                    [_packet_notes(activity_packet)],
                 ),
-                link=activity.deep_link,
+                link=_packet_link(activity, activity_packet),
             )
         )
     rows.append(
@@ -1692,7 +1857,8 @@ def _timeline_activity_options(state: Any | None, *, limit: int) -> list[Any]:
     approved = [
         option
         for option in options
-        if getattr(getattr(option, "row_status", ""), "value", "") in {"approved", "booked"}
+        if getattr(getattr(option, "row_status", ""), "value", "")
+        in {"approved", "booked", "confirmed"}
         or getattr(option, "scheduled_day", None)
     ]
     if approved:
@@ -1719,7 +1885,8 @@ def _approved_activities(state: Any | None) -> list[Any]:
     return [
         option
         for option in getattr(state, "activity_options", [])
-        if getattr(getattr(option, "row_status", ""), "value", "") in {"approved", "booked"}
+        if getattr(getattr(option, "row_status", ""), "value", "")
+        in {"approved", "booked", "confirmed"}
         or getattr(option, "scheduled_day", None)
     ]
 
@@ -1759,6 +1926,66 @@ def _option_confidence(option: Any | None) -> str:
     return f"{validation.confidence:.0%}"
 
 
+def _packet_item_for(
+    packet: TripPacketState | None,
+    category: ExecutionCategory,
+    option: Any | None,
+) -> TripPacketItem | None:
+    if packet is None or option is None:
+        return None
+    option_id = str(getattr(option, "option_id", ""))
+    return next(
+        (
+            item
+            for item in packet.items
+            if item.category == category and item.option_id == option_id
+        ),
+        None,
+    )
+
+
+def _packet_provider(option: Any | None, packet_item: TripPacketItem | None) -> str:
+    if packet_item is not None:
+        pieces = [packet_item.provider or _option_summary(option)]
+        if packet_item.confirmation_code:
+            pieces.append(f"confirmation {packet_item.confirmation_code}")
+        return " · ".join(piece for piece in pieces if piece)
+    return (
+        str(getattr(option, "booking_source", "") or getattr(option, "source", ""))
+        if option is not None
+        else ""
+    )
+
+
+def _packet_status(default: str, packet_item: TripPacketItem | None) -> str:
+    return packet_item.status.value if packet_item is not None else default
+
+
+def _packet_notes(packet_item: TripPacketItem | None) -> str:
+    if packet_item is None:
+        return ""
+    notes = []
+    if packet_item.confirmation_code:
+        notes.append(f"confirmation {packet_item.confirmation_code}")
+    if packet_item.address:
+        notes.append(f"address {packet_item.address}")
+    if packet_item.notes:
+        notes.append(packet_item.notes)
+    return "; ".join(notes)
+
+
+def _packet_link(option: Any | None, packet_item: TripPacketItem | None) -> str:
+    if packet_item is not None:
+        return packet_item.booking_link or packet_item.source_url
+    return str(getattr(option, "deep_link", "") or "")
+
+
+def _packet_readiness(packet: TripPacketState | None) -> str:
+    if packet is None:
+        return "0% - confirmations not started"
+    return f"{packet.readiness_percent}% - {packet.status_label}"
+
+
 def _combine_flags(existing: list[str], extra: list[str]) -> str:
     return ", ".join([*existing, *extra])
 
@@ -1775,7 +2002,7 @@ def _row_status(state: Any | None, option_id: str) -> str:
             None,
         )
     row_status = getattr(getattr(option, "row_status", None), "value", "")
-    if row_status in {"approved", "booked", "rejected", "verified_live", "stale"}:
+    if row_status in {"approved", "booked", "confirmed", "rejected", "verified_live", "stale"}:
         return row_status
     if state is not None and option_id == getattr(state, "recommended_option_id", None):
         return "recommended"
@@ -1834,17 +2061,23 @@ def _party_lodging_notes(intake: TripIntake) -> str:
 
 
 def _workspace_completeness(shortlists: dict[str, Any], trip: Trip) -> int:
+    flight = _recommended_option(shortlists.get("flights"))
+    lodging = _recommended_option(shortlists.get("lodging"))
     checks = [
         bool(trip.travelers),
-        bool(trip.segments),
-        bool(trip.stays),
-        all(category in shortlists for category in ("flights", "lodging", "cars", "activities")),
-        any(
-            item.category in {"document", "logistics", "health", "money"} for item in trip.checklist
-        ),
-        bool(trip.risk_flags),
+        all(category in shortlists for category in ("flights", "lodging")),
+        _status_at_least(flight, {"approved", "booked", "confirmed"}),
+        _status_at_least(lodging, {"approved", "booked", "confirmed"}),
+        _status_at_least(flight, {"booked", "confirmed"}),
+        _status_at_least(lodging, {"booked", "confirmed"}),
+        _status_at_least(flight, {"confirmed"}),
+        _status_at_least(lodging, {"confirmed"}),
     ]
     return int(sum(1 for item in checks if item) / len(checks) * 100)
+
+
+def _status_at_least(option: Any | None, accepted: set[str]) -> bool:
+    return getattr(getattr(option, "row_status", ""), "value", "") in accepted
 
 
 def _unresolved_blockers(shortlists: dict[str, Any], trip: Trip) -> list[str]:
@@ -1852,10 +2085,16 @@ def _unresolved_blockers(shortlists: dict[str, Any], trip: Trip) -> list[str]:
     for category in ("flights", "lodging", "cars", "activities"):
         if category not in shortlists:
             blockers.append(f"{category} shortlist missing")
-    if trip.unconfirmed_segments:
-        blockers.append("flight confirmations not booked")
-    if trip.unconfirmed_stays:
-        blockers.append("lodging confirmations not booked")
+    flight = _recommended_option(shortlists.get("flights"))
+    lodging = _recommended_option(shortlists.get("lodging"))
+    if not _status_at_least(flight, {"booked", "confirmed"}):
+        blockers.append("selected flight not marked booked")
+    if not _status_at_least(lodging, {"booked", "confirmed"}):
+        blockers.append("selected lodging not marked booked")
+    if not _status_at_least(flight, {"confirmed"}):
+        blockers.append("flight confirmation details missing")
+    if not _status_at_least(lodging, {"confirmed"}):
+        blockers.append("lodging confirmation details missing")
     blockers.append("live prices/availability still need human verification")
     return blockers
 
@@ -1874,11 +2113,17 @@ def _workspace_next_actions(shortlists: dict[str, Any], trip: Trip) -> list[str]
         if state is None:
             actions.append(f"Generate {category} shortlist")
         elif getattr(state, "recommended_option_id", None):
-            actions.append(
-                f"Open and live-verify recommended {category}: {state.recommended_option_id}"
-            )
-    if trip.unconfirmed_segments or trip.unconfirmed_stays:
-        actions.append("Promote selected recommendations to approved/booked once human confirms.")
+            selected = _recommended_option(state)
+            if not _status_at_least(selected, {"approved", "booked", "confirmed"}):
+                actions.append(f"Choose preferred {category}: {state.recommended_option_id}")
+            elif not _status_at_least(selected, {"booked", "confirmed"}):
+                actions.append(
+                    f"Book selected {category} externally, then add confirmation details."
+                )
+            elif not _status_at_least(selected, {"confirmed"}):
+                actions.append(f"Add {category} confirmation code and exact trip-day details.")
+    if not actions:
+        actions.append("Review the trip packet, map, and chronological timeline.")
     return actions
 
 
