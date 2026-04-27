@@ -1,27 +1,22 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
+import path from "path";
+import { componentTagger } from "lovable-tagger";
 
-const backendTarget = process.env.TRIPPY_API_PROXY ?? "http://127.0.0.1:8788";
-
-export default defineConfig({
+// https://vitejs.dev/config/
+export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
-    proxy: {
-      "/api": {
-        target: backendTarget,
-        changeOrigin: true,
-      },
-      "/static": {
-        target: backendTarget,
-        changeOrigin: true,
-      },
+    hmr: {
+      overlay: false,
     },
   },
-  plugins: [react()],
+  plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {
     alias: {
-      "@": new URL("./src", import.meta.url).pathname,
+      "@": path.resolve(__dirname, "./src"),
     },
+    dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime", "@tanstack/react-query", "@tanstack/query-core"],
   },
-});
+}));
