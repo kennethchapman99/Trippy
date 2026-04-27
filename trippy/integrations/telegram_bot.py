@@ -204,10 +204,14 @@ class TelegramTrippyBot:
             self._api.send_message(chat_id, "This Trippy bot is private.")
             return
 
+        if text == "/whoami":
+            self._api.send_message(chat_id, f"Telegram chat ID: {chat_id}")
+            return
+
         if text in {"/start", "/help"}:
             self._api.send_message(
                 chat_id,
-                "Text Trippy questions like: 'What confirmations are missing for Japan?' or 'Audit friction for our next trip.'",
+                "Text Trippy questions like: 'What confirmations are missing for Japan?' or 'Audit friction for our next trip.' Send /whoami to get your Telegram chat ID for the allowlist.",
             )
             return
 
