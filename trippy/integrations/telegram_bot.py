@@ -12,7 +12,7 @@ import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -101,7 +101,7 @@ class TelegramApiClient:
         result = payload.get("result", [])
         if not isinstance(result, list):
             return []
-        return [item for item in result if isinstance(item, dict)]
+        return [cast(dict[str, Any], item) for item in result if isinstance(item, dict)]
 
     def send_message(self, chat_id: int, text: str) -> None:
         self._call(
@@ -129,7 +129,7 @@ class TelegramApiClient:
         payload = json.loads(raw)
         if not isinstance(payload, dict) or payload.get("ok") is not True:
             raise RuntimeError(f"Telegram API returned an error for {method}: {payload}")
-        return payload
+        return cast(dict[str, Any], payload)
 
 
 class TelegramTrippyBot:
@@ -194,7 +194,10 @@ class TelegramTrippyBot:
             )
             return
 
-        agent = self._agents_by_chat_id.setdefault(chat_id, self._agent_factory())
+        agent = self._agents_by_chat_id.get(chat_id)
+        if agent is None:
+            agent = self._agent_factory()
+            self._agents_by_chat_id[chat_id] = agent
         try:
             reply = agent.chat(text)
         except Exception:
