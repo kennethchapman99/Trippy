@@ -20,14 +20,14 @@ This thin slice lets Ken text Trippy from Telegram and receive replies from the 
 TRIPPY_TELEGRAM_BOT_TOKEN=<paste-token-here>
 ```
 
-4. Start the bot locally:
+4. Start the bot locally in open/dev mode:
 
 ```bash
 uv run trippy-telegram
 ```
 
-5. Send `/start` to the bot from your phone.
-6. The local logs will show incoming rejected/accepted chat IDs. For production use, lock the bot down:
+5. Send `/whoami` to the bot from your phone.
+6. Copy the returned chat ID into `.env` and restart the bot:
 
 ```bash
 TRIPPY_TELEGRAM_ALLOWED_CHAT_IDS=123456789
@@ -50,6 +50,8 @@ uv run trippy-telegram
 Example messages:
 
 ```text
+/start
+/whoami
 What trips do we have coming up?
 Audit friction for our next trip
 What confirmations are missing for Japan 2026?
