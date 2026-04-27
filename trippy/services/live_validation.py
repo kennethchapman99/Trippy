@@ -67,18 +67,22 @@ class LiveValidationService:
         validation = getattr(option, "validation", SourceValidation())
         validation.source_name = source_name
         validation.source_type = _source_type(option)
-        validation.evidence_url = url
+        validation.evidence_url = validation.evidence_url or url
         validation.missing_fields = _missing_fields(option, state, validation)
         validation.notes = _dedupe_notes([*_base_notes(option, state), *validation.notes])
         if not attempt_network:
-            if validation.verification_status != VerificationStatus.LIVE_VERIFIED:
+            if validation.verification_status == VerificationStatus.LIVE_VERIFIED:
+                validation.freshness_status = FreshnessStatus.CURRENT
+                option.row_status = ShortlistRowStatus.VERIFIED_LIVE
+                option.live_data_status = LiveDataStatus.LIVE_VERIFIED
+            else:
                 validation.verification_status = VerificationStatus.MANUAL_REQUIRED
-            validation.freshness_status = FreshnessStatus.UNKNOWN
-            validation.availability_status = AvailabilityStatus.UNKNOWN
-            validation.price_status = _price_status(option)
-            validation.confidence = min(validation.confidence, 0.55)
-            option.row_status = ShortlistRowStatus.RESEARCHED
-            option.live_data_status = LiveDataStatus.HANDOFF_REQUIRED
+                validation.freshness_status = FreshnessStatus.UNKNOWN
+                validation.availability_status = AvailabilityStatus.UNKNOWN
+                validation.price_status = _price_status(option)
+                validation.confidence = min(validation.confidence, 0.55)
+                option.row_status = ShortlistRowStatus.RESEARCHED
+                option.live_data_status = LiveDataStatus.HANDOFF_REQUIRED
             option.validation = validation
             return
 

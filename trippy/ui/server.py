@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import mimetypes
 import webbrowser
@@ -43,7 +44,9 @@ from trippy.services.learning import (
     WorkflowStatus,
 )
 from trippy.services.lodging_shortlist import LodgingShortlistService
+from trippy.services.planning_advisor import PlanningAdvisorService
 from trippy.services.shortlist_store import ShortlistStore
+from trippy.services.trip_execution import TripExecutionService
 from trippy.services.trip_ideation import TripIdeationService
 from trippy.services.trip_intake import TripIntakeService
 from trippy.services.trip_management import TripManagementService
@@ -89,6 +92,7 @@ class TrippyUIService:
         intake = self._intakes.load(trip_id)
         draft = self._planner.load_draft(trip_id)
         workspace = TripWorkspaceService(self._intakes, self._planner).load(trip_id)
+        trip_packet = TripExecutionService().build(trip_id, save=False) if intake else None
         shortlists = ShortlistStore().load_all(trip_id)
         workflows = [
             workflow for workflow in self._learning.list_workflows() if workflow.trip_id == trip_id
@@ -100,6 +104,7 @@ class TrippyUIService:
             "draft": draft.model_dump(mode="json") if draft else None,
             "workspace": workspace.model_dump(mode="json") if workspace else None,
             "map_artifact": _load_map_artifact(trip_id),
+            "trip_packet": trip_packet.model_dump(mode="json") if trip_packet else None,
             "shortlists": [shortlist.model_dump(mode="json") for shortlist in shortlists],
             "recent_workflows": [workflow.model_dump(mode="json") for workflow in workflows],
             "run_log": logs["events"],
@@ -140,6 +145,9 @@ class TrippyUIService:
             duration_days=_int_or_none(payload.get("duration_days")),
             budget_cad=_float_or_none(payload.get("budget_cad")),
             travelers=_int(payload.get("travelers"), 5),
+            party_type=_optional_str(payload.get("party_type")),
+            adults=_int_or_none(payload.get("adults")),
+            children=_int_or_none(payload.get("children")),
             max_flight_hours=_float_or_none(
                 payload.get("max_flight_hours") or payload.get("max_travel_time_hours")
             ),
@@ -343,7 +351,7 @@ class TrippyUIService:
         state = FlightShortlistService(self._intakes, self._planner).add_candidate(
             trip_id,
             link=str(payload.get("link") or ""),
-            notes=str(payload.get("notes") or ""),
+            notes=_flight_candidate_notes(payload),
             name=str(payload.get("name") or ""),
             validate_live=bool(payload.get("validate_live", False)),
             deep_research=bool(payload.get("deep_research", False)),
@@ -380,6 +388,214 @@ class TrippyUIService:
             "workflow_id": workflow.id,
             "shortlist": state.model_dump(mode="json"),
             "next_step": "Review lodging check-in, car pickup, Master Timeline, and date-fit implications.",
+        }
+
+    def select_lodging(self, payload: dict[str, Any]) -> dict[str, Any]:
+        trip_id = _trip_id(payload)
+        option_id = str(payload.get("option_id") or "")
+        state = LodgingShortlistService(self._intakes, self._planner).select_lodging(
+            trip_id,
+            option_id,
+        )
+        workflow = self._record_workflow(
+            workflow_name="ui-trip-plan-lodging-select",
+            skill_name="trippy-family-itinerary-builder",
+            trip_id=trip_id,
+            summary=f"Selected lodging option {option_id} for planning",
+            result=state.model_dump(mode="json"),
+        )
+        return {
+            "workflow_id": workflow.id,
+            "shortlist": state.model_dump(mode="json"),
+            "next_step": "Review whether the trip should use one stay or split stays.",
+        }
+
+    def update_lodging_structure(self, payload: dict[str, Any]) -> dict[str, Any]:
+        trip_id = _trip_id(payload)
+        state = LodgingShortlistService(self._intakes, self._planner).update_stay_structure(
+            trip_id,
+            strategy=str(payload.get("strategy") or "split_stay"),
+            night_plan=list(payload.get("night_plan") or []),
+            notes=str(payload.get("notes") or "").strip(),
+        )
+        workflow = self._record_workflow(
+            workflow_name="ui-trip-plan-lodging-structure",
+            skill_name="trippy-family-itinerary-builder",
+            trip_id=trip_id,
+            summary="Updated manual lodging stay structure",
+            result=state.model_dump(mode="json"),
+        )
+        return {
+            "workflow_id": workflow.id,
+            "shortlist": state.model_dump(mode="json"),
+            "next_step": "Build or refresh the workspace so the Master Timeline uses this stay structure.",
+        }
+
+    def suggest_lodging_structures(self, payload: dict[str, Any]) -> dict[str, Any]:
+        trip_id = _trip_id(payload)
+        state = LodgingShortlistService(self._intakes, self._planner).suggest_stay_structures(
+            trip_id,
+            use_llm=bool(payload.get("use_llm", True)),
+        )
+        workflow = self._record_workflow(
+            workflow_name="ui-trip-plan-lodging-structure-suggest",
+            skill_name="trippy-family-itinerary-builder",
+            trip_id=trip_id,
+            summary="Generated stay-structure options for review",
+            result=state.model_dump(mode="json"),
+        )
+        structure = state.artifacts.get("lodging_structure", {})
+        option_count = len(structure.get("options", [])) if isinstance(structure, dict) else 0
+        return {
+            "workflow_id": workflow.id,
+            "shortlist": state.model_dump(mode="json"),
+            "option_count": option_count,
+            "next_step": "Pick a stay option or edit the night split before selecting exact lodging.",
+        }
+
+    def planning_advice(self, payload: dict[str, Any]) -> dict[str, Any]:
+        from trippy.models.planning_advice import PlanningAdviceKind
+
+        trip_id = _optional_str(payload.get("trip_id"))
+        kind = PlanningAdviceKind(str(payload.get("planning_question") or "next_steps"))
+        intake = self._intakes.load(trip_id) if trip_id else None
+        draft = self._planner.load_draft(trip_id) if trip_id else None
+        advisor = PlanningAdvisorService()
+        if kind == PlanningAdviceKind.LODGING_STRUCTURE and intake is not None and draft:
+            option = draft.get_option()
+            lodging_state = (
+                ShortlistStore().load(trip_id, ShortlistCategory.LODGING) if trip_id else None
+            )
+            result = (
+                advisor.advise_lodging_structure(intake, option, lodging_state)
+                if option is not None
+                else advisor.advise_next_steps(
+                    intake,
+                    draft,
+                    ShortlistStore().load_all(trip_id) if trip_id else [],
+                    user_question=str(payload.get("notes") or ""),
+                )
+            )
+        elif kind == PlanningAdviceKind.ISLAND_EXPERIENCE and intake is not None and draft:
+            result = advisor.advise_island_experience(intake, draft)
+        elif kind == PlanningAdviceKind.TRIP_SHAPE and intake is not None and draft:
+            result = advisor.advise_trip_shape(intake, draft)
+        else:
+            result = advisor.advise_next_steps(
+                intake,
+                draft,
+                ShortlistStore().load_all(trip_id) if trip_id else [],
+                user_question=str(payload.get("notes") or ""),
+            )
+        workflow = self._record_workflow(
+            workflow_name="ui-planning-advice",
+            skill_name="trippy-family-itinerary-builder",
+            trip_id=trip_id,
+            summary=f"Generated planning-advisor guidance for {kind.value}",
+            result=result.model_dump(mode="json"),
+        )
+        return {
+            "workflow_id": workflow.id,
+            "advice": result.model_dump(mode="json"),
+            "next_step": "Use this guidance to choose the next planning action; do not treat missing evidence as verified.",
+        }
+
+    def select_activity(self, payload: dict[str, Any]) -> dict[str, Any]:
+        trip_id = _trip_id(payload)
+        option_id = str(payload.get("option_id") or "")
+        state = ActivityShortlistService(self._intakes, self._planner).select_activity(
+            trip_id,
+            option_id,
+        )
+        workflow = self._record_workflow(
+            workflow_name="ui-trip-plan-activity-select",
+            skill_name="trippy-family-itinerary-builder",
+            trip_id=trip_id,
+            summary=f"Approved activity option {option_id} for the trip timeline",
+            result=state.model_dump(mode="json"),
+        )
+        return {
+            "workflow_id": workflow.id,
+            "shortlist": state.model_dump(mode="json"),
+            "next_step": "Review or adjust the activity day/time, then refresh the workspace timeline.",
+        }
+
+    def schedule_activity(self, payload: dict[str, Any]) -> dict[str, Any]:
+        trip_id = _trip_id(payload)
+        option_id = str(payload.get("option_id") or "")
+        state = ActivityShortlistService(self._intakes, self._planner).schedule_activity(
+            trip_id,
+            option_id,
+            day=_int_or_none(payload.get("day")),
+            date_value=_optional_str(payload.get("date")),
+            start_time=_optional_str(payload.get("start_time")),
+            end_time=_optional_str(payload.get("end_time")),
+            fixed=bool(payload.get("fixed", False)),
+            notes=str(payload.get("notes") or "").strip(),
+        )
+        workflow = self._record_workflow(
+            workflow_name="ui-trip-plan-activity-schedule",
+            skill_name="trippy-family-itinerary-builder",
+            trip_id=trip_id,
+            summary=f"Scheduled activity option {option_id} into the trip timeline",
+            result=state.model_dump(mode="json"),
+        )
+        return {
+            "workflow_id": workflow.id,
+            "shortlist": state.model_dump(mode="json"),
+            "next_step": "Refresh the workspace to see this activity in the Master Timeline.",
+        }
+
+    def select_car(self, payload: dict[str, Any]) -> dict[str, Any]:
+        trip_id = _trip_id(payload)
+        option_id = str(payload.get("option_id") or "")
+        state = CarShortlistService(self._intakes, self._planner).select_car(
+            trip_id,
+            option_id,
+        )
+        workflow = self._record_workflow(
+            workflow_name="ui-trip-plan-car-select",
+            skill_name="trippy-family-itinerary-builder",
+            trip_id=trip_id,
+            summary=f"Selected car rental option {option_id} for planning",
+            result=state.model_dump(mode="json"),
+        )
+        return {
+            "workflow_id": workflow.id,
+            "shortlist": state.model_dump(mode="json"),
+            "next_step": "Review pickup/dropoff timing, luggage fit, fees, and driving/parking friction.",
+        }
+
+    def update_trip_packet_item(self, payload: dict[str, Any]) -> dict[str, Any]:
+        trip_id = _trip_id(payload)
+        packet = TripExecutionService().update_item(
+            trip_id,
+            category=str(payload.get("category") or ""),
+            option_id=str(payload.get("option_id") or ""),
+            status=str(payload.get("status") or "booked"),
+            provider=str(payload.get("provider") or ""),
+            booking_link=str(payload.get("booking_link") or payload.get("source_url") or ""),
+            confirmation_code=str(payload.get("confirmation_code") or ""),
+            date=str(payload.get("date") or ""),
+            start_time=str(payload.get("start_time") or ""),
+            end_time=str(payload.get("end_time") or ""),
+            address=str(payload.get("address") or ""),
+            cost_cad=_float_or_none(payload.get("cost_cad")),
+            notes=str(payload.get("notes") or ""),
+        )
+        workflow = self._record_workflow(
+            workflow_name="ui-trip-packet-update",
+            trip_id=trip_id,
+            summary=(
+                f"Updated {payload.get('category') or 'trip'} booking packet "
+                f"item {payload.get('option_id') or ''}"
+            ),
+            result=packet.model_dump(mode="json"),
+        )
+        return {
+            "workflow_id": workflow.id,
+            "trip_packet": packet.model_dump(mode="json"),
+            "next_step": "Refresh the timeline, map, and Google Sheet so confirmations are visible.",
         }
 
     def delete_trip(self, trip_id: str) -> dict[str, Any]:
@@ -444,8 +660,28 @@ class TrippyUIService:
         return {
             "workflow_id": workflow.id,
             "map": artifact.model_dump(mode="json"),
-            "next_step": "Open the map links from the dashboard or planning workspace.",
+            "next_step": "Open the single ordered Google Map or import the KML into Google My Maps.",
         }
+
+    def map_file_path(self, trip_id: str, kind: str) -> Path:
+        allowed = {
+            "json": f"{trip_id}-planning-map.json",
+            "geojson": f"{trip_id}-planning-map.geojson",
+            "kml": f"{trip_id}-planning-map.kml",
+            "csv": f"{trip_id}-planning-map.csv",
+        }
+        filename = allowed.get(kind)
+        if filename is None:
+            raise ValueError("kind must be one of: json, geojson, kml, csv")
+        path = (config.EXPORT_PATH / "maps" / filename).resolve()
+        maps_root = (config.EXPORT_PATH / "maps").resolve()
+        if maps_root not in path.parents and path != maps_root:
+            raise ValueError("Invalid map file path")
+        if not path.exists():
+            self.build_map(trip_id)
+        if not path.exists():
+            raise FileNotFoundError(f"Map file was not generated: {kind}")
+        return path
 
     def add_feedback(self, payload: dict[str, Any]) -> dict[str, Any]:
         workflow_id = str(payload.get("workflow_id") or "")
@@ -552,6 +788,15 @@ class TrippyUIHandler(BaseHTTPRequestHandler):
                     return
                 self._send_json(self._ui.trip_state(trip_id))
                 return
+            if path == "/api/map-file":
+                query = parse_qs(urlparse(self.path).query)
+                trip_id = query.get("trip_id", [""])[0]
+                kind = query.get("kind", [""])[0]
+                if not trip_id:
+                    self._send_error("trip_id is required", HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_file(self._ui.map_file_path(trip_id, kind))
+                return
             if path.startswith("/static/"):
                 self._send_static(path.removeprefix("/static/"))
                 return
@@ -598,6 +843,30 @@ class TrippyUIHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/select-flight":
                 self._send_json(self._ui.select_flight(payload))
+                return
+            if path == "/api/select-lodging":
+                self._send_json(self._ui.select_lodging(payload))
+                return
+            if path == "/api/lodging-structure":
+                self._send_json(self._ui.update_lodging_structure(payload))
+                return
+            if path == "/api/lodging-structure-suggestions":
+                self._send_json(self._ui.suggest_lodging_structures(payload))
+                return
+            if path == "/api/planning-advice":
+                self._send_json(self._ui.planning_advice(payload))
+                return
+            if path == "/api/select-activity":
+                self._send_json(self._ui.select_activity(payload))
+                return
+            if path == "/api/schedule-activity":
+                self._send_json(self._ui.schedule_activity(payload))
+                return
+            if path == "/api/select-car":
+                self._send_json(self._ui.select_car(payload))
+                return
+            if path == "/api/trip-packet/item":
+                self._send_json(self._ui.update_trip_packet_item(payload))
                 return
             if path == "/api/workspace":
                 self._send_json(
@@ -667,6 +936,29 @@ class TrippyUIHandler(BaseHTTPRequestHandler):
         self._send_file(candidate)
 
 
+def _create_ui_server(
+    host: str,
+    port: int,
+    handler: Any,
+    *,
+    port_retries: int = 10,
+) -> ThreadingHTTPServer:
+    """Bind the UI server, falling forward when the preferred port is busy."""
+    candidates = [0] if port == 0 else range(port, port + port_retries + 1)
+    for candidate in candidates:
+        try:
+            server = ThreadingHTTPServer((host, candidate), handler)
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE or candidate == port + port_retries:
+                raise
+            continue
+        if port != 0 and server.server_port != port:
+            print(f"Port {port} is in use; using {server.server_port} instead.")
+        return server
+    msg = f"No available UI port found from {port} to {port + port_retries}."
+    raise OSError(errno.EADDRINUSE, msg)
+
+
 def serve_ui(host: str = "127.0.0.1", port: int = 8787, *, open_browser: bool = True) -> None:
     """Serve the local Trippy UI until interrupted."""
     service = TrippyUIService()
@@ -676,7 +968,7 @@ def serve_ui(host: str = "127.0.0.1", port: int = 8787, *, open_browser: bool = 
         static_dir=STATIC_DIR,
         template_dir=TEMPLATE_DIR,
     )
-    server = ThreadingHTTPServer((host, port), handler)
+    server = _create_ui_server(host, port, handler)
     url = f"http://{host}:{server.server_port}"
     print(f"Trippy UI running at {url}")
     if open_browser:
@@ -881,6 +1173,31 @@ def _parse_roster(value: object) -> list[TripTraveler]:
                 age_band = TravelerAgeBand(_normalise_enum(parts[1], "adult"))
         travelers.append(TripTraveler(name=name, age=age, age_band=age_band))
     return travelers
+
+
+def _flight_candidate_notes(payload: dict[str, Any]) -> str:
+    parts = []
+    notes = _optional_str(payload.get("notes"))
+    if notes:
+        parts.append(notes)
+    field_labels = {
+        "flight_numbers": "flight numbers",
+        "departure_date": "departure date",
+        "departure_time": "depart",
+        "arrival_date": "arrival date",
+        "arrival_time": "arrive",
+        "total_duration": "duration",
+        "stops": "stops",
+        "layover_airports": "via",
+        "layover_duration": "layover",
+        "price_band": "price",
+        "baggage_notes": "baggage",
+    }
+    for key, label in field_labels.items():
+        value = _optional_str(payload.get(key))
+        if value:
+            parts.append(f"{label}: {value}")
+    return ". ".join(parts)
 
 
 def _trip_id(payload: dict[str, Any]) -> str:

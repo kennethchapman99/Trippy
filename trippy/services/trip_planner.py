@@ -13,6 +13,7 @@ from trippy.models.trip_planning import (
     TripPlanOption,
 )
 from trippy.services.country_priors import CountryPriorService
+from trippy.services.planning_advisor import PlanningAdvisorService
 from trippy.services.trip_ideation import TripIdeationService
 from trippy.services.trip_intake import TripIntakeService
 
@@ -40,6 +41,14 @@ class TripPlannerService:
     def draft(self, trip_id: str) -> TripPlanDraft:
         intake = self._intakes.require(trip_id)
         draft = self._build_draft(intake)
+        draft.advisor = (
+            PlanningAdvisorService(enabled=False)
+            .advise_trip_shape(
+                intake,
+                draft,
+            )
+            .model_dump(mode="json")
+        )
         self.save_draft(draft)
         return draft
 
@@ -53,7 +62,7 @@ class TripPlannerService:
         if not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
-        return TripPlanDraft.model_validate(data)
+        return _normalize_loaded_draft(TripPlanDraft.model_validate(data))
 
     def require_draft(self, trip_id: str) -> TripPlanDraft:
         draft = self.load_draft(trip_id)
@@ -111,6 +120,9 @@ class TripPlannerService:
                 duration_days=intake.duration_days,
                 budget_cad=intake.budget_cad,
                 travelers=intake.party.total_travelers,
+                party_type=intake.party.party_type.value,
+                adults=intake.party.adults,
+                children=intake.party.children,
                 max_flight_hours=intake.max_travel_time_hours,
                 direct_flight_preferred=intake.flight_preferences.prefer_direct,
                 goals=intake.goals,
@@ -157,7 +169,11 @@ class TripPlannerService:
 
     def _build_generic_selected_destination_draft(self, intake: TripIntake) -> TripPlanDraft:
         duration = intake.duration_days or 8
-        destination = ", ".join(intake.destination_seeds)
+        destination = ", ".join(intake.destination_seeds) or intake.trip_name or "Destination"
+        single_base_region = (
+            intake.destination_seeds[0] if intake.destination_seeds else destination
+        )
+        balanced_regions = intake.destination_seeds[:2] or [single_base_region]
         signals = [
             signal.rationale
             for seed in intake.destination_seeds
@@ -170,11 +186,11 @@ class TripPlannerService:
         options = [
             TripPlanOption(
                 option_id="single-base-easy",
-                title=f"{destination} Single-Base Easy Version",
+                title=f"{single_base_region} Single-Base Easy Version",
                 summary="Minimize logistics by choosing one strong home base and doing selective day trips.",
                 duration_days=duration,
-                regions=intake.destination_seeds,
-                nights_by_region=_even_nights(intake.destination_seeds, duration),
+                regions=[single_base_region],
+                nights_by_region={single_base_region: max(1, duration - 1)},
                 rationale=[
                     f"Lowest movement friction and easiest to make comfortable for {intake.party.summary()}.",
                     "Best first draft when exact transport and lodging options are not yet validated.",
@@ -202,10 +218,8 @@ class TripPlannerService:
                 title=f"{destination} Two-Region Balanced Version",
                 summary="Use two bases to improve coverage while preserving downtime.",
                 duration_days=duration,
-                regions=intake.destination_seeds,
-                nights_by_region=_even_nights(
-                    intake.destination_seeds[:2] or intake.destination_seeds, duration
-                ),
+                regions=balanced_regions,
+                nights_by_region=_even_nights(balanced_regions, duration),
                 rationale=[
                     "Balances depth with a broader sense of place.",
                     "Usually the best pattern if the trip is at least 8-10 days.",
@@ -411,6 +425,24 @@ def _even_nights(regions: list[str], duration_days: int) -> dict[str, int]:
     base = nights // len(regions)
     extra = nights % len(regions)
     return {region: base + (1 if idx < extra else 0) for idx, region in enumerate(regions)}
+
+
+def _normalize_loaded_draft(draft: TripPlanDraft) -> TripPlanDraft:
+    """Repair older generic drafts whose labels and stay regions disagreed."""
+    for option in draft.options:
+        if option.option_id == "single-base-easy" and len(option.regions) > 1:
+            primary = option.regions[0]
+            total_nights = sum(option.nights_by_region.values()) or max(
+                1, option.duration_days - 1
+            )
+            option.title = option.title.replace(
+                ", ".join(option.regions), primary, 1
+            )
+            option.regions = [primary]
+            option.nights_by_region = {primary: total_nights}
+        if option.option_id == "two-region-balanced" and option.nights_by_region:
+            option.regions = list(option.nights_by_region)
+    return draft
 
 
 def _required_research() -> list[str]:

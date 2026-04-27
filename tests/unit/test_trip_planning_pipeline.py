@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from typer.testing import CliRunner
@@ -19,6 +21,7 @@ from trippy.models.shortlists import (
     VerificationStatus,
 )
 from trippy.models.source_research import SourceAdapterCapability, SourceResearchStatus
+from trippy.models.trip import Trip
 from trippy.models.trip_planning import (
     TravelerAgeBand,
     TravelWindow,
@@ -28,6 +31,7 @@ from trippy.models.trip_planning import (
     TripPartyType,
     TripTraveler,
     WorkspaceStatus,
+    WorkspaceTab,
 )
 from trippy.services.activity_shortlist import ActivityShortlistService
 from trippy.services.car_shortlist import CarShortlistService
@@ -39,6 +43,7 @@ from trippy.services.shortlist_store import ShortlistStore
 from trippy.services.source_research import (
     LinkResearchAdapter,
     OpenClawResearchAdapter,
+    PlaywrightActivityAdapter,
     PlaywrightFlightAdapter,
     PlaywrightLodgingAdapter,
     SourceResearchService,
@@ -96,8 +101,12 @@ def test_azores_golden_path_services(
     assert tabs["Flights"].rows[0][1] in {"researched", "verified_live"}
     assert tabs["Flights"].rows[0][2] == "yes"
     assert tabs["Lodging"].rows[0][1] in {"recommended", "researched"}
-    assert tabs["Cars"].rows[0][7] >= 5
-    assert any(row[5] == "activity" for row in tabs["Master Timeline"].rows)
+    assert tabs["Cars"].rows[0][8] >= 5
+    timeline = tabs["Master Timeline"].rows
+    assert any(row[5] == "activity" for row in timeline)
+    assert [int(row[0]) for row in timeline] == sorted(int(row[0]) for row in timeline)
+    assert all(row[1] for row in timeline)
+    assert all("summer 2027" in row[1] for row in timeline)
     assert any("Traveler Roster" in row for row in tabs["Overview"].rows)
 
     canonical = TripStateService().load(intake.trip_id)
@@ -121,7 +130,35 @@ def test_azores_golden_path_services(
 
     assert flights.category == ShortlistCategory.FLIGHTS
     assert flights.recommended_option_id == "flight-direct-yyz-pdl"
-    assert "google.com/travel/flights" in flights.flight_options[0].deep_link
+    flight_link = flights.flight_options[0].deep_link
+    flight_params = parse_qs(urlparse(flight_link).query)
+    assert "google.com/travel/flights" in flight_link
+    assert "?q=" not in flight_link
+    assert flight_params["tfu"] == ["EgIIACIA"]
+    assert flight_params["origin"] == ["YYZ"]
+    assert flight_params["destination"] == ["PDL"]
+    assert flight_params["departure"] == ["2027-06-15"]
+    assert "f=0" not in flight_params["tfs"][0]
+    tfs_padding = "=" * (-len(flight_params["tfs"][0]) % 4)
+    tfs_payload = base64.urlsafe_b64decode(flight_params["tfs"][0] + tfs_padding)
+    assert b"YYZ" in tfs_payload
+    assert b"PDL" in tfs_payload
+    assert b"2027-06-15" in tfs_payload
+    flight_links = [
+        link
+        for option in flights.flight_options
+        for link in [option.deep_link, *option.comparison_links.values()]
+    ]
+    assert all("Flights-Search" not in link for link in flight_links)
+    assert all("flighthub.com" not in link for link in flight_links)
+    assert any(
+        "ca.kayak.com/flights/YYZ-PDL/2027-06-15/2027-06-25/5adults"
+        in link
+        for link in flight_links
+    )
+    assert any(
+        "placeholder search dates" in note for note in flights.flight_options[0].confidence_notes
+    )
     assert lodging.lodging_options
     assert lodging.recommended_option_id is not None
     assert cars.car_options[0].booking_source == "Booking.com"
@@ -129,6 +166,16 @@ def test_azores_golden_path_services(
     assert "Flights-Search" not in cars.car_options[1].deep_link
     assert "/flights/" not in cars.car_options[2].deep_link
     assert activities.activity_options[0].source == "GetYourGuide"
+    activity_links = [
+        link
+        for option in activities.activity_options
+        for link in [option.deep_link, *option.validation_links.values()]
+    ]
+    assert all("airbnb.ca" not in link for link in activity_links)
+    assert all(
+        "Airbnb Experiences" not in option.validation_links
+        for option in activities.activity_options
+    )
     assert flights.flight_options[0].row_status == ShortlistRowStatus.RESEARCHED
     assert (
         flights.flight_options[0].validation.verification_status
@@ -153,6 +200,92 @@ def test_azores_golden_path_services(
     planned = next(tile for tile in dashboard.planned_trips if tile.trip_id == intake.trip_id)
     assert planned.planning_status["workspace"] == "prepared_local"
     assert planned.shortlist_status["flights"].startswith("3 option")
+    assert planned.planning_completeness < 100
+
+
+def test_google_workspace_updates_existing_sheet_instead_of_creating_new() -> None:
+    class _Request:
+        def __init__(self, response: dict[str, object]) -> None:
+            self.response = response
+
+        def execute(self) -> dict[str, object]:
+            return self.response
+
+    class _Values:
+        def __init__(self) -> None:
+            self.batch_clears: list[dict[str, object]] = []
+            self.batch_updates: list[dict[str, object]] = []
+
+        def batchClear(self, spreadsheetId: str, body: dict[str, object]) -> _Request:  # noqa: N803
+            self.batch_clears.append({"spreadsheetId": spreadsheetId, "body": body})
+            return _Request({})
+
+        def batchUpdate(self, spreadsheetId: str, body: dict[str, object]) -> _Request:  # noqa: N803
+            self.batch_updates.append({"spreadsheetId": spreadsheetId, "body": body})
+            return _Request({})
+
+    class _Spreadsheets:
+        def __init__(self) -> None:
+            self.created: list[dict[str, object]] = []
+            self.batch_updates: list[dict[str, object]] = []
+            self.values_api = _Values()
+
+        def create(self, body: dict[str, object]) -> _Request:
+            self.created.append(body)
+            return _Request({"spreadsheetId": "new-sheet", "spreadsheetUrl": "new-url"})
+
+        def get(self, spreadsheetId: str, fields: str) -> _Request:  # noqa: N803
+            return _Request(
+                {
+                    "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/sheet-123",
+                    "sheets": [
+                        {"properties": {"sheetId": 1, "title": "Overview"}},
+                        {"properties": {"sheetId": 2, "title": "Flights"}},
+                    ],
+                }
+            )
+
+        def batchUpdate(self, spreadsheetId: str, body: dict[str, object]) -> _Request:  # noqa: N803
+            self.batch_updates.append({"spreadsheetId": spreadsheetId, "body": body})
+            return _Request({})
+
+        def values(self) -> _Values:
+            return self.values_api
+
+    class _SheetsService:
+        def __init__(self) -> None:
+            self.spreadsheets_api = _Spreadsheets()
+
+        def spreadsheets(self) -> _Spreadsheets:
+            return self.spreadsheets_api
+
+    class _Auth:
+        def __init__(self) -> None:
+            self.service = _SheetsService()
+
+        def build_service(self, name: str, version: str) -> _SheetsService:
+            assert (name, version) == ("sheets", "v4")
+            return self.service
+
+    auth = _Auth()
+    workspace = TripWorkspaceService(auth_manager=auth)
+    result = workspace._try_create_google_sheet(
+        Trip(trip_id="azores-2027", name="Azores 2027"),
+        [
+            WorkspaceTab(name="Overview", headers=["Field", "Value"], rows=[["Trip", "Azores"]]),
+            WorkspaceTab(name="Flights", headers=["Airline"], rows=[["TAP"]]),
+        ],
+        folder_id=None,
+        existing_sheet_id="sheet-123",
+        existing_sheet_url="https://docs.google.com/spreadsheets/d/sheet-123",
+    )
+
+    sheets = auth.service.spreadsheets_api
+    assert result["spreadsheet_id"] == "sheet-123"
+    assert result["operation"] == "updated"
+    assert sheets.created == []
+    assert sheets.values_api.batch_clears[0]["spreadsheetId"] == "sheet-123"
+    assert sheets.values_api.batch_updates[0]["spreadsheetId"] == "sheet-123"
 
 
 def test_cli_azores_golden_path(
@@ -248,6 +381,11 @@ def test_cli_azores_golden_path(
     assert map_result.exit_code == 0, map_result.output
     map_payload = json.loads(map_result.output)
     assert map_payload["map"]["pins"]
+    assert map_payload["map"]["pins"][0]["label"].startswith("01 ·")
+    assert "google.com/maps/dir" in map_payload["map"]["primary_google_maps_url"]
+    assert Path(map_payload["map"]["exports"]["kml"]).exists()
+    assert Path(map_payload["map"]["exports"]["csv"]).exists()
+    assert "01," in Path(map_payload["map"]["exports"]["csv"]).read_text(encoding="utf-8")
     assert map_payload["workflow_id"].startswith("wf-")
 
     for command in ("flights", "lodging", "cars", "activities"):
@@ -474,6 +612,98 @@ def test_flight_deep_research_enriches_existing_shortlist_state(
     assert first.date_viability_signal
 
 
+def test_flight_shortlist_uses_duffel_live_offers_when_configured(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr("trippy.config.DUFFEL_ACCESS_TOKEN", "test-token")
+
+    def fake_duffel_request(token: str, payload: dict[str, object]) -> dict[str, object]:
+        assert token == "test-token"
+        data = payload["data"]
+        assert isinstance(data, dict)
+        slices = data["slices"]
+        assert isinstance(slices, list)
+        assert slices[0]["origin"] == "YYZ"
+        assert slices[0]["destination"] == "PDL"
+        return {
+            "data": {
+                "offers": [
+                    {
+                        "id": "off_live_1",
+                        "total_amount": "1180.00",
+                        "total_currency": "CAD",
+                        "owner": {"name": "Azores Airlines"},
+                        "slices": [
+                            {
+                                "duration": "PT5H55M",
+                                "segments": [
+                                    {
+                                        "departing_at": "2027-06-15T21:15:00-04:00",
+                                        "arriving_at": "2027-06-16T07:10:00+00:00",
+                                        "origin": {"iata_code": "YYZ"},
+                                        "destination": {"iata_code": "PDL"},
+                                        "marketing_carrier": {
+                                            "iata_code": "S4",
+                                            "name": "Azores Airlines",
+                                        },
+                                        "operating_carrier": {"name": "Azores Airlines"},
+                                        "marketing_carrier_flight_number": "332",
+                                    }
+                                ],
+                            },
+                            {
+                                "duration": "PT6H20M",
+                                "segments": [
+                                    {
+                                        "departing_at": "2027-06-22T10:00:00+00:00",
+                                        "arriving_at": "2027-06-22T14:20:00-04:00",
+                                        "origin": {"iata_code": "PDL"},
+                                        "destination": {"iata_code": "YYZ"},
+                                        "marketing_carrier": {
+                                            "iata_code": "S4",
+                                            "name": "Azores Airlines",
+                                        },
+                                        "operating_carrier": {"name": "Azores Airlines"},
+                                        "marketing_carrier_flight_number": "331",
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ]
+            }
+        }
+
+    monkeypatch.setattr(
+        "trippy.services.flight_shortlist._post_duffel_offer_request",
+        fake_duffel_request,
+    )
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+
+    flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
+    option = flights.flight_options[0]
+
+    assert option.option_id == "duffel-flight-1"
+    assert option.booking_source == "Duffel"
+    assert option.flight_numbers == ["S4332"]
+    assert option.departure_date == "2027-06-15"
+    assert option.departure_time == "9:15 PM"
+    assert option.arrival_date == "2027-06-16"
+    assert option.arrival_time == "7:10 AM"
+    assert option.total_travel_duration == "5h 55m"
+    assert option.price_band == "CAD 1180.00 total"
+    assert option.deep_link.startswith("https://www.google.com/travel/flights/search?")
+    assert option.row_status == ShortlistRowStatus.VERIFIED_LIVE
+    assert option.validation.adapter_used == "duffel"
+    assert "Duffel returned 1 exact offer row" in " ".join(flights.warnings)
+
+
 def test_flight_deep_research_handles_partial_secondary_source_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -600,6 +830,117 @@ def test_selecting_flight_updates_recommendation_and_workspace_timeline(
     assert any(chosen.airline in row[6] for row in timeline)
 
 
+def test_selecting_lodging_and_manual_split_drives_workspace_timeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-sao-miguel-easy")
+
+    lodging_service = LodgingShortlistService(intake_service, planner)
+    lodging = lodging_service.build(intake.trip_id)
+    option_id = lodging.lodging_options[0].option_id
+    selected = lodging_service.select_lodging(intake.trip_id, option_id)
+    assert selected.recommended_option_id == option_id
+    assert selected.lodging_options[0].row_status == ShortlistRowStatus.APPROVED
+
+    updated = lodging_service.update_stay_structure(
+        intake.trip_id,
+        strategy="split_stay",
+        night_plan=[
+            {
+                "region": "Ponta Delgada",
+                "nights": 4,
+                "lodging_option_id": option_id,
+                "notes": "central first base",
+            },
+            {
+                "region": "Furnas",
+                "nights": 3,
+                "notes": "second base to reduce backtracking",
+            },
+        ],
+        notes="Manual same-island split test.",
+    )
+    structure = updated.artifacts["lodging_structure"]
+    assert structure["strategy"] == "split_stay"
+    assert structure["data_status"] == "manual_override"
+
+    workspace = TripWorkspaceService(intake_service, planner).prepare(
+        intake.trip_id,
+        create_google_sheet=False,
+    )
+    tabs = {tab.name: tab for tab in workspace.tabs}
+    stay_plan = tabs["Stay Plan"].rows
+    timeline = tabs["Master Timeline"].rows
+    assert any(row[1] == "Furnas" and row[2] == 3 for row in stay_plan)
+    assert any(row[6] == "Check in: Furnas" for row in timeline)
+    assert any("second base" in row[18] for row in timeline)
+
+
+def test_lodging_service_suggests_editable_split_stay_options(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-sao-miguel-easy")
+
+    lodging_service = LodgingShortlistService(intake_service, planner)
+    lodging_service.build(intake.trip_id)
+    updated = lodging_service.suggest_stay_structures(intake.trip_id, use_llm=False)
+
+    structure = updated.artifacts["lodging_structure"]
+    options = structure["options"]
+    assert len(options) == 3
+    assert {option["strategy"] for option in options} == {"single_stay", "split_stay"}
+    assert all(option["night_plan"] for option in options)
+    assert any(
+        any("Furnas" in stay["region"] for stay in option["night_plan"]) for option in options
+    )
+    assert len({option["thumbnail_variant"] for option in options}) >= 2
+
+
+def test_lodging_split_seeds_options_for_each_saved_base(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-sao-miguel-easy")
+
+    lodging_service = LodgingShortlistService(intake_service, planner)
+    lodging_service.build(intake.trip_id)
+    updated = lodging_service.update_stay_structure(
+        intake.trip_id,
+        strategy="split_stay",
+        night_plan=[
+            {"region": "Ponta Delgada / south coast", "nights": 4},
+            {"region": "Ribeira Grande / north coast", "nights": 2},
+        ],
+        notes="Testing a north-coast second base.",
+    )
+
+    regions = [option.location_area for option in updated.lodging_options]
+    assert any("Ponta Delgada" in region for region in regions)
+    assert any("Ribeira Grande" in region for region in regions)
+    ribeira = next(
+        option for option in updated.lodging_options if "Ribeira Grande" in option.location_area
+    )
+    assert ribeira.option_id.startswith("stay-region-lodging-ribeira-grande")
+    assert any("location-specific search seed" in flag for flag in ribeira.friction_flags)
+
+
 def test_selected_plan_shapes_research_targets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -622,6 +963,91 @@ def test_selected_plan_shapes_research_targets(
     assert all("Pico" not in option.pickup_location for option in cars.car_options)
     assert all("Pico" not in option.island_location for option in activities.activity_options)
     assert all("Faial" not in option.island_location for option in activities.activity_options)
+
+
+def test_generic_activity_shortlist_offers_multiple_specific_choices(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(
+        TripIntake(
+            mode=TripIntakeMode.SELECTED_DESTINATION,
+            trip_name="Grand Cayman",
+            destination_seeds=[
+                "Seven Mile Beach",
+                "West Bay",
+                "Stingray City or Rum Point",
+            ],
+            duration_days=7,
+            party=TripParty(
+                party_type=TripPartyType.WHOLE_FAMILY,
+                adults=2,
+                children=3,
+                explicit=True,
+            ),
+        )
+    )
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "single-base-easy")
+
+    activities = ActivityShortlistService(intake_service, planner).build(intake.trip_id)
+
+    assert len(activities.activity_options) >= 5
+    names = " ".join(option.activity_name for option in activities.activity_options)
+    assert "Seven Mile Beach" in names
+    assert "West Bay" in names
+    assert "Stingray" in names
+    assert all(option.price_band == "source price required" for option in activities.activity_options)
+    assert all(
+        option.duration == "source schedule required" for option in activities.activity_options
+    )
+    assert all(not option.suggested_start_time for option in activities.activity_options)
+    assert all("airbnb.ca" not in option.deep_link for option in activities.activity_options)
+
+
+def test_activity_deep_research_extracts_cost_time_and_availability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+
+    def fake_fetcher(url: str, timeout: float) -> tuple[str, str, list[str]]:
+        return (
+            """
+            <html><body>
+            <h1>Stingray Sandbar small-group tour</h1>
+            <p>From C$89 per person. Check availability. Free cancellation.</p>
+            <p>Starts at 9:30 AM and ends at 12:30 PM. Duration 3 hours.</p>
+            <p>Small group limited to 10. Rated 4.8 out of 5.</p>
+            </body></html>
+            """,
+            url,
+            ["fixture activity page"],
+        )
+
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-sao-miguel-easy")
+    activities = ActivityShortlistService(intake_service, planner).build(intake.trip_id)
+
+    researched = SourceResearchService(
+        adapters=[PlaywrightActivityAdapter(fetcher=fake_fetcher)],
+        research_dir=tmp_path / "research",
+    ).research_state(activities, adapter_mode="playwright")
+    option = researched.activity_options[0]
+
+    assert option.price_band == "C$89 per person"
+    assert option.duration in {"3 hours", "3 h"}
+    assert option.suggested_start_time == "9:30 AM"
+    assert option.suggested_end_time == "12:30 PM"
+    assert "availability_signal" in option.validation.extracted_fields
+    assert option.validation.price_status.value == "live_signal"
+    assert option.validation.availability_status.value == "availability_signal"
 
 
 def test_trip_party_edge_cases_are_visible() -> None:
@@ -665,6 +1091,85 @@ def test_trip_party_edge_cases_are_visible() -> None:
     assert "defaulted" not in six.party.summary()
     assert unnamed.party.total_travelers == 4
     assert "defaulted; confirm roster" in unnamed.party.summary()
+
+
+def test_generic_single_base_plan_uses_one_lodging_base(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(
+        TripIntake(
+            mode=TripIntakeMode.SELECTED_DESTINATION,
+            trip_name="Grand Cayman",
+            destination_seeds=[
+                "Seven Mile Beach",
+                "West Bay",
+                "Stingray City or Rum Point",
+            ],
+            duration_days=7,
+            party=TripParty(
+                party_type=TripPartyType.WHOLE_FAMILY,
+                adults=2,
+                children=3,
+                explicit=True,
+            ),
+        )
+    )
+
+    planner = TripPlannerService(intake_service)
+    draft = planner.draft(intake.trip_id)
+
+    single_base = draft.get_option("single-base-easy")
+    assert single_base is not None
+    assert single_base.title == "Seven Mile Beach Single-Base Easy Version"
+    assert single_base.regions == ["Seven Mile Beach"]
+    assert single_base.nights_by_region == {"Seven Mile Beach": 6}
+
+    balanced = draft.get_option("two-region-balanced")
+    assert balanced is not None
+    assert balanced.regions == ["Seven Mile Beach", "West Bay"]
+    assert set(balanced.nights_by_region) == {"Seven Mile Beach", "West Bay"}
+
+    stale = draft.model_dump(mode="json")
+    for option in stale["options"]:
+        if option["option_id"] == "single-base-easy":
+            option["title"] = (
+                "Seven Mile Beach, West Bay, Stingray City or Rum Point Single-Base Easy Version"
+            )
+            option["regions"] = [
+                "Seven Mile Beach",
+                "West Bay",
+                "Stingray City or Rum Point",
+            ]
+            option["nights_by_region"] = {
+                "Seven Mile Beach": 2,
+                "West Bay": 2,
+                "Stingray City or Rum Point": 2,
+            }
+        if option["option_id"] == "two-region-balanced":
+            option["regions"] = [
+                "Seven Mile Beach",
+                "West Bay",
+                "Stingray City or Rum Point",
+            ]
+            option["nights_by_region"] = {
+                "Seven Mile Beach": 3,
+                "West Bay": 3,
+            }
+    planner.path_for(intake.trip_id).write_text(json.dumps(stale), encoding="utf-8")
+
+    loaded = planner.load_draft(intake.trip_id)
+    assert loaded is not None
+    loaded_single = loaded.get_option("single-base-easy")
+    assert loaded_single is not None
+    assert loaded_single.title == "Seven Mile Beach Single-Base Easy Version"
+    assert loaded_single.regions == ["Seven Mile Beach"]
+    assert loaded_single.nights_by_region == {"Seven Mile Beach": 6}
+    loaded_balanced = loaded.get_option("two-region-balanced")
+    assert loaded_balanced is not None
+    assert loaded_balanced.regions == ["Seven Mile Beach", "West Bay"]
 
 
 def _patch_planning_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

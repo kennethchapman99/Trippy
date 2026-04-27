@@ -79,6 +79,7 @@ class SourceResearchService:
             LinkResearchAdapter(),
             PlaywrightFlightAdapter(),
             PlaywrightLodgingAdapter(),
+            PlaywrightActivityAdapter(),
             OpenClawResearchAdapter(),
         ]
 
@@ -97,28 +98,34 @@ class SourceResearchService:
             "started_at": datetime.utcnow().isoformat(),
             "category": state.category.value,
         }
-        if state.category not in {ShortlistCategory.LODGING, ShortlistCategory.FLIGHTS}:
+        if state.category not in {
+            ShortlistCategory.LODGING,
+            ShortlistCategory.FLIGHTS,
+            ShortlistCategory.ACTIVITIES,
+        }:
             state.artifacts["deep_research"]["status"] = "skipped"
             state.artifacts["deep_research"]["notes"] = [
-                "Deep adapters are implemented for lodging and flights; other categories remain source-link validated."
+                "Deep adapters are implemented for lodging, flights, and activities; other categories remain source-link validated."
             ]
             return state
 
         run_results: list[SourceResearchResult] = []
         selected_option_ids = set(option_ids or [])
-        options = (
-            state.lodging_options
-            if state.category == ShortlistCategory.LODGING
-            else state.flight_options
-        )
+        if state.category == ShortlistCategory.LODGING:
+            options = state.lodging_options
+        elif state.category == ShortlistCategory.FLIGHTS:
+            options = state.flight_options
+        else:
+            options = state.activity_options
         for option in options:
             if selected_option_ids and option.option_id not in selected_option_ids:
                 continue
-            request = (
-                _request_for_lodging_option(state, option, mode)
-                if state.category == ShortlistCategory.LODGING
-                else _request_for_flight_option(state, option, mode)
-            )
+            if state.category == ShortlistCategory.LODGING:
+                request = _request_for_lodging_option(state, option, mode)
+            elif state.category == ShortlistCategory.FLIGHTS:
+                request = _request_for_flight_option(state, option, mode)
+            else:
+                request = _request_for_activity_option(state, option, mode)
             option_dir = (
                 self._research_dir
                 / state.trip_id
@@ -129,8 +136,10 @@ class SourceResearchService:
             result = self._research_request(request, mode=mode, artifact_dir=option_dir)
             if state.category == ShortlistCategory.LODGING:
                 _apply_lodging_observations(option, result, run_id=run_id)
-            else:
+            elif state.category == ShortlistCategory.FLIGHTS:
                 _apply_flight_observations(option, result, run_id=run_id)
+            else:
+                _apply_activity_observations(option, result, run_id=run_id)
             run_results.append(result)
 
         state.artifacts["deep_research"].update(
@@ -151,7 +160,12 @@ class SourceResearchService:
                 "or inventory as ready-to-click."
             )
             if state.category == ShortlistCategory.FLIGHTS
-            else "Review deep-research evidence for lodging rows before treating any option as ready-to-click.",
+            else (
+                "Review deep-research evidence for activity rows before treating cost, time, duration, "
+                "or availability as ready-to-click."
+                if state.category == ShortlistCategory.ACTIVITIES
+                else "Review deep-research evidence for lodging rows before treating any option as ready-to-click."
+            ),
         )
         self._record_run_event(state, run_id, run_results)
         return state
@@ -475,6 +489,102 @@ class PlaywrightLodgingAdapter:
         )
 
 
+class PlaywrightActivityAdapter:
+    """Browser-capable activity adapter for price, schedule, and inventory signals."""
+
+    capability = SourceAdapterCapability.PLAYWRIGHT
+
+    def __init__(
+        self,
+        *,
+        fetcher: HtmlFetcher | None = None,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        self._fetcher = fetcher or _fetch_html
+        self._custom_fetcher = fetcher is not None
+        self._timeout = timeout_seconds or config.SOURCE_RESEARCH_TIMEOUT_SECONDS
+
+    def can_handle(self, request: SourceResearchRequest) -> bool:
+        return request.category == ShortlistCategory.ACTIVITIES.value and bool(request.source_url)
+
+    def research(
+        self,
+        request: SourceResearchRequest,
+        *,
+        artifact_dir: Path,
+    ) -> SourceResearchResult:
+        notes = [
+            "Read-only activity source extraction; no booking, login, payment, or cart action attempted."
+        ]
+        try:
+            if (
+                config.SOURCE_RESEARCH_PLAYWRIGHT_ENABLED
+                and not self._custom_fetcher
+                and shutil.which("npx") is not None
+            ):
+                html, final_url, fetch_notes = _fetch_html_with_playwright(
+                    request.source_url,
+                    self._timeout,
+                )
+            else:
+                html, final_url, fetch_notes = self._fetcher(request.source_url, self._timeout)
+        except (URLError, OSError, TimeoutError, ValueError) as exc:
+            return _result(
+                request,
+                adapter=self.capability,
+                status=SourceResearchStatus.BLOCKED,
+                confidence=0.2,
+                notes=[*notes, f"Activity source fetch was blocked: {exc}"],
+                missing_fields=_activity_missing_fields(),
+            )
+
+        notes.extend(fetch_notes)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        html_path = artifact_dir / "source.html"
+        html_path.write_text(html[:500_000], encoding="utf-8")
+        text = _page_text(html)
+        text_path = artifact_dir / "source-text.txt"
+        text_path.write_text(text[:80_000], encoding="utf-8")
+        observations = _extract_activity_observations(
+            text,
+            request=request,
+            evidence_refs=[str(html_path), str(text_path), final_url],
+        )
+        missing = _remaining_activity_fields(observations)
+        confidence = _observation_confidence(observations)
+        status = (
+            SourceResearchStatus.SUCCESS
+            if confidence >= 0.62 and len(missing) <= 2
+            else SourceResearchStatus.PARTIAL
+            if observations
+            else SourceResearchStatus.BLOCKED
+        )
+        artifacts = [
+            EvidenceArtifact(
+                artifact_type="html",
+                label="Fetched activity source HTML snapshot",
+                path=str(html_path),
+                url=final_url,
+            ),
+            EvidenceArtifact(
+                artifact_type="text",
+                label="Extracted activity source visible text",
+                path=str(text_path),
+                url=final_url,
+            ),
+        ]
+        return _result(
+            request,
+            adapter=self.capability,
+            status=status,
+            confidence=confidence,
+            observations=observations,
+            evidence_artifacts=artifacts,
+            notes=notes,
+            missing_fields=missing,
+        )
+
+
 class OpenClawResearchAdapter:
     capability = SourceAdapterCapability.OPENCLAW
 
@@ -493,7 +603,12 @@ class OpenClawResearchAdapter:
 
     def can_handle(self, request: SourceResearchRequest) -> bool:
         return (
-            request.category in {ShortlistCategory.LODGING.value, ShortlistCategory.FLIGHTS.value}
+            request.category
+            in {
+                ShortlistCategory.LODGING.value,
+                ShortlistCategory.FLIGHTS.value,
+                ShortlistCategory.ACTIVITIES.value,
+            }
             and self._enabled
             and bool(request.source_url)
             and shutil.which(self._command) is not None
@@ -666,6 +781,36 @@ def _request_for_flight_option(
     )
 
 
+def _request_for_activity_option(
+    state: ResearchShortlistState,
+    option: Any,
+    mode: SourceResearchMode,
+) -> SourceResearchRequest:
+    return SourceResearchRequest(
+        trip_id=state.trip_id,
+        category=state.category.value,
+        option_id=str(option.option_id),
+        source_name=str(option.source),
+        source_url=str(option.deep_link),
+        source_type=str(
+            option.validation.source_type.value if option.validation else "live_search"
+        ),
+        query=" ".join(
+            item
+            for item in [
+                str(option.activity_name),
+                str(option.island_location),
+                str(option.duration),
+                str(option.age_family_fit),
+            ]
+            if item
+        ),
+        candidate_name=str(option.activity_name),
+        adapter_mode=mode,
+        context=option.model_dump(mode="json"),
+    )
+
+
 def _apply_lodging_observations(option: Any, result: SourceResearchResult, *, run_id: str) -> None:
     validation: SourceValidation = option.validation or SourceValidation()
     validation.adapter_used = result.adapter_used.value
@@ -804,6 +949,10 @@ def _apply_flight_observations(option: Any, result: SourceResearchResult, *, run
         option.airline = str(observations["airline"])
     if isinstance(observations.get("flight_numbers"), list):
         option.flight_numbers = [str(value) for value in observations["flight_numbers"]]
+    if isinstance(observations.get("departure_date"), str):
+        option.departure_date = str(observations["departure_date"])
+    if isinstance(observations.get("arrival_date"), str):
+        option.arrival_date = str(observations["arrival_date"])
     if isinstance(observations.get("departure_time"), str):
         option.departure_time = str(observations["departure_time"])
     if isinstance(observations.get("arrival_time"), str):
@@ -833,6 +982,80 @@ def _apply_flight_observations(option: Any, result: SourceResearchResult, *, run
                 *option.tradeoffs,
                 "Observed timing should be checked against lodging check-in, car pickup, and first-day pacing.",
             ]
+        )
+    option.validation = validation
+
+
+def _apply_activity_observations(option: Any, result: SourceResearchResult, *, run_id: str) -> None:
+    validation: SourceValidation = option.validation or SourceValidation()
+    validation.adapter_used = result.adapter_used.value
+    validation.research_run_id = run_id
+    validation.verified_at = result.ended_at
+    validation.evidence_url = result.request.source_url or validation.evidence_url
+    validation.evidence_artifacts = result.evidence_artifacts
+    validation.extracted_fields = {
+        observation.field: observation.value for observation in result.observations
+    }
+    validation.notes = _dedupe_notes(
+        [
+            *validation.notes,
+            *result.notes,
+            "Activity source research extracts evidence only; final times, inventory, pickup, and booking terms can change before purchase.",
+        ]
+    )
+    validation.missing_fields = sorted(set(result.missing_fields))
+    validation.confidence = max(validation.confidence, result.confidence)
+    validation.price_status = (
+        PriceStatus.LIVE_SIGNAL
+        if "price_signal" in validation.extracted_fields
+        else validation.price_status
+    )
+    validation.availability_status = (
+        AvailabilityStatus.AVAILABILITY_SIGNAL
+        if "availability_signal" in validation.extracted_fields
+        else validation.availability_status
+    )
+    if result.status == SourceResearchStatus.SUCCESS:
+        validation.verification_status = VerificationStatus.LIVE_VERIFIED
+        validation.freshness_status = FreshnessStatus.CURRENT
+        option.row_status = ShortlistRowStatus.VERIFIED_LIVE
+        option.live_data_status = LiveDataStatus.LIVE_VERIFIED
+    elif result.status == SourceResearchStatus.PARTIAL:
+        if result.adapter_used == SourceAdapterCapability.LINK:
+            validation.verification_status = VerificationStatus.MANUAL_REQUIRED
+            validation.freshness_status = FreshnessStatus.UNKNOWN
+            option.row_status = ShortlistRowStatus.RESEARCHED
+            option.live_data_status = LiveDataStatus.HANDOFF_REQUIRED
+        else:
+            validation.verification_status = VerificationStatus.PARTIAL
+            validation.freshness_status = FreshnessStatus.CURRENT
+            option.row_status = (
+                ShortlistRowStatus.VERIFIED_LIVE
+                if result.confidence >= 0.45
+                else ShortlistRowStatus.RESEARCHED
+            )
+            option.live_data_status = LiveDataStatus.PARTIAL
+    else:
+        validation.verification_status = VerificationStatus.FAILED
+        option.row_status = ShortlistRowStatus.RESEARCHED
+        option.live_data_status = LiveDataStatus.HANDOFF_REQUIRED
+
+    observations = validation.extracted_fields
+    if isinstance(observations.get("price_signal"), str):
+        option.price_band = str(observations["price_signal"])
+    if isinstance(observations.get("duration_signal"), str):
+        option.duration = str(observations["duration_signal"])
+    if isinstance(observations.get("start_time"), str):
+        option.suggested_start_time = str(observations["start_time"])
+    if isinstance(observations.get("end_time"), str):
+        option.suggested_end_time = str(observations["end_time"])
+    if isinstance(observations.get("rating_summary"), str):
+        option.review_safety_signal = str(observations["rating_summary"])
+    if isinstance(observations.get("group_size_signal"), str):
+        option.group_size_signal = str(observations["group_size_signal"])
+    if isinstance(observations.get("availability_signal"), str):
+        option.confidence_notes = _dedupe_notes(
+            [*option.confidence_notes, str(observations["availability_signal"])]
         )
     option.validation = validation
 
@@ -896,10 +1119,12 @@ const timeout = Number(process.argv[2] || 12000);
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
-  await page.waitForTimeout(1200);
+  await page.waitForLoadState('networkidle', { timeout }).catch(() => {});
+  await page.waitForTimeout(2500);
+  const visibleText = await page.evaluate(() => document.body ? document.body.innerText : '');
   const html = await page.content();
   await browser.close();
-  process.stdout.write(html);
+  process.stdout.write(`${html}<pre id="trippy-visible-text">${visibleText}</pre>`);
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : String(error));
   process.exit(1);
@@ -1079,10 +1304,22 @@ def _extract_flight_observations(
         )
     departure = _time_signal(cleaned, ["depart", "departure", "leaves", "outbound"])
     arrival = _time_signal(cleaned, ["arrive", "arrival", "lands"])
+    departure_date = _date_signal(cleaned, ["depart", "departure", "outbound", "leaves"])
+    arrival_date = _date_signal(cleaned, ["arrive", "arrival", "lands"])
     if not departure or not arrival:
         paired_departure, paired_arrival = _time_pair_signal(cleaned)
         departure = departure or paired_departure
         arrival = arrival or paired_arrival
+    if not departure_date or not arrival_date:
+        paired_departure_date, paired_arrival_date = _date_pair_signal(cleaned)
+        departure_date = departure_date or paired_departure_date
+        arrival_date = arrival_date or paired_arrival_date
+    if departure_date:
+        observations.append(
+            _observation("departure_date", departure_date, 0.6, request, evidence_refs)
+        )
+    if arrival_date:
+        observations.append(_observation("arrival_date", arrival_date, 0.6, request, evidence_refs))
     if departure:
         observations.append(_observation("departure_time", departure, 0.56, request, evidence_refs))
     if arrival:
@@ -1109,6 +1346,61 @@ def _extract_flight_observations(
     baggage = _baggage_signal(lower)
     if baggage:
         observations.append(_observation("baggage_signal", baggage, 0.45, request, evidence_refs))
+    return observations
+
+
+def _extract_activity_observations(
+    text: str,
+    *,
+    request: SourceResearchRequest,
+    evidence_refs: list[str],
+) -> list[SourceObservation]:
+    cleaned = " ".join(text.split())
+    lower = cleaned.lower()
+    observations: list[SourceObservation] = []
+    price = _extract_price(cleaned)
+    if price:
+        observations.append(
+            _observation("price_signal", price, 0.64, request, evidence_refs, "Visible activity price text")
+        )
+    availability = _activity_availability_signal(lower)
+    if availability:
+        observations.append(
+            _observation(
+                "availability_signal",
+                availability,
+                0.55,
+                request,
+                evidence_refs,
+                "Visible activity booking/availability language",
+            )
+        )
+    start_time = _time_signal(cleaned, ["start", "starts", "departure", "meet", "meeting"])
+    end_time = _time_signal(cleaned, ["end", "ends", "return", "finish", "finishes"])
+    if not start_time or not end_time:
+        paired_start, paired_end = _time_pair_signal(cleaned)
+        start_time = start_time or paired_start
+        end_time = end_time or paired_end
+    if start_time:
+        observations.append(_observation("start_time", start_time, 0.56, request, evidence_refs))
+    if end_time:
+        observations.append(_observation("end_time", end_time, 0.52, request, evidence_refs))
+    duration = _duration_signal(cleaned)
+    if duration:
+        observations.append(_observation("duration_signal", duration, 0.58, request, evidence_refs))
+    cancellation = _cancellation_signal(lower)
+    if cancellation:
+        observations.append(
+            _observation("cancellation_signal", cancellation, 0.48, request, evidence_refs)
+        )
+    group_size = _group_size_signal(cleaned)
+    if group_size:
+        observations.append(
+            _observation("group_size_signal", group_size, 0.5, request, evidence_refs)
+        )
+    rating = _rating_signal(cleaned)
+    if rating:
+        observations.append(_observation("rating_summary", rating, 0.52, request, evidence_refs))
     return observations
 
 
@@ -1160,6 +1452,19 @@ def _flight_context_observations(
                 "Fallback from canonical candidate context, not live source evidence",
             )
         )
+    for field in ("departure_date", "arrival_date"):
+        value = str(context.get(field, "")).strip()
+        if value:
+            observations.append(
+                _observation(
+                    field,
+                    value,
+                    0.32,
+                    request,
+                    evidence_refs,
+                    "Fallback from canonical candidate context, not live source evidence",
+                )
+            )
     price = _extract_price(query_text)
     if price and not any(observation.field == "price_signal" for observation in observations):
         observations.append(
@@ -1256,6 +1561,27 @@ def _flight_availability_signal(lower: str) -> str:
     return ""
 
 
+def _activity_availability_signal(lower: str) -> str:
+    if any(
+        term in lower
+        for term in ["sold out", "not available", "unavailable", "no availability", "no tours"]
+    ):
+        return "unavailable/sold-out signal visible; choose another time, date, or operator"
+    if any(
+        term in lower
+        for term in [
+            "check availability",
+            "select participants",
+            "reserve now",
+            "book now",
+            "available",
+            "free cancellation",
+        ]
+    ):
+        return "booking or availability signal visible; final inventory still needs source review"
+    return ""
+
+
 def _time_signal(text: str, labels: list[str]) -> str:
     label_pattern = "|".join(re.escape(label) for label in labels)
     match = re.search(
@@ -1279,6 +1605,42 @@ def _time_pair_signal(text: str) -> tuple[str, str]:
     return "", ""
 
 
+def _date_signal(text: str, labels: list[str]) -> str:
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    date_pattern = (
+        r"(?:20\d{2}-\d{2}-\d{2})|"
+        r"(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+20\d{2})|"
+        r"(?:\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+20\d{2})"
+    )
+    match = re.search(
+        rf"(?:{label_pattern})(?:ure|s|ing)?\s*(?:date)?\s*(?:on|:|-)?\s*({date_pattern})",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return " ".join(match.group(1).replace(",", "").split()) if match else ""
+
+
+def _date_pair_signal(text: str) -> tuple[str, str]:
+    date_pattern = (
+        r"(?:20\d{2}-\d{2}-\d{2})|"
+        r"(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+20\d{2})|"
+        r"(?:\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+20\d{2})"
+    )
+    match = re.search(rf"\b({date_pattern})\s*(?:-|–|—|to|→)\s*({date_pattern})\b", text)
+    if match:
+        return (
+            " ".join(match.group(1).replace(",", "").split()),
+            " ".join(match.group(2).replace(",", "").split()),
+        )
+    dates = re.findall(date_pattern, text, flags=re.IGNORECASE)
+    if len(dates) >= 2:
+        return (
+            " ".join(str(dates[0]).replace(",", "").split()),
+            " ".join(str(dates[1]).replace(",", "").split()),
+        )
+    return "", ""
+
+
 def _duration_signal(text: str) -> str:
     match = re.search(
         r"(?:total\s+duration|duration|travel\s+time)\s*(?:is|:|-)?\s*((?:\d+\s?(?:h|hr|hrs|hour|hours))\s*(?:\d+\s?(?:m|min|mins|minute|minutes))?)",
@@ -1292,6 +1654,33 @@ def _duration_signal(text: str) -> str:
             flags=re.IGNORECASE,
         )
     return " ".join(match.group(1).split()) if match and match.group(1).strip() else ""
+
+
+def _group_size_signal(text: str) -> str:
+    lower = text.lower()
+    if "private tour" in lower or "private group" in lower:
+        return "private tour/group signal visible"
+    match = re.search(
+        r"(?:small group|group size|limited to|max(?:imum)?(?: group)?)(?:\s*(?:of|to|:|-))?\s*(\d{1,2})",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return f"group size signal visible: {match.group(0).strip()}"
+    if "small group" in lower:
+        return "small-group signal visible"
+    return ""
+
+
+def _rating_signal(text: str) -> str:
+    match = re.search(
+        r"\b(\d(?:\.\d)?)(?:\s*/\s*5|\s+out of\s+5)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return f"visible rating {match.group(1)}/5; read recent reviews before booking"
+    return ""
 
 
 def _stops_signal(lower: str) -> int | None:
@@ -1352,7 +1741,10 @@ def _baggage_signal(lower: str) -> str:
 
 
 def _availability_signal(lower: str) -> str:
-    if any(term in lower for term in ["sold out", "not available", "unavailable"]):
+    if any(
+        term in lower
+        for term in ["sold out", "not available", "unavailable", "no properties found"]
+    ):
         return "unavailable signal visible; do not advance without another date/property"
     if any(term in lower for term in ["reserve", "book now", "availability", "available"]):
         return (
@@ -1438,6 +1830,8 @@ def _remaining_flight_fields(observations: Iterable[SourceObservation]) -> list[
     found = {observation.field for observation in observations}
     required = set(_flight_missing_fields())
     mapping = {
+        "departure_date": "exact_departure_date",
+        "arrival_date": "exact_arrival_date",
         "price_signal": "exact_fare",
         "departure_time": "exact_departure_time",
         "arrival_time": "exact_arrival_time",
@@ -1445,6 +1839,24 @@ def _remaining_flight_fields(observations: Iterable[SourceObservation]) -> list[
         "flight_numbers": "flight_numbers",
         "baggage_signal": "baggage_terms",
         "cabin_signal": "fare_rules",
+    }
+    for observation_field, missing_field in mapping.items():
+        if observation_field in found:
+            required.discard(missing_field)
+    return sorted(required)
+
+
+def _remaining_activity_fields(observations: Iterable[SourceObservation]) -> list[str]:
+    found = {observation.field for observation in observations}
+    required = set(_activity_missing_fields())
+    mapping = {
+        "price_signal": "current_price",
+        "availability_signal": "exact_availability",
+        "start_time": "bookable_time",
+        "end_time": "bookable_time",
+        "duration_signal": "duration",
+        "cancellation_signal": "cancellation_policy",
+        "group_size_signal": "group_size",
     }
     for observation_field, missing_field in mapping.items():
         if observation_field in found:
@@ -1466,6 +1878,8 @@ def _lodging_missing_fields() -> list[str]:
 
 def _flight_missing_fields() -> list[str]:
     return [
+        "exact_departure_date",
+        "exact_arrival_date",
         "flight_numbers",
         "exact_departure_time",
         "exact_arrival_time",
@@ -1476,18 +1890,39 @@ def _flight_missing_fields() -> list[str]:
     ]
 
 
+def _activity_missing_fields() -> list[str]:
+    return [
+        "exact_availability",
+        "current_price",
+        "bookable_time",
+        "duration",
+        "cancellation_policy",
+        "group_size",
+    ]
+
+
 def _missing_fields_for_category(category: str) -> list[str]:
     if category == ShortlistCategory.FLIGHTS.value:
         return _flight_missing_fields()
+    if category == ShortlistCategory.ACTIVITIES.value:
+        return _activity_missing_fields()
     return _lodging_missing_fields()
 
 
 def _missing_high_value_fields(result: SourceResearchResult) -> bool:
     if result.request.category == ShortlistCategory.FLIGHTS.value:
         return bool(
-            {"exact_departure_time", "exact_arrival_time", "exact_fare"}
+            {
+                "exact_departure_date",
+                "exact_departure_time",
+                "exact_arrival_date",
+                "exact_arrival_time",
+                "exact_fare",
+            }
             & set(result.missing_fields)
         )
+    if result.request.category == ShortlistCategory.ACTIVITIES.value:
+        return bool({"current_price", "exact_availability", "bookable_time"} & set(result.missing_fields))
     return bool(
         {"final_total_price", "bed_layout", "min_three_beds_satisfied"} & set(result.missing_fields)
     )
@@ -1578,11 +2013,17 @@ def _dedupe_notes(notes: list[str]) -> list[str]:
 def _openclaw_prompt(request: SourceResearchRequest) -> str:
     if request.category == ShortlistCategory.FLIGHTS.value:
         useful_fields = (
-            "airline, flight_numbers, departure_time, arrival_time, total_duration, stops, "
-            "layover_airports, layover_duration, price_signal, availability_signal, "
+            "airline, flight_numbers, departure_date, departure_time, arrival_date, arrival_time, "
+            "total_duration, stops, layover_airports, layover_duration, price_signal, availability_signal, "
             "cabin_signal, baggage_signal"
         )
         category_note = "flight research"
+    elif request.category == ShortlistCategory.ACTIVITIES.value:
+        useful_fields = (
+            "price_signal, availability_signal, start_time, end_time, duration_signal, "
+            "cancellation_signal, group_size_signal, rating_summary"
+        )
+        category_note = "activity research"
     else:
         useful_fields = (
             "price_signal, availability_signal, bed_layout_signal, "

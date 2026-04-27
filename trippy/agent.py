@@ -53,6 +53,24 @@ Prioritize practical, step-by-step guidance for:
 Be concise, actionable, and risk-aware. Flag any high-friction timing or transfer issue.
 """
 
+_PLANNING_STRATEGIST_PROMPT = """
+## Planning Strategy Requirements
+
+For trip ideas, ways to experience a destination or island, stay/split-stay structure,
+activity sequencing, and next-step recommendations:
+- Make an explicit strategy call. Do not merely list possibilities.
+- Ground the call in loaded memory, family travel preferences, country priors, the
+  trip intake, the selected plan shape, and current shortlist evidence.
+- Use `run_planning_service` before making stateful planning claims. For high-level
+  strategy questions, call `run_planning_service` with action `planning_advice` so
+  Trippy builds the preference-rich planning prompt and records the advice context.
+- Never invent source facts such as prices, availability, flight numbers, drive times,
+  bed layouts, or confirmation details. Label seeded/inferred/approximate items plainly.
+- When evidence is missing, state the exact source facts needed before booking.
+- Preserve review-gated learning. If a lesson seems reusable, propose it through the
+  reviewable learning path rather than silently changing memory or skills.
+"""
+
 
 class UserIntent(StrEnum):
     PLAN_TRIP = "plan_trip"
@@ -100,6 +118,8 @@ def _build_system_prompt(
 
     # Skills summary
     parts.append(get_all_skill_summaries())
+
+    parts.append(_PLANNING_STRATEGIST_PROMPT.strip())
 
     if operations_mode:
         parts.append(_OPERATIONS_MODE_PROMPT.strip())
@@ -227,8 +247,14 @@ def _skill_tools() -> list[dict[str, Any]]:
                             "map",
                             "flights",
                             "lodging",
+                            "select_lodging",
+                            "lodging_structure",
                             "cars",
+                            "select_car",
                             "activities",
+                            "select_activity",
+                            "schedule_activity",
+                            "planning_advice",
                             "propose_learning",
                         ],
                     },
@@ -243,9 +269,41 @@ def _skill_tools() -> list[dict[str, Any]]:
                     "goals": {"type": "array", "items": {"type": "string"}},
                     "avoidances": {"type": "array", "items": {"type": "string"}},
                     "option_id": {"type": "string"},
+                    "notes": {"type": "string"},
+                    "planning_question": {
+                        "type": "string",
+                        "enum": [
+                            "trip_ideas",
+                            "trip_shape",
+                            "island_experience",
+                            "lodging_structure",
+                            "next_steps",
+                        ],
+                    },
+                    "day": {"type": "integer"},
+                    "date": {"type": "string"},
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                    "fixed": {"type": "boolean", "default": False},
                     "no_google": {"type": "boolean", "default": False},
                     "validate_live": {"type": "boolean", "default": False},
                     "deep_research": {"type": "boolean", "default": False},
+                    "strategy": {
+                        "type": "string",
+                        "enum": ["single_stay", "split_stay"],
+                    },
+                    "night_plan": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "region": {"type": "string"},
+                                "nights": {"type": "integer"},
+                                "lodging_option_id": {"type": "string"},
+                                "notes": {"type": "string"},
+                            },
+                        },
+                    },
                     "adapter": {
                         "type": "string",
                         "enum": ["auto", "link", "playwright", "openclaw"],
@@ -333,6 +391,51 @@ def _run_planning_service(inputs: dict[str, Any]) -> str:
     deep_research = bool(inputs.get("deep_research", False))
     adapter = str(inputs.get("adapter") or "auto")
     try:
+        if action == "planning_advice":
+            from trippy.models.planning_advice import PlanningAdviceKind
+            from trippy.models.shortlists import ShortlistCategory
+            from trippy.services.planning_advisor import PlanningAdvisorService
+            from trippy.services.shortlist_store import ShortlistStore
+            from trippy.services.trip_intake import TripIntakeService
+            from trippy.services.trip_planner import TripPlannerService
+
+            question = str(inputs.get("planning_question") or "next_steps")
+            kind = PlanningAdviceKind(question)
+            intake = TripIntakeService().load(trip_id) if trip_id else None
+            draft = TripPlannerService().load_draft(trip_id) if trip_id else None
+            if kind == PlanningAdviceKind.LODGING_STRUCTURE and intake is not None and draft:
+                option = draft.get_option()
+                lodging_state = ShortlistStore().load(trip_id, ShortlistCategory.LODGING)
+                if option is not None:
+                    return (
+                        PlanningAdvisorService()
+                        .advise_lodging_structure(intake, option, lodging_state)
+                        .model_dump_json(indent=2)
+                    )
+            if (
+                kind
+                in {
+                    PlanningAdviceKind.TRIP_SHAPE,
+                    PlanningAdviceKind.ISLAND_EXPERIENCE,
+                }
+                and intake is not None
+                and draft is not None
+            ):
+                advisor = PlanningAdvisorService()
+                if kind == PlanningAdviceKind.ISLAND_EXPERIENCE:
+                    return advisor.advise_island_experience(intake, draft).model_dump_json(indent=2)
+                return advisor.advise_trip_shape(intake, draft).model_dump_json(indent=2)
+            shortlists = ShortlistStore().load_all(trip_id) if trip_id else []
+            return (
+                PlanningAdvisorService()
+                .advise_next_steps(
+                    intake,
+                    draft,
+                    shortlists,
+                    user_question=str(inputs.get("notes") or ""),
+                )
+                .model_dump_json(indent=2)
+            )
         if action == "create_intake":
             from trippy.models.trip_planning import (
                 TravelWindow,
@@ -436,6 +539,29 @@ def _run_planning_service(inputs: dict[str, Any]) -> str:
                 )
                 .model_dump_json(indent=2)
             )
+        if action == "select_lodging":
+            from trippy.services.lodging_shortlist import LodgingShortlistService
+
+            if not option_id:
+                return json.dumps({"error": "option_id is required for select_lodging"})
+            return (
+                LodgingShortlistService()
+                .select_lodging(trip_id, option_id)
+                .model_dump_json(indent=2)
+            )
+        if action == "lodging_structure":
+            from trippy.services.lodging_shortlist import LodgingShortlistService
+
+            return (
+                LodgingShortlistService()
+                .update_stay_structure(
+                    trip_id,
+                    strategy=str(inputs.get("strategy") or "split_stay"),
+                    night_plan=list(inputs.get("night_plan") or []),
+                    notes=str(inputs.get("notes") or ""),
+                )
+                .model_dump_json(indent=2)
+            )
         if action == "cars":
             from trippy.services.car_shortlist import CarShortlistService
 
@@ -449,6 +575,13 @@ def _run_planning_service(inputs: dict[str, Any]) -> str:
                 )
                 .model_dump_json(indent=2)
             )
+        if action == "select_car":
+            from trippy.services.car_shortlist import CarShortlistService
+
+            option_id = str(inputs.get("option_id") or "")
+            if not option_id:
+                return json.dumps({"error": "option_id is required for select_car"})
+            return CarShortlistService().select_car(trip_id, option_id).model_dump_json(indent=2)
         if action == "activities":
             from trippy.services.activity_shortlist import ActivityShortlistService
 
@@ -459,6 +592,37 @@ def _run_planning_service(inputs: dict[str, Any]) -> str:
                     validate_live=validate_live,
                     deep_research=deep_research,
                     adapter_mode=adapter,
+                )
+                .model_dump_json(indent=2)
+            )
+        if action == "select_activity":
+            from trippy.services.activity_shortlist import ActivityShortlistService
+
+            option_id = str(inputs.get("option_id") or "")
+            if not option_id:
+                return json.dumps({"error": "option_id is required for select_activity"})
+            return (
+                ActivityShortlistService()
+                .select_activity(trip_id, option_id)
+                .model_dump_json(indent=2)
+            )
+        if action == "schedule_activity":
+            from trippy.services.activity_shortlist import ActivityShortlistService
+
+            option_id = str(inputs.get("option_id") or "")
+            if not option_id:
+                return json.dumps({"error": "option_id is required for schedule_activity"})
+            return (
+                ActivityShortlistService()
+                .schedule_activity(
+                    trip_id,
+                    option_id,
+                    day=_optional_positive_int(inputs.get("day")),
+                    date_value=str(inputs.get("date") or ""),
+                    start_time=str(inputs.get("start_time") or ""),
+                    end_time=str(inputs.get("end_time") or ""),
+                    fixed=bool(inputs.get("fixed", False)),
+                    notes=str(inputs.get("notes") or ""),
                 )
                 .model_dump_json(indent=2)
             )
@@ -481,6 +645,16 @@ def _as_string_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return [str(value).strip()]
+
+
+def _optional_positive_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _run_skill(skill_name: str, inputs: dict[str, Any]) -> str:

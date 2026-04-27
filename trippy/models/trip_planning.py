@@ -392,6 +392,7 @@ class TripPlanDraft(BaseModel):
     selected_option_id: str | None = None
     assumptions: list[str] = Field(default_factory=list)
     source_notes: list[str] = Field(default_factory=list)
+    advisor: dict[str, Any] = Field(default_factory=dict)
 
     def get_option(self, option_id: str | None = None) -> TripPlanOption | None:
         selected = option_id or self.selected_option_id or self.recommended_option_id

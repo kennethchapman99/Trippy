@@ -8,6 +8,7 @@ from trippy.models.shortlists import (
     RecommendationGrade,
     ResearchShortlistState,
     ShortlistCategory,
+    ShortlistRowStatus,
 )
 from trippy.models.sources import TravelSourceCategory
 from trippy.models.trip_planning import TripIntake
@@ -81,6 +82,33 @@ class CarShortlistService:
             SourceResearchService().research_state(state, adapter_mode=adapter_mode)
         return self._store.save(state)
 
+    def select_car(self, trip_id: str, option_id: str) -> ResearchShortlistState:
+        """Approve a car option so it can drive pickup/dropoff planning."""
+        state = self._store.load(trip_id, ShortlistCategory.CARS) or self.build(trip_id)
+        option = _car_by_id(state, option_id)
+        if option is None:
+            raise ValueError(f"No car option {option_id!r} for trip {trip_id!r}")
+        for candidate in state.car_options:
+            if candidate.option_id == option_id:
+                candidate.row_status = ShortlistRowStatus.APPROVED
+            elif candidate.row_status == ShortlistRowStatus.APPROVED:
+                candidate.row_status = ShortlistRowStatus.RESEARCHED
+        state.recommended_option_id = option_id
+        state.recommendation_summary = (
+            f"Selected {option.vehicle_class} from {option.booking_source}. Confirm live price, "
+            "provider terms, luggage fit, automatic transmission, deposit, and pickup details before booking."
+        )
+        state.artifacts["selected_car_option_id"] = option_id
+        if (
+            "Selected car now drives pickup/dropoff, luggage-fit, parking, and timeline checks."
+            not in (state.next_actions)
+        ):
+            state.next_actions.insert(
+                0,
+                "Selected car now drives pickup/dropoff, luggage-fit, parking, and timeline checks.",
+            )
+        return self._store.save(state)
+
 
 def _options_from_profile(
     profile: object,
@@ -121,6 +149,8 @@ def _options_from_profile(
                 pickup_location=str(target["pickup"]),
                 dropoff_location=str(target["dropoff"]),
                 vehicle_class=vehicle_class,
+                price_band="live quote required; compare total with taxes and fees",
+                current_price_signal="not live-quoted yet",
                 seating_capacity=seating_capacity,
                 passenger_fit=(
                     f"{traveler_count} traveler(s) fit on seats; comfort depends on exact model"
@@ -169,3 +199,7 @@ def _options_from_profile(
             )
         )
     return options
+
+
+def _car_by_id(state: ResearchShortlistState, option_id: str) -> CarOption | None:
+    return next((option for option in state.car_options if option.option_id == option_id), None)

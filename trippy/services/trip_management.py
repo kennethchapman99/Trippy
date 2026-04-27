@@ -8,6 +8,7 @@ from pathlib import Path
 from trippy import config
 from trippy.models.shortlists import ShortlistCategory
 from trippy.services.shortlist_store import ShortlistStore
+from trippy.services.trip_execution import TripExecutionService
 from trippy.services.trip_intake import TripIntakeService
 from trippy.services.trip_planner import TripPlannerService
 from trippy.services.trip_state import TripStateService
@@ -29,12 +30,16 @@ class TripManagementService:
         workspace_service: TripWorkspaceService | None = None,
         trip_state: TripStateService | None = None,
         shortlist_store: ShortlistStore | None = None,
+        execution_service: TripExecutionService | None = None,
     ) -> None:
         self._intakes = intake_service or TripIntakeService()
         self._planner = planner_service or TripPlannerService(self._intakes)
         self._workspace = workspace_service or TripWorkspaceService(self._intakes, self._planner)
         self._trip_state = trip_state or TripStateService()
         self._shortlists = shortlist_store or ShortlistStore()
+        self._execution = execution_service or TripExecutionService(
+            shortlist_store=self._shortlists
+        )
 
     def delete_trip(self, trip_id: str) -> dict[str, object]:
         """Delete local planning state for a trip and return a diagnostic summary."""
@@ -44,6 +49,7 @@ class TripManagementService:
         self._delete_path(self._intakes.path_for(trip_id), deleted, missing)
         self._delete_path(self._planner.path_for(trip_id), deleted, missing)
         self._delete_path(self._workspace.path_for(trip_id), deleted, missing)
+        self._delete_path(self._execution.path_for(trip_id), deleted, missing_if_absent=False)
 
         canonical_path = config.TRIPS_PATH / f"{trip_id}.json"
         if self._trip_state.delete(trip_id):
