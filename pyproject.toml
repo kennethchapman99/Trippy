@@ -24,6 +24,7 @@ dependencies = [
 
 [project.scripts]
 trippy = "trippy.cli:app"
+trippy-telegram = "trippy.integrations.telegram_bot:run_telegram_bot"
 
 [build-system]
 requires = ["hatchling"]
