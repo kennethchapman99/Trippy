@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from trippy.integrations.telegram_bot import (
@@ -16,7 +18,7 @@ class FakeTelegramApi:
     def __init__(self) -> None:
         self.sent: list[tuple[int, str]] = []
 
-    def get_updates(self, *, offset: int | None, timeout_seconds: int) -> list[dict[str, object]]:
+    def get_updates(self, *, offset: int | None, timeout_seconds: int) -> list[dict[str, Any]]:
         return []
 
     def send_message(self, chat_id: int, text: str) -> None:
@@ -52,8 +54,8 @@ def test_handle_update_routes_allowed_text_to_trippy_agent() -> None:
     agent = FakeAgent()
     bot = TelegramTrippyBot(
         TelegramBotSettings(token="test", allowed_chat_ids=frozenset({123}), reply_chunk_size=100),
-        api_client=api,  # type: ignore[arg-type]
-        agent_factory=lambda: agent,  # type: ignore[arg-type]
+        api_client=api,
+        agent_factory=lambda: agent,
     )
 
     bot.handle_update({"message": {"chat": {"id": 123}, "text": "Audit friction for Japan"}})
@@ -67,8 +69,8 @@ def test_handle_update_rejects_unauthorized_chat() -> None:
     agent = FakeAgent()
     bot = TelegramTrippyBot(
         TelegramBotSettings(token="test", allowed_chat_ids=frozenset({123})),
-        api_client=api,  # type: ignore[arg-type]
-        agent_factory=lambda: agent,  # type: ignore[arg-type]
+        api_client=api,
+        agent_factory=lambda: agent,
     )
 
     bot.handle_update({"message": {"chat": {"id": 999}, "text": "hello"}})
@@ -81,8 +83,8 @@ def test_help_command_returns_usage_hint() -> None:
     api = FakeTelegramApi()
     bot = TelegramTrippyBot(
         TelegramBotSettings(token="test", allowed_chat_ids=frozenset({123})),
-        api_client=api,  # type: ignore[arg-type]
-        agent_factory=FakeAgent,  # type: ignore[arg-type]
+        api_client=api,
+        agent_factory=FakeAgent,
     )
 
     bot.handle_update({"message": {"chat": {"id": 123}, "text": "/help"}})
