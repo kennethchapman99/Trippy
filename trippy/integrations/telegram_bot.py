@@ -12,7 +12,7 @@ import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -26,7 +26,24 @@ TRIPPY_TELEGRAM_ALLOWED_CHAT_IDS_ENV = "TRIPPY_TELEGRAM_ALLOWED_CHAT_IDS"
 TRIPPY_TELEGRAM_POLL_TIMEOUT_ENV = "TRIPPY_TELEGRAM_POLL_TIMEOUT_SECONDS"
 TRIPPY_TELEGRAM_REPLY_CHUNK_SIZE_ENV = "TRIPPY_TELEGRAM_REPLY_CHUNK_SIZE"
 
-TelegramAgentFactory = Callable[[], TrIppyAgent]
+
+class TelegramAgent(Protocol):
+    def chat(self, user_message: str) -> str:
+        """Return the Trippy reply for a user message."""
+        ...
+
+
+class TelegramApi(Protocol):
+    def get_updates(self, *, offset: int | None, timeout_seconds: int) -> list[dict[str, Any]]:
+        """Return raw Telegram update objects."""
+        ...
+
+    def send_message(self, chat_id: int, text: str) -> None:
+        """Send a Telegram text message."""
+        ...
+
+
+TelegramAgentFactory = Callable[[], TelegramAgent]
 
 
 @dataclass(frozen=True)
@@ -139,13 +156,13 @@ class TelegramTrippyBot:
         self,
         settings: TelegramBotSettings,
         *,
-        api_client: TelegramApiClient | None = None,
+        api_client: TelegramApi | None = None,
         agent_factory: TelegramAgentFactory | None = None,
     ) -> None:
         self._settings = settings
         self._api = api_client or TelegramApiClient(settings.token)
         self._agent_factory = agent_factory or TrIppyAgent
-        self._agents_by_chat_id: dict[int, TrIppyAgent] = {}
+        self._agents_by_chat_id: dict[int, TelegramAgent] = {}
 
     def run_forever(self) -> None:
         """Run long polling until interrupted by the process manager/user."""
