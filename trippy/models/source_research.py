@@ -13,6 +13,7 @@ class SourceAdapterCapability(StrEnum):
     LINK = "link"
     HTTP = "http"
     PLAYWRIGHT = "playwright"
+    FIRECRAWL = "firecrawl"
     OPENCLAW = "openclaw"
 
 
@@ -20,6 +21,7 @@ class SourceResearchMode(StrEnum):
     AUTO = "auto"
     LINK = "link"
     PLAYWRIGHT = "playwright"
+    FIRECRAWL = "firecrawl"
     OPENCLAW = "openclaw"
 
 

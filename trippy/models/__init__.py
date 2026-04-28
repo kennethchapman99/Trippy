@@ -94,13 +94,22 @@ from trippy.models.trip_planning import (
     WorkspaceStatus,
     WorkspaceTab,
 )
+from trippy.models.web_research import (
+    ActivityWebOption,
+    CarRentalWebOption,
+    FlightWebContext,
+    LodgingWebOption,
+    WebResearchResult,
+)
 
 __all__ = [
     "ActivityOption",
+    "ActivityWebOption",
     "AvailabilityStatus",
     "Budget",
     "CarRentalExpectation",
     "CarOption",
+    "CarRentalWebOption",
     "ChecklistItem",
     "Confirmation",
     "CountryFitSignal",
@@ -117,6 +126,7 @@ __all__ = [
     "FamilyProfile",
     "FamilyTravelPreferences",
     "FlightOption",
+    "FlightWebContext",
     "FlightPreferenceInput",
     "FoodPriority",
     "FreshnessStatus",
@@ -126,6 +136,7 @@ __all__ = [
     "LodgingFitCategory",
     "LodgingPreferenceInput",
     "LodgingOption",
+    "LodgingWebOption",
     "MapPin",
     "MapPinCategory",
     "MapRoute",
@@ -184,4 +195,5 @@ __all__ = [
     "VerificationStatus",
     "WorkspaceStatus",
     "WorkspaceTab",
+    "WebResearchResult",
 ]
