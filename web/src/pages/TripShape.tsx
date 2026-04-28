@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
-import { StageNav, type Stage } from "@/components/StageNav";
+import { StageNav } from "@/components/StageNav";
 import { Button } from "@/components/ui/button";
 import {
   AlertTriangle, ArrowLeft, Check, Loader2, RefreshCcw, Sparkles,
   ThumbsUp, AlertCircle,
 } from "lucide-react";
 import { api, type TripPlanOption } from "@/lib/api";
+import { buildStages } from "@/lib/stages";
 
 const SEGMENT_COLORS = [
   "hsl(178 70% 60%)",
@@ -37,17 +38,6 @@ function burdenToRisk(burden: string, risks: string[]): { label: string; tone: "
   return { label: "low risk", tone: "ok" };
 }
 
-const stages: Stage[] = [
-  { id: 1, label: "Intake", status: "done" },
-  { id: 2, label: "Shape", status: "current" },
-  { id: 3, label: "Flights", status: "todo" },
-  { id: 4, label: "Stays", status: "todo" },
-  { id: 5, label: "Cars", status: "todo" },
-  { id: 6, label: "Do", status: "todo" },
-  { id: 7, label: "Timeline", status: "todo" },
-  { id: 8, label: "Packet", status: "todo" },
-];
-
 const TripShape = () => {
   const { tripId } = useParams<{ tripId: string }>();
   const navigate = useNavigate();
@@ -68,7 +58,7 @@ const TripShape = () => {
 
   const selectMutation = useMutation({
     mutationFn: (optionId: string) => api.selectPlan(tripId!, optionId),
-    onSuccess: () => navigate(`/trip/${tripId}/timeline`),
+    onSuccess: () => navigate(`/trip/${tripId}/flights`),
   });
 
   const feedbackMutation = useMutation({
@@ -100,6 +90,7 @@ const TripShape = () => {
   const intake = tripQuery.data?.intake;
   const draft = tripQuery.data?.draft;
   const options: TripPlanOption[] = draft?.options ?? [];
+  const stages = buildStages(tripQuery.data, "shape");
   const isGenerating = draftMutation.isPending || (tripQuery.isLoading && !draft);
 
   const tripName = intake?.trip_name ?? "Your trip";
@@ -367,7 +358,7 @@ const TripShape = () => {
                   {selectMutation.isPending ? (
                     <><Loader2 className="h-4 w-4 animate-spin" /> Locking in…</>
                   ) : (
-                    <>Lock in this shape → Timeline</>
+                    <>Lock in this shape → Flights</>
                   )}
                 </Button>
               </div>

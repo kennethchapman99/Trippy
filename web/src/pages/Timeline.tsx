@@ -1,28 +1,20 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
-import { StageNav, type Stage } from "@/components/StageNav";
+import { StageNav } from "@/components/StageNav";
 import { Button } from "@/components/ui/button";
 import {
   AlertTriangle, ArrowLeft, Loader2, RefreshCcw, AlertCircle,
-  ExternalLink, CheckCircle2, Clock, Sparkles,
+  ExternalLink, CheckCircle2, Clock, Sparkles, FileSpreadsheet,
 } from "lucide-react";
 import { api, type WorkspaceTab } from "@/lib/api";
-
-const stages: Stage[] = [
-  { id: 1, label: "Intake", status: "done" },
-  { id: 2, label: "Shape", status: "done" },
-  { id: 3, label: "Flights", status: "done" },
-  { id: 4, label: "Stays", status: "done" },
-  { id: 5, label: "Cars", status: "done" },
-  { id: 6, label: "Do", status: "done" },
-  { id: 7, label: "Timeline", status: "current" },
-  { id: 8, label: "Packet", status: "todo" },
-];
+import { buildStages } from "@/lib/stages";
 
 const Timeline = () => {
   const { tripId } = useParams<{ tripId: string }>();
   const queryClient = useQueryClient();
+  const [createSheet, setCreateSheet] = useState(false);
 
   const tripQuery = useQuery({
     queryKey: ["trip", tripId],
@@ -32,7 +24,7 @@ const Timeline = () => {
   });
 
   const workspaceMutation = useMutation({
-    mutationFn: () => api.buildWorkspace(tripId!),
+    mutationFn: () => api.buildWorkspace(tripId!, { create_google_sheet: createSheet }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["trip", tripId] }),
   });
 
@@ -41,6 +33,7 @@ const Timeline = () => {
   const draft = tripQuery.data?.draft;
   const runLog = tripQuery.data?.run_log ?? [];
   const nextStep = tripQuery.data?.next_step ?? "";
+  const stages = buildStages(tripQuery.data, "timeline");
 
   const tripName = intake?.trip_name ?? "Your trip";
   const destination = intake?.destination_seeds?.join(" · ") ?? "";
@@ -106,18 +99,31 @@ const Timeline = () => {
               Hermes composes the timeline from flights, stays, and activities — and re-checks for friction whenever a piece changes.
             </p>
           </div>
-          <button
-            onClick={() => workspaceMutation.mutate()}
-            disabled={workspaceMutation.isPending}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-card border-2 border-foreground/15 text-sm font-bold hover:border-foreground/40 transition-colors"
-          >
-            {workspaceMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCcw className="h-4 w-4" />
+          <div className="flex items-center gap-2">
+            {workspace && (
+              <label className="inline-flex items-center gap-1.5 text-xs font-bold text-muted-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={createSheet}
+                  onChange={(e) => setCreateSheet(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-2 border-foreground/30 accent-primary"
+                />
+                + Google Sheet
+              </label>
             )}
-            {workspace ? "Re-audit" : "Build workspace"}
-          </button>
+            <button
+              onClick={() => workspaceMutation.mutate()}
+              disabled={workspaceMutation.isPending}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-card border-2 border-foreground/15 text-sm font-bold hover:border-foreground/40 transition-colors"
+            >
+              {workspaceMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCcw className="h-4 w-4" />
+              )}
+              {workspace ? "Re-audit" : "Build workspace"}
+            </button>
+          </div>
         </div>
 
         {/* Loading */}
@@ -190,13 +196,23 @@ const Timeline = () => {
                 {nextStep || "Build the workspace to generate the master timeline, risk audit, and planning packet."}
               </p>
             </div>
+            <label className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                checked={createSheet}
+                onChange={(e) => setCreateSheet(e.target.checked)}
+                className="h-4 w-4 rounded border-2 border-foreground/30 accent-primary"
+              />
+              <FileSpreadsheet className="h-4 w-4" />
+              Also create a Google Sheet workspace
+            </label>
             <Button
               onClick={() => workspaceMutation.mutate()}
               disabled={workspaceMutation.isPending}
               className="h-12 rounded-2xl bg-gradient-sunset text-primary-foreground font-bold border-2 border-foreground shadow-sticker hover:translate-y-[-2px] transition-bounce px-8"
             >
               {workspaceMutation.isPending ? (
-                <><Loader2 className="h-4 w-4 animate-spin" /> Building…</>
+                <><Loader2 className="h-4 w-4 animate-spin" /> {createSheet ? "Building + creating sheet…" : "Building…"}</>
               ) : (
                 <>Build workspace</>
               )}

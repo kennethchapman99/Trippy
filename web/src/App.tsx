@@ -6,6 +6,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Index from "./pages/Index.tsx";
 import NewTrip from "./pages/NewTrip.tsx";
 import TripShape from "./pages/TripShape.tsx";
+import Flights from "./pages/Flights.tsx";
+import Stays from "./pages/Stays.tsx";
+import Cars from "./pages/Cars.tsx";
+import Do from "./pages/Do.tsx";
 import Timeline from "./pages/Timeline.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
@@ -21,6 +25,10 @@ const App = () => (
           <Route path="/" element={<Index />} />
           <Route path="/new" element={<NewTrip />} />
           <Route path="/trip/:tripId/shape" element={<TripShape />} />
+          <Route path="/trip/:tripId/flights" element={<Flights />} />
+          <Route path="/trip/:tripId/stays" element={<Stays />} />
+          <Route path="/trip/:tripId/cars" element={<Cars />} />
+          <Route path="/trip/:tripId/do" element={<Do />} />
           <Route path="/trip/:tripId/timeline" element={<Timeline />} />
           {/* legacy static routes kept for dev convenience */}
           <Route path="/trip/shape" element={<TripShape />} />
