@@ -18,8 +18,11 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
-        <Route path="/" element={<Index />} />
+          <Route path="/" element={<Index />} />
           <Route path="/new" element={<NewTrip />} />
+          <Route path="/trip/:tripId/shape" element={<TripShape />} />
+          <Route path="/trip/:tripId/timeline" element={<Timeline />} />
+          {/* legacy static routes kept for dev convenience */}
           <Route path="/trip/shape" element={<TripShape />} />
           <Route path="/trip/timeline" element={<Timeline />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

@@ -1,11 +1,13 @@
-import { Link } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { StageNav, type Stage } from "@/components/StageNav";
 import { Button } from "@/components/ui/button";
 import {
-  AlertTriangle, ArrowLeft, Plane, Sun, Sparkles, Fish, UtensilsCrossed,
-  Coffee, RefreshCcw, MapPin, Clock,
+  AlertTriangle, ArrowLeft, Loader2, RefreshCcw, AlertCircle,
+  ExternalLink, CheckCircle2, Clock, Sparkles,
 } from "lucide-react";
+import { api, type WorkspaceTab } from "@/lib/api";
 
 const stages: Stage[] = [
   { id: 1, label: "Intake", status: "done" },
@@ -18,150 +20,40 @@ const stages: Stage[] = [
   { id: 8, label: "Packet", status: "todo" },
 ];
 
-type Block = {
-  start: string;
-  end: string;
-  title: string;
-  detail?: string;
-  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
-  tone: "travel" | "relax" | "hero" | "snorkel" | "food";
-  tags: { label: string; tone?: "travel" | "place" }[];
-  flag?: string;
-};
-
-type Day = {
-  n: number;
-  weekday: string;
-  date: string; // e.g. "Mar 14"
-  vibe: string; // e.g. "Arrive · settle"
-  load: "Full day" | "Easy" | "Half" | "Open";
-  blocks: Block[];
-};
-
-const toneStyle = {
-  travel: { bg: "bg-secondary/15", ring: "ring-secondary/40", dot: "hsl(var(--secondary))" },
-  relax: { bg: "bg-sunshine/25", ring: "ring-sunshine/40", dot: "hsl(var(--sunshine))" },
-  hero: { bg: "bg-accent/20", ring: "ring-accent/40", dot: "hsl(var(--accent))" },
-  snorkel: { bg: "bg-secondary/15", ring: "ring-secondary/40", dot: "hsl(195 90% 55%)" },
-  food: { bg: "bg-coral/20", ring: "ring-coral/40", dot: "hsl(var(--coral))" },
-} as const;
-
-const tagStyle = {
-  travel: "bg-secondary/15 text-secondary-foreground border-secondary/30",
-  place: "bg-muted border-foreground/15 text-foreground",
-  default: "bg-muted border-foreground/15 text-foreground",
-};
-
-const days: Day[] = [
-  {
-    n: 1, weekday: "Sat", date: "Mar 14", vibe: "Arrive · beach dinner", load: "Full day",
-    blocks: [
-      {
-        start: "10:00", end: "12:55", title: "AC 1726 · YYZ → SMB",
-        detail: "Air Canada · seats 14A–14E booked", icon: Plane, tone: "travel",
-        tags: [{ label: "travel", tone: "travel" }, { label: "YYZ → SMB", tone: "place" }],
-      },
-      {
-        start: "13:30", end: "15:00", title: "Transfer + check-in",
-        detail: "Pre-arranged van · car seat confirmed", icon: MapPin, tone: "travel",
-        tags: [{ label: "logistics" }],
-      },
-      {
-        start: "18:30", end: "21:00", title: "Dinner on Seven Mile Beach",
-        detail: "Calico Jack's · kid-friendly · 15-min walk", icon: UtensilsCrossed, tone: "food",
-        tags: [{ label: "food" }, { label: "SMB", tone: "place" }],
-      },
-    ],
-  },
-  {
-    n: 2, weekday: "Sun", date: "Mar 15", vibe: "Settle in", load: "Easy",
-    blocks: [
-      {
-        start: "09:00", end: "11:00", title: "Beach + settle in",
-        detail: "Short snorkel at Governor's Beach", icon: Sun, tone: "relax",
-        tags: [{ label: "relax" }, { label: "SMB", tone: "place" }],
-      },
-      {
-        start: "13:00", end: "14:30", title: "Late lunch at the condo",
-        detail: "Grocery run handled the night before", icon: Coffee, tone: "food",
-        tags: [{ label: "low-key" }],
-      },
-    ],
-  },
-  {
-    n: 3, weekday: "Mon", date: "Mar 16", vibe: "Hero day", load: "Full day",
-    blocks: [
-      {
-        start: "08:00", end: "12:00", title: "Stingray City + Starfish Point",
-        detail: "Private charter · 8am push-off", icon: Sparkles, tone: "hero",
-        tags: [{ label: "hero" }, { label: "North Sound", tone: "place" }],
-        flag: "Sunscreen + rash guards in the day bag",
-      },
-      {
-        start: "13:30", end: "15:00", title: "Lunch @ Kaibo",
-        detail: "Outdoor seating, dock view", icon: UtensilsCrossed, tone: "food",
-        tags: [{ label: "food" }],
-      },
-    ],
-  },
-  {
-    n: 4, weekday: "Tue", date: "Mar 17", vibe: "Reef day", load: "Half",
-    blocks: [
-      {
-        start: "10:00", end: "13:00", title: "Reef day at Rum Point",
-        detail: "Rentals on-site · shallow entry for kids", icon: Fish, tone: "snorkel",
-        tags: [{ label: "snorkel" }, { label: "East End", tone: "place" }],
-      },
-      {
-        start: "13:00", end: "14:30", title: "Lunch @ Rum Point Club",
-        detail: "Walk-in usually fine before noon", icon: UtensilsCrossed, tone: "food",
-        tags: [{ label: "food" }],
-      },
-    ],
-  },
-  {
-    n: 5, weekday: "Wed", date: "Mar 18", vibe: "Food day", load: "Half",
-    blocks: [
-      {
-        start: "11:00", end: "14:00", title: "Cayman Cookout tastings",
-        detail: "Adults rotate · kids' adventure afternoon booked", icon: UtensilsCrossed, tone: "food",
-        tags: [{ label: "food" }, { label: "West Bay", tone: "place" }],
-      },
-      {
-        start: "15:00", end: "17:00", title: "Kids' adventure session",
-        detail: "Resort program · 5–11 age group", icon: Sparkles, tone: "hero",
-        tags: [{ label: "kids" }],
-      },
-    ],
-  },
-  {
-    n: 6, weekday: "Thu", date: "Mar 19", vibe: "Free + spa", load: "Open",
-    blocks: [
-      {
-        start: "09:00", end: "12:00", title: "Free morning · spa window",
-        detail: "Backup for weather day · keep flexible", icon: Sun, tone: "relax",
-        tags: [{ label: "relax" }, { label: "SMB", tone: "place" }],
-      },
-    ],
-  },
-  {
-    n: 7, weekday: "Fri", date: "Mar 20", vibe: "Depart", load: "Half",
-    blocks: [
-      {
-        start: "11:00", end: "12:30", title: "Lunch before cab",
-        detail: "Pack the night before · 2 checked bags", icon: UtensilsCrossed, tone: "food",
-        tags: [{ label: "logistics" }],
-      },
-      {
-        start: "14:30", end: "18:00", title: "AC 1727 · SMB → YYZ",
-        detail: "Cab booked 12:45 · stroller gate-checked", icon: Plane, tone: "travel",
-        tags: [{ label: "travel", tone: "travel" }, { label: "SMB → YYZ", tone: "place" }],
-      },
-    ],
-  },
-];
-
 const Timeline = () => {
+  const { tripId } = useParams<{ tripId: string }>();
+  const queryClient = useQueryClient();
+
+  const tripQuery = useQuery({
+    queryKey: ["trip", tripId],
+    queryFn: () => api.getTrip(tripId!),
+    enabled: !!tripId,
+    staleTime: 60_000,
+  });
+
+  const workspaceMutation = useMutation({
+    mutationFn: () => api.buildWorkspace(tripId!),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["trip", tripId] }),
+  });
+
+  const intake = tripQuery.data?.intake;
+  const workspace = tripQuery.data?.workspace;
+  const draft = tripQuery.data?.draft;
+  const runLog = tripQuery.data?.run_log ?? [];
+  const nextStep = tripQuery.data?.next_step ?? "";
+
+  const tripName = intake?.trip_name ?? "Your trip";
+  const destination = intake?.destination_seeds?.join(" · ") ?? "";
+
+  const selectedOption = draft?.options?.find(
+    (o) => o.option_id === (draft?.selected_option_id ?? draft?.recommended_option_id)
+  );
+
+  const timelineTabs: WorkspaceTab[] = workspace?.tabs ?? [];
+  const masterTab = timelineTabs.find(
+    (t) => t.name.toLowerCase().includes("timeline") || t.name.toLowerCase().includes("master")
+  );
+
   return (
     <AppShell>
       {/* Hero */}
@@ -176,26 +68,23 @@ const Timeline = () => {
           <span className="px-3 py-1 rounded-full bg-card border-2 border-foreground/15 text-xs font-bold uppercase tracking-wider">
             Planning · Stage 7 of 8
           </span>
-          <span className="px-3 py-1 rounded-full bg-sunshine/40 border-2 border-foreground/15 text-xs font-bold">
-            7 days
-          </span>
-          <span className="px-3 py-1 rounded-full bg-coral/30 border-2 border-foreground/15 text-xs font-bold">
-            Whole family · 5 travelers
-          </span>
-          <div className="ml-auto flex items-center gap-2 px-3 py-2 rounded-2xl bg-foreground text-background border-2 border-foreground shadow-sticker">
-            <AlertTriangle className="h-4 w-4 text-sunshine" />
-            <div className="text-xs leading-tight">
-              <div className="font-bold">3 friction flags</div>
-              <div className="opacity-70">Trippy is watching</div>
-            </div>
-          </div>
+          {intake?.duration_days && (
+            <span className="px-3 py-1 rounded-full bg-sunshine/40 border-2 border-foreground/15 text-xs font-bold">
+              {intake.duration_days} days
+            </span>
+          )}
+          {intake?.party && (
+            <span className="px-3 py-1 rounded-full bg-coral/30 border-2 border-foreground/15 text-xs font-bold">
+              {intake.party.adults + intake.party.children} travelers
+            </span>
+          )}
         </div>
         <h1 className="font-[Fredoka] text-4xl md:text-5xl font-bold leading-[1.05] max-w-3xl">
-          Cayman Reef + <span className="text-gradient-sunset">Food Easy</span> Week
+          {tripName}
         </h1>
-        <p className="text-foreground/70 italic mt-2 font-medium">
-          Seven Mile Beach · West Bay · Stingray City · Rum Point
-        </p>
+        {destination && (
+          <p className="text-foreground/70 italic mt-2 font-medium">{destination}</p>
+        )}
       </div>
 
       {/* Stage nav */}
@@ -214,155 +103,256 @@ const Timeline = () => {
               Seven days, one page.
             </h2>
             <p className="text-muted-foreground mt-1 max-w-2xl">
-              Trippy composes the timeline from flights, stays, and activities — and re-checks for friction whenever a piece changes.
+              Hermes composes the timeline from flights, stays, and activities — and re-checks for friction whenever a piece changes.
             </p>
           </div>
-          <button className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-card border-2 border-foreground/15 text-sm font-bold hover:border-foreground/40 transition-colors">
-            <RefreshCcw className="h-4 w-4" /> Re-audit
+          <button
+            onClick={() => workspaceMutation.mutate()}
+            disabled={workspaceMutation.isPending}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-card border-2 border-foreground/15 text-sm font-bold hover:border-foreground/40 transition-colors"
+          >
+            {workspaceMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCcw className="h-4 w-4" />
+            )}
+            {workspace ? "Re-audit" : "Build workspace"}
           </button>
         </div>
 
-        {/* Compact dense timeline */}
-        <div className="rounded-3xl border-2 border-foreground/10 bg-card shadow-card overflow-hidden">
-          {days.map((d, i) => (
-            <DayRow key={d.n} day={d} isLast={i === days.length - 1} />
-          ))}
-        </div>
+        {/* Loading */}
+        {tripQuery.isLoading && (
+          <div className="flex items-center justify-center py-24 text-muted-foreground gap-3">
+            <Loader2 className="h-6 w-6 animate-spin" />
+            <span className="font-bold">Loading trip state…</span>
+          </div>
+        )}
 
-        {/* Teach Trippy */}
-        <div className="mt-8 rounded-3xl border-2 border-foreground/10 bg-card shadow-card p-6">
-          <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
-            <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">
-              Teach Trippy
-            </div>
-            <div className="flex gap-1.5">
-              <span className="px-3 py-1 rounded-full bg-palm/20 border-2 border-palm/40 text-palm text-xs font-bold">helpful</span>
-              <span className="px-3 py-1 rounded-full bg-sunshine/30 border-2 border-foreground/20 text-xs font-bold">needs work</span>
-              <span className="px-3 py-1 rounded-full bg-coral/20 border-2 border-coral/40 text-coral text-xs font-bold">wrong</span>
+        {/* Error */}
+        {tripQuery.isError && (
+          <div className="rounded-3xl border-2 border-destructive/30 bg-destructive/5 p-6 flex items-start gap-4 mb-6">
+            <AlertCircle className="h-6 w-6 text-destructive shrink-0 mt-0.5" />
+            <div>
+              <div className="font-bold text-destructive">Couldn't load trip</div>
+              <div className="text-sm text-muted-foreground mt-1">
+                {(tripQuery.error as Error)?.message ?? "Check that the Hermes backend is running."}
+              </div>
             </div>
           </div>
-          <div className="grid md:grid-cols-2 gap-3">
-            <input
-              placeholder="What should Trippy remember about this stage?"
-              className="h-11 rounded-xl border-2 border-foreground/10 bg-background px-4 font-medium text-sm focus:outline-none focus:border-primary"
-            />
-            <input
-              placeholder="What should change before the next step?"
-              className="h-11 rounded-xl border-2 border-foreground/10 bg-background px-4 font-medium text-sm focus:outline-none focus:border-primary"
-            />
+        )}
+
+        {/* No tripId */}
+        {!tripId && (
+          <div className="text-center py-24 text-muted-foreground">
+            <p className="font-bold mb-2">No trip selected.</p>
+            <Link to="/" className="text-primary font-bold hover:underline">← Back to trips</Link>
           </div>
-          <div className="flex items-center justify-between flex-wrap gap-3 mt-4">
-            <label className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <input type="checkbox" className="h-4 w-4 rounded border-2 border-foreground/30 accent-primary" />
-              Propose this as future learning
-            </label>
-            <Button className="h-10 rounded-xl bg-gradient-sunset text-primary-foreground font-bold border-2 border-foreground shadow-card px-5">
-              Send feedback
+        )}
+
+        {/* Plan summary from selected option */}
+        {selectedOption && !tripQuery.isLoading && (
+          <div className="mb-6 rounded-3xl border-2 border-foreground/10 bg-card shadow-card p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">
+                  Selected shape
+                </div>
+                <h3 className="font-[Fredoka] text-2xl font-bold">{selectedOption.title}</h3>
+                <p className="text-sm text-muted-foreground mt-1 max-w-xl">{selectedOption.summary}</p>
+              </div>
+              <div className="flex gap-3 shrink-0">
+                <ScorePill label="Strength" value={selectedOption.recommendation_strength} />
+                <ScorePill label="Comfort" value={selectedOption.family_comfort_score} />
+              </div>
+            </div>
+
+            {selectedOption.rationale.length > 0 && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {selectedOption.rationale.slice(0, 3).map((r) => (
+                  <span key={r} className="px-3 py-1 rounded-full bg-palm/15 border border-palm/30 text-xs font-bold">
+                    {r}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Workspace not yet built */}
+        {!tripQuery.isLoading && !workspace && tripId && (
+          <div className="rounded-3xl border-2 border-dashed border-foreground/20 bg-muted/20 p-12 flex flex-col items-center text-center gap-4">
+            <div className="h-16 w-16 rounded-2xl bg-gradient-sunset border-2 border-foreground shadow-sticker flex items-center justify-center">
+              <Sparkles className="h-8 w-8 text-primary-foreground" />
+            </div>
+            <div>
+              <h3 className="font-[Fredoka] text-2xl font-bold">Timeline not yet built</h3>
+              <p className="text-muted-foreground text-sm mt-2 max-w-sm">
+                {nextStep || "Build the workspace to generate the master timeline, risk audit, and planning packet."}
+              </p>
+            </div>
+            <Button
+              onClick={() => workspaceMutation.mutate()}
+              disabled={workspaceMutation.isPending}
+              className="h-12 rounded-2xl bg-gradient-sunset text-primary-foreground font-bold border-2 border-foreground shadow-sticker hover:translate-y-[-2px] transition-bounce px-8"
+            >
+              {workspaceMutation.isPending ? (
+                <><Loader2 className="h-4 w-4 animate-spin" /> Building…</>
+              ) : (
+                <>Build workspace</>
+              )}
             </Button>
+            {workspaceMutation.isError && (
+              <p className="text-sm text-destructive font-medium">
+                {(workspaceMutation.error as Error)?.message}
+              </p>
+            )}
           </div>
-        </div>
+        )}
+
+        {/* Workspace — Google Sheet link */}
+        {workspace?.google_sheet_url && (
+          <a
+            href={workspace.google_sheet_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 mb-6 rounded-2xl border-2 border-foreground/15 bg-card px-5 py-3 font-bold text-sm hover:border-foreground/40 transition-colors"
+          >
+            <ExternalLink className="h-4 w-4 text-primary" />
+            Open in Google Sheets
+          </a>
+        )}
+
+        {/* Workspace next actions */}
+        {workspace && workspace.next_actions.length > 0 && (
+          <div className="mb-6 rounded-3xl border-2 border-foreground/10 bg-card shadow-card p-5">
+            <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">
+              Next actions
+            </div>
+            <ul className="space-y-2">
+              {workspace.next_actions.map((action) => (
+                <li key={action} className="flex items-start gap-2 text-sm">
+                  <CheckCircle2 className="h-4 w-4 text-palm shrink-0 mt-0.5" />
+                  <span>{action}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Workspace warnings */}
+        {workspace && workspace.warnings.length > 0 && (
+          <div className="mb-6 rounded-3xl border-2 border-coral/30 bg-coral/5 p-5">
+            <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">
+              Friction flags
+            </div>
+            <ul className="space-y-2">
+              {workspace.warnings.map((w) => (
+                <li key={w} className="flex items-start gap-2 text-sm">
+                  <AlertTriangle className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                  <span>{w}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Master timeline tab */}
+        {masterTab && masterTab.rows.length > 0 && (
+          <div className="rounded-3xl border-2 border-foreground/10 bg-card shadow-card overflow-hidden mb-6">
+            <div className="px-6 py-4 border-b-2 border-foreground/10 font-[Fredoka] text-xl font-bold">
+              {masterTab.name}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b-2 border-foreground/10 bg-muted/30">
+                    {masterTab.headers.map((h) => (
+                      <th key={h} className="text-left px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-foreground/10">
+                  {masterTab.rows.map((row, ri) => (
+                    <tr key={ri} className="hover:bg-muted/20 transition-colors">
+                      {(row as unknown[]).map((cell, ci) => (
+                        <td key={ci} className="px-4 py-3 text-sm font-medium">
+                          {String(cell ?? "")}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* All workspace tabs (except master, already shown) */}
+        {workspace && timelineTabs.filter((t) => t !== masterTab && t.rows.length > 0).map((tab) => (
+          <div key={tab.name} className="rounded-3xl border-2 border-foreground/10 bg-card shadow-card overflow-hidden mb-6">
+            <div className="px-6 py-4 border-b-2 border-foreground/10 font-[Fredoka] text-xl font-bold">
+              {tab.name}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b-2 border-foreground/10 bg-muted/30">
+                    {tab.headers.map((h) => (
+                      <th key={h} className="text-left px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-foreground/10">
+                  {tab.rows.map((row, ri) => (
+                    <tr key={ri} className="hover:bg-muted/20 transition-colors">
+                      {(row as unknown[]).map((cell, ci) => (
+                        <td key={ci} className="px-4 py-3 text-sm font-medium">
+                          {String(cell ?? "")}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+
+        {/* Recent activity for this trip */}
+        {!tripQuery.isLoading && runLog.length > 0 && (
+          <div className="rounded-3xl border-2 border-foreground/10 bg-card shadow-card p-6">
+            <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-4 flex items-center gap-2">
+              <Clock className="h-4 w-4" /> Trip activity
+            </div>
+            <ul className="divide-y divide-foreground/10">
+              {runLog.slice(-8).reverse().map((e) => (
+                <li key={e.event_id} className="py-3 flex items-center justify-between text-sm gap-4">
+                  <div>
+                    <span className="font-bold">{e.title}</span>
+                    {e.summary && <span className="text-muted-foreground"> · {e.summary}</span>}
+                  </div>
+                  <span className="text-muted-foreground font-semibold shrink-0 text-xs">
+                    {e.created_at ? new Date(e.created_at).toLocaleString() : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </AppShell>
   );
 };
 
-const loadStyle = {
-  "Full day": "bg-foreground text-background",
-  Easy: "bg-palm/25 text-palm",
-  Half: "bg-sunshine/40 text-foreground",
-  Open: "bg-muted text-muted-foreground",
-} as const;
-
-const DayRow = ({ day, isLast }: { day: Day; isLast: boolean }) => {
-  return (
-    <div
-      className={`grid grid-cols-[120px_1fr] md:grid-cols-[160px_1fr] ${
-        isLast ? "" : "border-b-2 border-foreground/10"
-      } hover:bg-muted/20 transition-colors`}
-    >
-      {/* LEFT: date column */}
-      <div className="px-4 md:px-6 py-5 border-r-2 border-dashed border-foreground/10 bg-gradient-to-b from-muted/30 to-transparent">
-        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
-          Day {day.n}
-        </div>
-        <div className="font-[Fredoka] text-3xl md:text-4xl font-bold leading-none mt-1">
-          {day.weekday}
-        </div>
-        <div className="text-xs text-muted-foreground font-bold mt-1">{day.date}</div>
-        <span
-          className={`inline-block mt-3 px-2 py-0.5 rounded-full text-[10px] font-bold border-2 border-foreground/15 ${loadStyle[day.load]}`}
-        >
-          {day.load}
-        </span>
-        <div className="hidden md:block text-[11px] text-muted-foreground italic mt-2 leading-snug">
-          {day.vibe}
-        </div>
-      </div>
-
-      {/* RIGHT: nested time blocks */}
-      <div className="py-3 px-2 md:px-4 space-y-1.5">
-        {day.blocks.map((b, idx) => (
-          <BlockRow key={idx} block={b} />
-        ))}
-      </div>
-    </div>
-  );
-};
-
-const BlockRow = ({ block }: { block: Block }) => {
-  const Icon = block.icon;
-  const t = toneStyle[block.tone];
-  return (
-    <div className="group">
-      <div
-        className={`grid grid-cols-[78px_28px_1fr_auto] md:grid-cols-[96px_32px_1fr_auto] items-center gap-2 md:gap-3 px-2 md:px-3 py-2 rounded-xl ring-1 ring-transparent hover:ring-foreground/10 hover:bg-muted/40 transition-colors`}
-      >
-        {/* time range */}
-        <div className="font-mono text-[11px] md:text-xs font-bold tabular-nums leading-tight text-right text-foreground/70">
-          <div>{block.start}</div>
-          <div className="text-muted-foreground">– {block.end}</div>
-        </div>
-
-        {/* icon chip */}
-        <div
-          className={`h-7 w-7 rounded-lg ${t.bg} flex items-center justify-center border-2 border-foreground/10`}
-        >
-          <Icon className="h-3.5 w-3.5" style={{ color: t.dot }} />
-        </div>
-
-        {/* title + detail */}
-        <div className="min-w-0">
-          <div className="text-sm font-bold leading-tight truncate">{block.title}</div>
-          {block.detail && (
-            <div className="text-xs text-muted-foreground leading-tight truncate mt-0.5">
-              {block.detail}
-            </div>
-          )}
-        </div>
-
-        {/* tags */}
-        <div className="hidden md:flex items-center gap-1 shrink-0">
-          {block.tags.map((tag) => (
-            <span
-              key={tag.label}
-              className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${
-                tag.tone ? tagStyle[tag.tone] : tagStyle.default
-              }`}
-            >
-              {tag.label}
-            </span>
-          ))}
-        </div>
-      </div>
-      {block.flag && (
-        <div className="ml-[88px] md:ml-[140px] mr-2 md:mr-3 mb-1 mt-0.5 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-coral/10 border border-coral/30 text-[11px] font-medium text-foreground/80">
-          <AlertTriangle className="h-3 w-3 text-primary shrink-0" />
-          {block.flag}
-          <Clock className="h-3 w-3 ml-auto text-muted-foreground" />
-        </div>
-      )}
-    </div>
-  );
-};
+const ScorePill = ({ label, value }: { label: string; value: number }) => (
+  <div className="text-center">
+    <div className="text-2xl font-[Fredoka] font-bold">{value}</div>
+    <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</div>
+  </div>
+);
 
 export default Timeline;
