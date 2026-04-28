@@ -38,6 +38,7 @@ from trippy.models.source_research import (
     SourceResearchResult,
     SourceResearchStatus,
 )
+from trippy.services.firecrawl import FirecrawlService
 from trippy.services.learning import LearningEventStore
 
 HtmlFetchResult = tuple[str, str, list[str]]
@@ -77,6 +78,7 @@ class SourceResearchService:
         self._learning = learning_store or LearningEventStore()
         self._adapters = adapters or [
             LinkResearchAdapter(),
+            FirecrawlResearchAdapter(),
             PlaywrightFlightAdapter(),
             PlaywrightLodgingAdapter(),
             PlaywrightActivityAdapter(),
@@ -162,9 +164,7 @@ class SourceResearchService:
                 ),
             }
         )
-        complementary_states, party_size = _load_friction_context(
-            state.trip_id, state.category
-        )
+        complementary_states, party_size = _load_friction_context(state.trip_id, state.category)
         from trippy.services.shortlist_friction import apply_shortlist_friction
 
         apply_shortlist_friction(
@@ -188,9 +188,7 @@ class SourceResearchService:
                 "transmission, deposit, insurance, or cancellation terms as ready-to-click."
             )
         else:
-            review_note = (
-                "Review deep-research evidence for lodging rows before treating any option as ready-to-click."
-            )
+            review_note = "Review deep-research evidence for lodging rows before treating any option as ready-to-click."
         state.next_actions.insert(0, review_note)
         self._record_run_event(state, run_id, run_results)
         return state
@@ -246,6 +244,12 @@ class SourceResearchService:
                 for adapter in self._adapters
                 if adapter.capability == SourceAdapterCapability.PLAYWRIGHT
             ]
+        if mode == SourceResearchMode.FIRECRAWL:
+            return [
+                adapter
+                for adapter in self._adapters
+                if adapter.capability == SourceAdapterCapability.FIRECRAWL
+            ]
         if mode == SourceResearchMode.OPENCLAW:
             return [
                 adapter
@@ -253,6 +257,7 @@ class SourceResearchService:
                 if adapter.capability == SourceAdapterCapability.OPENCLAW
             ]
         priority = [
+            SourceAdapterCapability.FIRECRAWL,
             SourceAdapterCapability.PLAYWRIGHT,
             SourceAdapterCapability.OPENCLAW,
             SourceAdapterCapability.LINK,
@@ -310,6 +315,112 @@ class LinkResearchAdapter:
                 "Link adapter preserved handoff evidence without claiming extracted live details."
             ],
             missing_fields=_missing_fields_for_category(request.category),
+        )
+
+
+class FirecrawlResearchAdapter:
+    """Firecrawl-backed public web intelligence adapter (read-only evidence)."""
+
+    capability = SourceAdapterCapability.FIRECRAWL
+
+    def __init__(self, *, service: FirecrawlService | None = None) -> None:
+        self._firecrawl = service or FirecrawlService()
+
+    def can_handle(self, request: SourceResearchRequest) -> bool:
+        return request.category in {
+            ShortlistCategory.LODGING.value,
+            ShortlistCategory.FLIGHTS.value,
+            ShortlistCategory.CARS.value,
+            ShortlistCategory.ACTIVITIES.value,
+        } and bool(request.source_url or request.query)
+
+    def research(
+        self,
+        request: SourceResearchRequest,
+        *,
+        artifact_dir: Path,
+    ) -> SourceResearchResult:
+        availability = self._firecrawl.availability()
+        if not availability.available:
+            return _result(
+                request,
+                adapter=self.capability,
+                status=SourceResearchStatus.SKIPPED,
+                confidence=0.0,
+                notes=[
+                    "Firecrawl is unavailable; request safely skipped without pipeline failure.",
+                    availability.reason,
+                ],
+                missing_fields=_missing_fields_for_category(request.category),
+            )
+
+        query = (
+            request.query or f"{request.candidate_name} {request.source_name} travel policy details"
+        )
+        research_results = self._firecrawl.research(query)
+        first = research_results[0] if research_results else None
+        if first is None:
+            return _result(
+                request,
+                adapter=self.capability,
+                status=SourceResearchStatus.BLOCKED,
+                confidence=0.15,
+                notes=["Firecrawl returned no usable research rows."],
+                missing_fields=_missing_fields_for_category(request.category),
+            )
+        text = first.raw_markdown_excerpt
+        evidence_url = first.source_url or request.source_url
+        evidence_refs = [evidence_url] if evidence_url else []
+        observations: list[SourceObservation]
+        if request.category == ShortlistCategory.FLIGHTS.value:
+            observations = _extract_flight_observations(
+                text, request=request, evidence_refs=evidence_refs
+            )
+        elif request.category == ShortlistCategory.LODGING.value:
+            observations = _extract_lodging_observations(
+                text, request=request, evidence_refs=evidence_refs
+            )
+        elif request.category == ShortlistCategory.CARS.value:
+            observations = _extract_car_observations(
+                text, request=request, evidence_refs=evidence_refs
+            )
+        else:
+            observations = _extract_activity_observations(
+                text, request=request, evidence_refs=evidence_refs
+            )
+        if not observations:
+            observations = [
+                SourceObservation(field="raw_markdown_excerpt", value=text[:400], confidence=0.4)
+            ]
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        markdown_path = artifact_dir / "firecrawl.md"
+        markdown_path.write_text(text, encoding="utf-8")
+        missing_fields = _remaining_fields_for_category(request.category, observations)
+        confidence = max(0.25, _observation_confidence(observations))
+        status = (
+            SourceResearchStatus.SUCCESS
+            if confidence >= 0.68 and len(missing_fields) <= 2
+            else SourceResearchStatus.PARTIAL
+        )
+        return _result(
+            request,
+            adapter=self.capability,
+            status=status,
+            confidence=confidence,
+            observations=observations,
+            evidence_artifacts=[
+                EvidenceArtifact(
+                    artifact_type="firecrawl-markdown",
+                    label="Firecrawl markdown excerpt",
+                    path=str(markdown_path),
+                    url=evidence_url,
+                )
+            ],
+            notes=[
+                "Firecrawl provided public-web enrichment only; live inventory and booking truth remain official APIs.",
+                *first.warnings,
+            ],
+            missing_fields=missing_fields,
         )
 
 
@@ -831,9 +942,7 @@ class OpenClawResearchAdapter:
                 "OpenClaw was used as an optional read-only browser-agent fallback.",
                 *notes,
             ],
-            missing_fields=_remaining_fields_for_category(
-                request.category, observations
-            ),
+            missing_fields=_remaining_fields_for_category(request.category, observations),
         )
 
     def _gateway_is_live(self) -> bool:
@@ -1608,7 +1717,9 @@ def _extract_activity_observations(
     price = _extract_price(cleaned)
     if price:
         observations.append(
-            _observation("price_signal", price, 0.64, request, evidence_refs, "Visible activity price text")
+            _observation(
+                "price_signal", price, 0.64, request, evidence_refs, "Visible activity price text"
+            )
         )
     availability = _activity_availability_signal(lower)
     if availability:
@@ -1663,7 +1774,9 @@ def _extract_car_observations(
     price = _extract_price(cleaned)
     if price:
         observations.append(
-            _observation("total_price", price, 0.64, request, evidence_refs, "Visible car rental price text")
+            _observation(
+                "total_price", price, 0.64, request, evidence_refs, "Visible car rental price text"
+            )
         )
     availability = _car_availability_signal(lower)
     if availability:
@@ -1690,7 +1803,9 @@ def _extract_car_observations(
         observations.append(_observation("luggage_capacity", luggage, 0.50, request, evidence_refs))
     model = _vehicle_model_signal(cleaned, request)
     if model:
-        observations.append(_observation("vehicle_model_example", model, 0.56, request, evidence_refs))
+        observations.append(
+            _observation("vehicle_model_example", model, 0.56, request, evidence_refs)
+        )
     cancellation = _cancellation_signal(lower)
     if cancellation:
         observations.append(
@@ -1698,7 +1813,9 @@ def _extract_car_observations(
         )
     insurance = _insurance_signal(lower)
     if insurance:
-        observations.append(_observation("insurance_signal", insurance, 0.45, request, evidence_refs))
+        observations.append(
+            _observation("insurance_signal", insurance, 0.45, request, evidence_refs)
+        )
     fees = _car_fees_signal(lower)
     if fees:
         observations.append(_observation("fees_signal", fees, 0.48, request, evidence_refs))
@@ -1947,7 +2064,11 @@ def _luggage_capacity_signal(text: str) -> str:
     )
     if match:
         return f"{match.group(0).strip()} capacity signal visible; verify exact boot/trunk space"
-    if re.search(r"\b(?:large\s+suitcase|full\s+size\s+luggage|luggage\s+capacity)\b", text, flags=re.IGNORECASE):
+    if re.search(
+        r"\b(?:large\s+suitcase|full\s+size\s+luggage|luggage\s+capacity)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
         return "luggage capacity language visible; verify exact number of bags"
     return ""
 
@@ -2390,7 +2511,9 @@ def _missing_high_value_fields(result: SourceResearchResult) -> bool:
             & set(result.missing_fields)
         )
     if result.request.category == ShortlistCategory.ACTIVITIES.value:
-        return bool({"current_price", "exact_availability", "bookable_time"} & set(result.missing_fields))
+        return bool(
+            {"current_price", "exact_availability", "bookable_time"} & set(result.missing_fields)
+        )
     if result.request.category == ShortlistCategory.CARS.value:
         return bool(
             {"total_price", "exact_seats", "transmission", "cancellation_terms"}
@@ -2646,9 +2769,7 @@ def _raw_notes(value: object) -> list[str]:
     return []
 
 
-_MARKDOWN_FENCE_RE = re.compile(
-    r"```(?:json|JSON)?\s*\n(.*?)\n\s*```", re.DOTALL
-)
+_MARKDOWN_FENCE_RE = re.compile(r"```(?:json|JSON)?\s*\n(.*?)\n\s*```", re.DOTALL)
 
 
 def _strip_markdown_fences(text: str) -> str:

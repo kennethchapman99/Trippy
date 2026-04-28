@@ -186,6 +186,11 @@ TRIPPY_LIVE_VALIDATION_TIMEOUT_SECONDS=4
 TRIPPY_SOURCE_RESEARCH_TIMEOUT_SECONDS=12
 TRIPPY_SOURCE_RESEARCH_PLAYWRIGHT_ENABLED=false
 TRIPPY_SOURCE_RESEARCH_OPENCLAW_ENABLED=false
+FIRECRAWL_API_KEY=
+FIRECRAWL_BASE_URL=https://api.firecrawl.dev
+FIRECRAWL_ENABLED=true
+FIRECRAWL_CACHE_TTL_SECONDS=900
+FIRECRAWL_MAX_RESULTS=5
 TRIPPY_OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
 TRIPPY_OPENCLAW_COMMAND=openclaw
 GMAIL_CREDENTIALS_PATH=~/.trippy/gmail_credentials.json
@@ -214,6 +219,38 @@ deterministic anti-friction post-processor flags risky candidates (late arrivals
 vs. lodging check-in, tight layovers, multi-airline tickets, undersized cars,
 missing total price or cancellation terms) and downgrades their recommendation
 grade and live-data status accordingly.
+
+### Firecrawl web intelligence layer (optional, read-only)
+
+Firecrawl is now a first-class **public web intelligence** provider across flights,
+lodging, cars, and activities. It is used to extract source-backed policy and fit
+context (baggage rules, cancellation windows, check-in/out, child-seat policies,
+hours/restrictions, weather dependency, amenities), while official APIs stay the
+source of truth for transactional inventory and booking-ready details.
+
+```bash
+uv run trippy trip-plan flights    --trip-id <id> --deep-research --adapter firecrawl
+uv run trippy trip-plan lodging    --trip-id <id> --deep-research --adapter firecrawl
+uv run trippy trip-plan cars       --trip-id <id> --deep-research --adapter firecrawl
+uv run trippy trip-plan activities --trip-id <id> --deep-research --adapter firecrawl
+```
+
+Safety model:
+- Firecrawl evidence is read-only and advisory.
+- Booking/payment/account actions remain explicitly human-gated.
+- Scraped prices are not treated as guaranteed live availability.
+- Low-confidence/stale extraction remains flagged with warnings and missing fields.
+
+Developer probe:
+
+```bash
+python scripts/firecrawl_travel_probe.py \
+  --domain lodging \
+  --destination "Puerto Vallarta" \
+  --dates "2026-03-10 to 2026-03-17" \
+  --travelers "2 adults, 3 kids" \
+  --query "family friendly beachfront resorts Puerto Vallarta cancellation policy"
+```
 
 ---
 

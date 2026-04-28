@@ -47,6 +47,11 @@ PLANNING_LLM_ENABLED: bool = _bool("TRIPPY_PLANNING_LLM_ENABLED", bool(ANTHROPIC
 GOOGLE_SHEETS_API_KEY: str = os.environ.get("GOOGLE_SHEETS_API_KEY", "")
 SHERPA_API_KEY: str = os.environ.get("SHERPA_API_KEY", "")
 DUFFEL_ACCESS_TOKEN: str = os.environ.get("DUFFEL_ACCESS_TOKEN", "")
+FIRECRAWL_API_KEY: str = os.environ.get("FIRECRAWL_API_KEY", "")
+FIRECRAWL_BASE_URL: str = os.environ.get("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev")
+FIRECRAWL_ENABLED: bool = _bool("FIRECRAWL_ENABLED", True)
+FIRECRAWL_CACHE_TTL_SECONDS: int = int(os.environ.get("FIRECRAWL_CACHE_TTL_SECONDS", "900"))
+FIRECRAWL_MAX_RESULTS: int = int(os.environ.get("FIRECRAWL_MAX_RESULTS", "5"))
 
 # Google Sheet template
 SHEET_TEMPLATE_ID: str = os.environ.get("TRIPPY_SHEET_TEMPLATE_ID", "")

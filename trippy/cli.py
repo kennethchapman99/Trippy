@@ -597,7 +597,7 @@ def trip_plan_flights(
     adapter: str = typer.Option(
         "auto",
         "--adapter",
-        help="Source adapter mode: auto, link, playwright, or openclaw",
+        help="Source adapter mode: auto, link, firecrawl, playwright, or openclaw",
     ),
     propose_learning: bool = typer.Option(
         False,
@@ -660,7 +660,7 @@ def trip_plan_lodging(
     adapter: str = typer.Option(
         "auto",
         "--adapter",
-        help="Source adapter mode: auto, link, playwright, or openclaw",
+        help="Source adapter mode: auto, link, firecrawl, playwright, or openclaw",
     ),
     propose_learning: bool = typer.Option(
         False,
@@ -703,7 +703,7 @@ def trip_plan_cars(
     adapter: str = typer.Option(
         "auto",
         "--adapter",
-        help="Source adapter mode: auto, link, playwright, or openclaw",
+        help="Source adapter mode: auto, link, firecrawl, playwright, or openclaw",
     ),
     propose_learning: bool = typer.Option(
         False,
@@ -746,7 +746,7 @@ def trip_plan_activities(
     adapter: str = typer.Option(
         "auto",
         "--adapter",
-        help="Source adapter mode: auto, link, playwright, or openclaw",
+        help="Source adapter mode: auto, link, firecrawl, playwright, or openclaw",
     ),
     propose_learning: bool = typer.Option(
         False,

@@ -306,10 +306,55 @@ def _skill_tools() -> list[dict[str, Any]]:
                     },
                     "adapter": {
                         "type": "string",
-                        "enum": ["auto", "link", "playwright", "openclaw"],
+                        "enum": ["auto", "link", "playwright", "firecrawl", "openclaw"],
                         "default": "auto",
                     },
                 },
+            },
+        },
+        {
+            "name": "research_lodging_web",
+            "description": "Research lodging pages with Firecrawl and return normalized web evidence.",
+            "input_schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {"query": {"type": "string"}},
+            },
+        },
+        {
+            "name": "research_activities_web",
+            "description": "Research activity pages with Firecrawl and return normalized web evidence.",
+            "input_schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {"query": {"type": "string"}},
+            },
+        },
+        {
+            "name": "enrich_flight_with_web_context",
+            "description": "Enrich flight recommendations with baggage/fare/change policy context.",
+            "input_schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {"query": {"type": "string"}},
+            },
+        },
+        {
+            "name": "enrich_car_rental_with_web_context",
+            "description": "Enrich car rental recommendations with policy/logistics context.",
+            "input_schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {"query": {"type": "string"}},
+            },
+        },
+        {
+            "name": "extract_travel_page_context",
+            "description": "Extract normalized context from a single travel page URL.",
+            "input_schema": {
+                "type": "object",
+                "required": ["url"],
+                "properties": {"url": {"type": "string"}, "query": {"type": "string"}},
             },
         },
     ]
@@ -379,8 +424,44 @@ def _execute_tool(
 
     if name == "run_planning_service":
         return _run_planning_service(inputs)
+    if name in {
+        "research_lodging_web",
+        "research_activities_web",
+        "enrich_flight_with_web_context",
+        "enrich_car_rental_with_web_context",
+        "extract_travel_page_context",
+    }:
+        return _run_web_intelligence_tool(name, inputs)
 
     return json.dumps({"error": f"Unknown tool: {name}"})
+
+
+def _run_web_intelligence_tool(name: str, inputs: dict[str, Any]) -> str:
+    from trippy.services.web_intelligence import TravelWebIntelligenceService
+
+    service = TravelWebIntelligenceService()
+    query = str(inputs.get("query") or "")
+    if name == "research_lodging_web":
+        return json.dumps(
+            [row.model_dump(mode="json") for row in service.research_lodging_web(query)]
+        )
+    if name == "research_activities_web":
+        return json.dumps(
+            [row.model_dump(mode="json") for row in service.research_activities_web(query)]
+        )
+    if name == "enrich_flight_with_web_context":
+        return service.enrich_flight_with_web_context(query).model_dump_json()
+    if name == "enrich_car_rental_with_web_context":
+        return json.dumps(
+            [
+                row.model_dump(mode="json")
+                for row in service.enrich_car_rental_with_web_context(query)
+            ]
+        )
+    return service.extract_travel_page_context(
+        str(inputs.get("url") or ""),
+        query=query,
+    ).model_dump_json()
 
 
 def _run_planning_service(inputs: dict[str, Any]) -> str:
