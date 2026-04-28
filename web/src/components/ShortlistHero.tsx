@@ -1,20 +1,32 @@
 import { Link } from "react-router-dom";
 import { ArrowLeft, AlertTriangle } from "lucide-react";
 import type { TripIntake } from "@/lib/api";
+import { TripMap } from "@/components/TripMap";
+import { useGeocodes } from "@/lib/geocode";
+import { buildSeedPins, makeGeocodeLookup } from "@/lib/pinBuilders";
 
 export function ShortlistHero({
   intake,
   stageLabel,
   stageNumber,
   flagCount,
+  showMap = true,
 }: {
   intake: TripIntake | null | undefined;
   stageLabel: string;
   stageNumber: number;
   flagCount?: number;
+  showMap?: boolean;
 }) {
   const tripName = intake?.trip_name ?? "Your trip";
-  const destination = intake?.destination_seeds?.join(" · ") ?? "";
+  const seeds = intake?.destination_seeds ?? [];
+  const destination = seeds.join(" · ");
+
+  const geocodeResults = useGeocodes(seeds);
+  const lookup = makeGeocodeLookup(
+    seeds.map((q, i) => ({ query: q, coords: geocodeResults[i]?.data ?? null }))
+  );
+  const pins = buildSeedPins(seeds, lookup);
 
   return (
     <div className="bg-gradient-hero border-b-2 border-foreground/10 px-6 md:px-10 pt-8 pb-10 relative">
@@ -53,6 +65,17 @@ export function ShortlistHero({
       </h1>
       {destination && (
         <p className="text-foreground/70 italic mt-2 font-medium">{destination}</p>
+      )}
+      {showMap && pins.length > 0 && (
+        <div className="mt-5 max-w-3xl">
+          <TripMap
+            pins={pins}
+            variant="compact"
+            showScrubber={false}
+            height="200px"
+            zoom={5}
+          />
+        </div>
       )}
     </div>
   );

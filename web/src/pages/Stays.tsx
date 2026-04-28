@@ -13,6 +13,17 @@ import {
 } from "lucide-react";
 import { api, type LodgingOption } from "@/lib/api";
 import { buildStages, shortlistOptions } from "@/lib/stages";
+import { TripMap } from "@/components/TripMap";
+import { useGeocodes } from "@/lib/geocode";
+import { buildLodgingPins, makeGeocodeLookup } from "@/lib/pinBuilders";
+
+const GROUP_COLORS = [
+  "hsl(18 95% 55%)",
+  "hsl(205 88% 48%)",
+  "hsl(178 70% 45%)",
+  "hsl(145 55% 38%)",
+  "hsl(45 100% 60%)",
+];
 
 const Stays = () => {
   const { tripId } = useParams<{ tripId: string }>();
@@ -56,6 +67,30 @@ const Stays = () => {
   const recommendedId = shortlist?.recommended_option_id;
   const flagCount = options.reduce((s, o) => s + o.friction_flags.length, 0);
   const hasSelection = options.some((o) => o.row_status === "approved");
+
+  const lodgingQueries = options.map((o) =>
+    [o.location_area, o.island_or_region].filter(Boolean).join(", ")
+  );
+  const lodgingGeocodes = useGeocodes(lodgingQueries);
+  const lodgingLookup = makeGeocodeLookup(
+    lodgingQueries.map((q, i) => ({ query: q, coords: lodgingGeocodes[i]?.data ?? null }))
+  );
+  const lodgingPins = buildLodgingPins(options, lodgingLookup);
+  const regionGroups = (() => {
+    const byRegion = new Map<string, string[]>();
+    for (const o of options) {
+      const region = o.island_or_region || o.location_area || "Other";
+      const list = byRegion.get(region) ?? [];
+      list.push(`lodging-${o.option_id}`);
+      byRegion.set(region, list);
+    }
+    return Array.from(byRegion.entries()).map(([label, pinIds], i) => ({
+      id: `region-${i}`,
+      label,
+      color: GROUP_COLORS[i % GROUP_COLORS.length],
+      pinIds,
+    }));
+  })();
 
   return (
     <AppShell>
@@ -163,6 +198,20 @@ const Stays = () => {
                 {candidateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Research it"}
               </Button>
             </div>
+          </div>
+        )}
+
+        {lodgingPins.length > 0 && regionGroups.length > 0 && (
+          <div className="mb-6 space-y-2">
+            <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">
+              Where these stays sit · Split-stay decision view
+            </div>
+            <TripMap
+              pins={lodgingPins}
+              height="380px"
+              showScrubber={false}
+              groups={regionGroups.length > 1 ? regionGroups : undefined}
+            />
           </div>
         )}
 

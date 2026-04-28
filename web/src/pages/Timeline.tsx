@@ -9,7 +9,15 @@ import {
   ExternalLink, CheckCircle2, Clock, Sparkles, FileSpreadsheet,
 } from "lucide-react";
 import { api, type WorkspaceTab } from "@/lib/api";
-import { buildStages } from "@/lib/stages";
+import { buildStages, shortlistOptions } from "@/lib/stages";
+import { TripMap } from "@/components/TripMap";
+import { useGeocodes } from "@/lib/geocode";
+import {
+  buildActivityPins,
+  buildFlightPins,
+  buildLodgingPins,
+  makeGeocodeLookup,
+} from "@/lib/pinBuilders";
 
 const Timeline = () => {
   const { tripId } = useParams<{ tripId: string }>();
@@ -41,6 +49,35 @@ const Timeline = () => {
   const selectedOption = draft?.options?.find(
     (o) => o.option_id === (draft?.selected_option_id ?? draft?.recommended_option_id)
   );
+
+  const lodgingShortlist = shortlistOptions(tripQuery.data, "lodging");
+  const activityShortlist = shortlistOptions(tripQuery.data, "activities");
+  const flightShortlist = shortlistOptions(tripQuery.data, "flights");
+  const lodgingOpts = lodgingShortlist?.lodging_options ?? [];
+  const activityOpts = activityShortlist?.activity_options ?? [];
+  const flightOpts = flightShortlist?.flight_options ?? [];
+
+  const allQueries = [
+    ...lodgingOpts.map((o) =>
+      [o.location_area, o.island_or_region].filter(Boolean).join(", ")
+    ),
+    ...activityOpts.map((o) => o.island_location || ""),
+    ...flightOpts.flatMap((o) => [o.departure_airport, o.arrival_airport]),
+  ];
+  const allGeocodes = useGeocodes(allQueries);
+  const lookup = makeGeocodeLookup(
+    allQueries.map((q, i) => ({ query: q, coords: allGeocodes[i]?.data ?? null }))
+  );
+  const tripMapPins = [
+    ...buildLodgingPins(lodgingOpts, lookup),
+    ...buildActivityPins(activityOpts, lookup),
+    ...buildFlightPins(flightOpts, lookup),
+  ].sort((a, b) => {
+    if (!a.at && !b.at) return 0;
+    if (!a.at) return 1;
+    if (!b.at) return -1;
+    return a.at < b.at ? -1 : 1;
+  });
 
   const timelineTabs: WorkspaceTab[] = workspace?.tabs ?? [];
   const masterTab = timelineTabs.find(
@@ -301,6 +338,23 @@ const Timeline = () => {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* Trip map */}
+        {tripMapPins.length > 0 && (
+          <div className="rounded-3xl border-2 border-foreground/10 bg-card shadow-card overflow-hidden mb-6">
+            <div className="px-6 py-4 border-b-2 border-foreground/10 flex items-center justify-between">
+              <div className="font-[Fredoka] text-xl font-bold flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-[hsl(var(--primary))]" /> Trip map
+              </div>
+              <div className="text-xs text-muted-foreground font-semibold">
+                {tripMapPins.length} pin{tripMapPins.length === 1 ? "" : "s"} · press ▶ to fly the trip
+              </div>
+            </div>
+            <div className="p-4">
+              <TripMap pins={tripMapPins} height="540px" />
             </div>
           </div>
         )}
