@@ -339,7 +339,13 @@ def _duffel_live_options(
         response = _post_duffel_offer_request(token, payload)
     except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
         return [], [f"Duffel live flight search failed: {exc}"]
-    offers = list((response.get("data") or {}).get("offers") or [])
+    _data = response.get("data")
+    _raw_offers = _data.get("offers") if isinstance(_data, dict) else None
+    offers: list[dict[str, object]] = (
+        [item for item in _raw_offers if isinstance(item, dict)]
+        if isinstance(_raw_offers, list)
+        else []
+    )
     if not offers:
         return [], ["Duffel returned no live offers for this route/date search."]
     comparison = _flight_comparison_links(origin, destination, ctx)
@@ -416,7 +422,8 @@ def _post_duffel_offer_request(token: str, payload: dict[str, object]) -> dict[s
         method="POST",
     )
     with urlopen(request, timeout=max(15, config.SOURCE_RESEARCH_TIMEOUT_SECONDS)) as response:  # noqa: S310 - configured authenticated API endpoint
-        return json.loads(response.read().decode("utf-8"))
+        result: dict[str, object] = json.loads(response.read().decode("utf-8"))
+        return result
 
 
 def _duffel_offer_to_option(
@@ -427,11 +434,13 @@ def _duffel_offer_to_option(
     destination: str,
     comparison: dict[str, str],
 ) -> FlightOption | None:
-    slices = [item for item in offer.get("slices", []) if isinstance(item, dict)]
+    _raw_slices = offer.get("slices")
+    slices = [item for item in _raw_slices if isinstance(item, dict)] if isinstance(_raw_slices, list) else []
     if not slices:
         return None
     outbound = slices[0]
-    segments = [item for item in outbound.get("segments", []) if isinstance(item, dict)]
+    _raw_segments = outbound.get("segments")
+    segments = [item for item in _raw_segments if isinstance(item, dict)] if isinstance(_raw_segments, list) else []
     if not segments:
         return None
     first = segments[0]
@@ -448,9 +457,9 @@ def _duffel_offer_to_option(
     arrival_date, arrival_time = _split_duffel_timestamp(arriving_at)
     stops = max(0, len(segments) - 1)
     layover_airports = [
-        str(destination.get("iata_code") or "")
+        str(seg_dest.get("iata_code") or "")
         for segment in segments[:-1]
-        if isinstance(destination := segment.get("destination"), dict)
+        if isinstance(seg_dest := segment.get("destination"), dict)
     ]
     layover_airports = [airport for airport in layover_airports if airport]
     layover_duration = _duffel_layover_duration(segments)

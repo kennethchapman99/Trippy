@@ -133,6 +133,7 @@ class FrictionDetector:
         risks.extend(self._check_destination_readiness(trip))
         risks.extend(self._check_country_priors(trip))
         risks.extend(self._check_tour_quality_signals(trip))
+        risks.extend(self._check_too_many_moves(trip))
 
         logger.info("FrictionDetector: %d risk(s) found for trip %r", len(risks), trip.trip_id)
         return risks
@@ -686,6 +687,51 @@ class FrictionDetector:
                     )
                 )
         return risks
+
+    def _check_too_many_moves(self, trip: Trip) -> list[RiskFlag]:
+        """Flag trips where the number of lodging transitions is high relative to trip length."""
+        if not trip.stays or not trip.start_date or not trip.end_date:
+            return []
+        trip_days = max(1, (trip.end_date - trip.start_date).days + 1)
+        moves = len(trip.stays) - 1
+        if moves <= 0:
+            return []
+
+        if trip_days <= 5 and moves >= 2:
+            severity = RiskSeverity.HIGH
+            description = (
+                f"{moves} lodging move(s) across a {trip_days}-day trip is too compressed "
+                "for a family of 5 with kids — packing, unpacking, parking, and check-in "
+                "friction stack up fast on a short trip."
+            )
+            fix = "Consolidate to one base or reduce moves to at most one for a trip this short."
+        elif trip_days <= 7 and moves >= 2:
+            severity = RiskSeverity.MEDIUM
+            description = (
+                f"{moves} lodging move(s) in a {trip_days}-day trip is borderline for a family. "
+                "Each move adds check-in, luggage, and parking friction."
+            )
+            fix = "Keep moves to one unless the second base has a clear activity or logistics win."
+        elif trip_days <= 10 and moves >= 3:
+            severity = RiskSeverity.MEDIUM
+            description = (
+                f"{moves} lodging move(s) across {trip_days} days is on the high side — "
+                "confirm each transition has a clear upside (not just routing convenience)."
+            )
+            fix = "Reduce to 2 moves max unless each base is meaningfully distinct."
+        else:
+            return []
+
+        return [
+            RiskFlag(
+                risk_id="too-many-moves",
+                severity=severity,
+                category="pacing",
+                description=description,
+                affected_ids=[stay.stay_id for stay in trip.stays],
+                recommended_fix=fix,
+            )
+        ]
 
     # ------------------------------------------------------------------
     # Helpers

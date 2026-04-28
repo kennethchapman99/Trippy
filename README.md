@@ -192,6 +192,29 @@ GMAIL_CREDENTIALS_PATH=~/.trippy/gmail_credentials.json
 GOOGLE_TOKEN_PATH=~/.trippy/google_token.json
 ```
 
+### Live source research with OpenClaw (optional, read-only)
+
+Set the three OpenClaw env vars above and run an OpenClaw gateway on the configured
+URL. Then any of the four shortlists can be enriched with read-only browser-agent
+observations:
+
+```bash
+uv run trippy trip-plan flights    --trip-id <id> --deep-research --adapter openclaw
+uv run trippy trip-plan lodging    --trip-id <id> --deep-research --adapter openclaw
+uv run trippy trip-plan cars       --trip-id <id> --deep-research --adapter openclaw
+uv run trippy trip-plan activities --trip-id <id> --deep-research --adapter openclaw
+```
+
+OpenClaw is invoked **read-only**: search and inspect, never log in, never book,
+never add to cart, never check out, never take payment actions. Trippy never
+claims live availability, exact price, room layout, cancellation terms, baggage,
+or schedule unless an OpenClaw observation directly evidences it. Rows without
+evidence stay `HANDOFF_REQUIRED`. After observations are applied, a
+deterministic anti-friction post-processor flags risky candidates (late arrivals
+vs. lodging check-in, tight layovers, multi-airline tickets, undersized cars,
+missing total price or cancellation terms) and downgrades their recommendation
+grade and live-data status accordingly.
+
 ---
 
 ## Skills

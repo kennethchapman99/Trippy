@@ -393,6 +393,100 @@ class TestFamilyComfortChecks:
         assert "directional priors" in country_risks[0].description
 
 
+def _make_stay(stay_id: str, check_in: date, check_out: date, **kwargs: object) -> Stay:
+    return Stay(
+        stay_id=stay_id,
+        stay_type=StayType.AIRBNB,
+        property_name=f"Property {stay_id}",
+        city="Ponta Delgada",
+        country="Portugal",
+        check_in=check_in,
+        check_out=check_out,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+class TestTooManyMoves:
+    def test_two_moves_on_5day_trip_is_high(self) -> None:
+        trip = _make_trip(
+            start_date=date(2027, 6, 1),
+            end_date=date(2027, 6, 5),
+            stays=[
+                _make_stay("s1", date(2027, 6, 1), date(2027, 6, 2)),
+                _make_stay("s2", date(2027, 6, 2), date(2027, 6, 4)),
+                _make_stay("s3", date(2027, 6, 4), date(2027, 6, 5)),
+            ],
+        )
+        risks = _detector().audit(trip)
+        move_risks = [r for r in risks if r.risk_id == "too-many-moves"]
+        assert move_risks, f"Expected too-many-moves risk, got: {[r.risk_id for r in risks]}"
+        assert move_risks[0].severity == RiskSeverity.HIGH
+
+    def test_two_moves_on_7day_trip_is_medium(self) -> None:
+        trip = _make_trip(
+            start_date=date(2027, 6, 1),
+            end_date=date(2027, 6, 7),
+            stays=[
+                _make_stay("s1", date(2027, 6, 1), date(2027, 6, 3)),
+                _make_stay("s2", date(2027, 6, 3), date(2027, 6, 5)),
+                _make_stay("s3", date(2027, 6, 5), date(2027, 6, 7)),
+            ],
+        )
+        risks = _detector().audit(trip)
+        move_risks = [r for r in risks if r.risk_id == "too-many-moves"]
+        assert move_risks
+        assert move_risks[0].severity == RiskSeverity.MEDIUM
+
+    def test_three_moves_on_9day_trip_is_medium(self) -> None:
+        trip = _make_trip(
+            start_date=date(2027, 6, 1),
+            end_date=date(2027, 6, 9),
+            stays=[
+                _make_stay("s1", date(2027, 6, 1), date(2027, 6, 3)),
+                _make_stay("s2", date(2027, 6, 3), date(2027, 6, 5)),
+                _make_stay("s3", date(2027, 6, 5), date(2027, 6, 7)),
+                _make_stay("s4", date(2027, 6, 7), date(2027, 6, 9)),
+            ],
+        )
+        risks = _detector().audit(trip)
+        move_risks = [r for r in risks if r.risk_id == "too-many-moves"]
+        assert move_risks
+        assert move_risks[0].severity == RiskSeverity.MEDIUM
+
+    def test_one_move_short_trip_no_flag(self) -> None:
+        trip = _make_trip(
+            start_date=date(2027, 6, 1),
+            end_date=date(2027, 6, 5),
+            stays=[
+                _make_stay("s1", date(2027, 6, 1), date(2027, 6, 3)),
+                _make_stay("s2", date(2027, 6, 3), date(2027, 6, 5)),
+            ],
+        )
+        risks = _detector().audit(trip)
+        assert not any(r.risk_id == "too-many-moves" for r in risks)
+
+    def test_two_moves_long_trip_no_flag(self) -> None:
+        trip = _make_trip(
+            start_date=date(2027, 6, 1),
+            end_date=date(2027, 6, 14),
+            stays=[
+                _make_stay("s1", date(2027, 6, 1), date(2027, 6, 5)),
+                _make_stay("s2", date(2027, 6, 5), date(2027, 6, 10)),
+                _make_stay("s3", date(2027, 6, 10), date(2027, 6, 14)),
+            ],
+        )
+        risks = _detector().audit(trip)
+        assert not any(r.risk_id == "too-many-moves" for r in risks)
+
+    def test_no_stays_no_flag(self) -> None:
+        trip = _make_trip(
+            start_date=date(2027, 6, 1),
+            end_date=date(2027, 6, 5),
+        )
+        risks = _detector().audit(trip)
+        assert not any(r.risk_id == "too-many-moves" for r in risks)
+
+
 class TestNoRisks:
     def test_clean_trip_no_risks(self) -> None:
         """A well-configured trip should produce no risks."""

@@ -80,6 +80,7 @@ class SourceResearchService:
             PlaywrightFlightAdapter(),
             PlaywrightLodgingAdapter(),
             PlaywrightActivityAdapter(),
+            PlaywrightCarAdapter(),
             OpenClawResearchAdapter(),
         ]
 
@@ -101,22 +102,26 @@ class SourceResearchService:
         if state.category not in {
             ShortlistCategory.LODGING,
             ShortlistCategory.FLIGHTS,
+            ShortlistCategory.CARS,
             ShortlistCategory.ACTIVITIES,
         }:
             state.artifacts["deep_research"]["status"] = "skipped"
             state.artifacts["deep_research"]["notes"] = [
-                "Deep adapters are implemented for lodging, flights, and activities; other categories remain source-link validated."
+                "Deep adapters are implemented for lodging, flights, cars, and activities; other categories remain source-link validated."
             ]
             return state
 
         run_results: list[SourceResearchResult] = []
         selected_option_ids = set(option_ids or [])
+        options: list[Any]
         if state.category == ShortlistCategory.LODGING:
-            options = state.lodging_options
+            options = list(state.lodging_options)
         elif state.category == ShortlistCategory.FLIGHTS:
-            options = state.flight_options
+            options = list(state.flight_options)
+        elif state.category == ShortlistCategory.CARS:
+            options = list(state.car_options)
         else:
-            options = state.activity_options
+            options = list(state.activity_options)
         for option in options:
             if selected_option_ids and option.option_id not in selected_option_ids:
                 continue
@@ -124,6 +129,8 @@ class SourceResearchService:
                 request = _request_for_lodging_option(state, option, mode)
             elif state.category == ShortlistCategory.FLIGHTS:
                 request = _request_for_flight_option(state, option, mode)
+            elif state.category == ShortlistCategory.CARS:
+                request = _request_for_car_option(state, option, mode)
             else:
                 request = _request_for_activity_option(state, option, mode)
             option_dir = (
@@ -138,6 +145,8 @@ class SourceResearchService:
                 _apply_lodging_observations(option, result, run_id=run_id)
             elif state.category == ShortlistCategory.FLIGHTS:
                 _apply_flight_observations(option, result, run_id=run_id)
+            elif state.category == ShortlistCategory.CARS:
+                _apply_car_observations(option, result, run_id=run_id)
             else:
                 _apply_activity_observations(option, result, run_id=run_id)
             run_results.append(result)
@@ -153,20 +162,36 @@ class SourceResearchService:
                 ),
             }
         )
-        state.next_actions.insert(
-            0,
-            (
+        complementary_states, party_size = _load_friction_context(
+            state.trip_id, state.category
+        )
+        from trippy.services.shortlist_friction import apply_shortlist_friction
+
+        apply_shortlist_friction(
+            state,
+            complementary_states=complementary_states,
+            party_size=party_size,
+        )
+        if state.category == ShortlistCategory.FLIGHTS:
+            review_note = (
                 "Review deep-research evidence for flight rows before treating timing, fare, baggage, "
                 "or inventory as ready-to-click."
             )
-            if state.category == ShortlistCategory.FLIGHTS
-            else (
+        elif state.category == ShortlistCategory.ACTIVITIES:
+            review_note = (
                 "Review deep-research evidence for activity rows before treating cost, time, duration, "
                 "or availability as ready-to-click."
-                if state.category == ShortlistCategory.ACTIVITIES
-                else "Review deep-research evidence for lodging rows before treating any option as ready-to-click."
-            ),
-        )
+            )
+        elif state.category == ShortlistCategory.CARS:
+            review_note = (
+                "Review deep-research evidence for car rows before treating total price, seats, "
+                "transmission, deposit, insurance, or cancellation terms as ready-to-click."
+            )
+        else:
+            review_note = (
+                "Review deep-research evidence for lodging rows before treating any option as ready-to-click."
+            )
+        state.next_actions.insert(0, review_note)
         self._record_run_event(state, run_id, run_results)
         return state
 
@@ -585,6 +610,106 @@ class PlaywrightActivityAdapter:
         )
 
 
+class PlaywrightCarAdapter:
+    """Browser-capable car rental adapter for price, seats, and transmission signals."""
+
+    capability = SourceAdapterCapability.PLAYWRIGHT
+
+    def __init__(
+        self,
+        *,
+        fetcher: HtmlFetcher | None = None,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        self._fetcher = fetcher or _fetch_html
+        self._custom_fetcher = fetcher is not None
+        self._timeout = timeout_seconds or config.SOURCE_RESEARCH_TIMEOUT_SECONDS
+
+    def can_handle(self, request: SourceResearchRequest) -> bool:
+        return request.category == ShortlistCategory.CARS.value and bool(request.source_url)
+
+    def research(
+        self,
+        request: SourceResearchRequest,
+        *,
+        artifact_dir: Path,
+    ) -> SourceResearchResult:
+        notes = [
+            "Read-only car rental source extraction; no booking, login, payment, or cart action attempted."
+        ]
+        try:
+            if (
+                config.SOURCE_RESEARCH_PLAYWRIGHT_ENABLED
+                and not self._custom_fetcher
+                and shutil.which("npx") is not None
+            ):
+                html, final_url, fetch_notes = _fetch_html_with_playwright(
+                    request.source_url,
+                    self._timeout,
+                )
+            else:
+                html, final_url, fetch_notes = self._fetcher(request.source_url, self._timeout)
+        except (URLError, OSError, TimeoutError, ValueError) as exc:
+            return _result(
+                request,
+                adapter=self.capability,
+                status=SourceResearchStatus.BLOCKED,
+                confidence=0.2,
+                notes=[*notes, f"Car rental source fetch was blocked: {exc}"],
+                missing_fields=_car_missing_fields(),
+            )
+
+        notes.extend(fetch_notes)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        html_path = artifact_dir / "source.html"
+        html_path.write_text(html[:500_000], encoding="utf-8")
+        text = _page_text(html)
+        text_path = artifact_dir / "source-text.txt"
+        text_path.write_text(text[:80_000], encoding="utf-8")
+        observations = _extract_car_observations(
+            text,
+            request=request,
+            evidence_refs=[str(html_path), str(text_path), final_url],
+        )
+        missing = _remaining_car_fields(observations)
+        confidence = _observation_confidence(observations)
+        status = (
+            SourceResearchStatus.SUCCESS
+            if confidence >= 0.62 and len(missing) <= 3
+            else SourceResearchStatus.PARTIAL
+            if observations
+            else SourceResearchStatus.BLOCKED
+        )
+        artifacts = [
+            EvidenceArtifact(
+                artifact_type="html",
+                label="Fetched car rental source HTML snapshot",
+                path=str(html_path),
+                url=final_url,
+            ),
+            EvidenceArtifact(
+                artifact_type="text",
+                label="Extracted car rental source visible text",
+                path=str(text_path),
+                url=final_url,
+            ),
+        ]
+        return _result(
+            request,
+            adapter=self.capability,
+            status=status,
+            confidence=confidence,
+            observations=observations,
+            evidence_artifacts=artifacts,
+            notes=notes,
+            missing_fields=missing,
+        )
+
+
+OpenClawRunner = Callable[..., "subprocess.CompletedProcess[str]"]
+OpenClawGatewayProbe = Callable[[], bool]
+
+
 class OpenClawResearchAdapter:
     capability = SourceAdapterCapability.OPENCLAW
 
@@ -595,11 +720,15 @@ class OpenClawResearchAdapter:
         gateway_url: str | None = None,
         timeout_seconds: float | None = None,
         enabled: bool | None = None,
+        runner: OpenClawRunner | None = None,
+        gateway_probe: OpenClawGatewayProbe | None = None,
     ) -> None:
         self._command = command or config.OPENCLAW_COMMAND
         self._gateway_url = gateway_url or config.OPENCLAW_GATEWAY_URL
         self._timeout = timeout_seconds or config.SOURCE_RESEARCH_TIMEOUT_SECONDS
         self._enabled = config.SOURCE_RESEARCH_OPENCLAW_ENABLED if enabled is None else enabled
+        self._runner: OpenClawRunner = runner or subprocess.run
+        self._gateway_probe: OpenClawGatewayProbe = gateway_probe or self._gateway_is_live
 
     def can_handle(self, request: SourceResearchRequest) -> bool:
         return (
@@ -607,12 +736,13 @@ class OpenClawResearchAdapter:
             in {
                 ShortlistCategory.LODGING.value,
                 ShortlistCategory.FLIGHTS.value,
+                ShortlistCategory.CARS.value,
                 ShortlistCategory.ACTIVITIES.value,
             }
             and self._enabled
             and bool(request.source_url)
             and shutil.which(self._command) is not None
-            and self._gateway_is_live()
+            and self._gateway_probe()
         )
 
     def research(
@@ -624,7 +754,7 @@ class OpenClawResearchAdapter:
         prompt = _openclaw_prompt(request)
         started = datetime.utcnow()
         try:
-            completed = subprocess.run(  # noqa: S603 - configured local OpenClaw command only
+            completed = self._runner(  # noqa: S603 - configured local OpenClaw command only
                 [
                     self._command,
                     "agent",
@@ -701,10 +831,8 @@ class OpenClawResearchAdapter:
                 "OpenClaw was used as an optional read-only browser-agent fallback.",
                 *notes,
             ],
-            missing_fields=(
-                _remaining_flight_fields(observations)
-                if request.category == ShortlistCategory.FLIGHTS.value
-                else _remaining_lodging_fields(observations)
+            missing_fields=_remaining_fields_for_category(
+                request.category, observations
             ),
         )
 
@@ -806,6 +934,35 @@ def _request_for_activity_option(
             if item
         ),
         candidate_name=str(option.activity_name),
+        adapter_mode=mode,
+        context=option.model_dump(mode="json"),
+    )
+
+
+def _request_for_car_option(
+    state: ResearchShortlistState,
+    option: Any,
+    mode: SourceResearchMode,
+) -> SourceResearchRequest:
+    return SourceResearchRequest(
+        trip_id=state.trip_id,
+        category=state.category.value,
+        option_id=str(option.option_id),
+        source_name=str(option.booking_source),
+        source_url=str(option.deep_link),
+        source_type=str(
+            option.validation.source_type.value if option.validation else "live_search"
+        ),
+        query=" ".join(
+            item
+            for item in [
+                str(option.vehicle_class),
+                str(option.pickup_location),
+                str(option.dropoff_location),
+            ]
+            if item
+        ),
+        candidate_name=str(option.vehicle_class),
         adapter_mode=mode,
         context=option.model_dump(mode="json"),
     )
@@ -1053,6 +1210,96 @@ def _apply_activity_observations(option: Any, result: SourceResearchResult, *, r
         option.review_safety_signal = str(observations["rating_summary"])
     if isinstance(observations.get("group_size_signal"), str):
         option.group_size_signal = str(observations["group_size_signal"])
+    if isinstance(observations.get("availability_signal"), str):
+        option.confidence_notes = _dedupe_notes(
+            [*option.confidence_notes, str(observations["availability_signal"])]
+        )
+    option.validation = validation
+
+
+def _apply_car_observations(option: Any, result: SourceResearchResult, *, run_id: str) -> None:
+    validation: SourceValidation = option.validation or SourceValidation()
+    validation.adapter_used = result.adapter_used.value
+    validation.research_run_id = run_id
+    validation.verified_at = result.ended_at
+    validation.evidence_url = result.request.source_url or validation.evidence_url
+    validation.evidence_artifacts = result.evidence_artifacts
+    validation.extracted_fields = {
+        observation.field: observation.value for observation in result.observations
+    }
+    validation.notes = _dedupe_notes(
+        [
+            *validation.notes,
+            *result.notes,
+            "Car source research extracts evidence only; final vehicle, transmission, fees, deposit, and insurance still need confirmation before booking.",
+        ]
+    )
+    validation.missing_fields = sorted(set(result.missing_fields))
+    validation.confidence = max(validation.confidence, result.confidence)
+    validation.price_status = (
+        PriceStatus.LIVE_SIGNAL
+        if "price_signal" in validation.extracted_fields
+        or "total_price" in validation.extracted_fields
+        else validation.price_status
+    )
+    validation.availability_status = (
+        AvailabilityStatus.AVAILABILITY_SIGNAL
+        if "availability_signal" in validation.extracted_fields
+        else validation.availability_status
+    )
+    if result.status == SourceResearchStatus.SUCCESS:
+        validation.verification_status = VerificationStatus.LIVE_VERIFIED
+        validation.freshness_status = FreshnessStatus.CURRENT
+        option.row_status = ShortlistRowStatus.VERIFIED_LIVE
+        option.live_data_status = LiveDataStatus.LIVE_VERIFIED
+    elif result.status == SourceResearchStatus.PARTIAL:
+        if result.adapter_used == SourceAdapterCapability.LINK:
+            validation.verification_status = VerificationStatus.MANUAL_REQUIRED
+            validation.freshness_status = FreshnessStatus.UNKNOWN
+            option.row_status = ShortlistRowStatus.RESEARCHED
+            option.live_data_status = LiveDataStatus.HANDOFF_REQUIRED
+        else:
+            validation.verification_status = VerificationStatus.PARTIAL
+            validation.freshness_status = FreshnessStatus.CURRENT
+            option.row_status = (
+                ShortlistRowStatus.VERIFIED_LIVE
+                if result.confidence >= 0.45
+                else ShortlistRowStatus.RESEARCHED
+            )
+            option.live_data_status = LiveDataStatus.PARTIAL
+    else:
+        validation.verification_status = VerificationStatus.FAILED
+        option.row_status = ShortlistRowStatus.RESEARCHED
+        option.live_data_status = LiveDataStatus.HANDOFF_REQUIRED
+
+    observations = validation.extracted_fields
+    price_signal = observations.get("total_price") or observations.get("price_signal")
+    if isinstance(price_signal, str) and price_signal:
+        option.current_price_signal = price_signal
+        option.price_band = price_signal
+    if isinstance(observations.get("vehicle_model_example"), str):
+        option.vehicle_class = (
+            f"{option.vehicle_class} ({observations['vehicle_model_example']})"
+            if observations["vehicle_model_example"] not in option.vehicle_class
+            else option.vehicle_class
+        )
+    if isinstance(observations.get("seats"), int):
+        option.seating_capacity = int(observations["seats"])
+    if isinstance(observations.get("cancellation_signal"), str):
+        option.cancellation_notes = str(observations["cancellation_signal"])
+    fees_parts: list[str] = []
+    if isinstance(observations.get("transmission_signal"), str):
+        fees_parts.append(f"transmission: {observations['transmission_signal']}")
+    if isinstance(observations.get("insurance_signal"), str):
+        fees_parts.append(f"insurance: {observations['insurance_signal']}")
+    if isinstance(observations.get("fees_signal"), str):
+        fees_parts.append(f"fees: {observations['fees_signal']}")
+    if fees_parts:
+        option.fees_caution = "; ".join([option.fees_caution, *fees_parts]).strip("; ")
+    if isinstance(observations.get("luggage_capacity"), str):
+        option.luggage_fit = (
+            f"{option.luggage_fit} | extracted luggage: {observations['luggage_capacity']}"
+        )
     if isinstance(observations.get("availability_signal"), str):
         option.confidence_notes = _dedupe_notes(
             [*option.confidence_notes, str(observations["availability_signal"])]
@@ -1404,6 +1651,84 @@ def _extract_activity_observations(
     return observations
 
 
+def _extract_car_observations(
+    text: str,
+    *,
+    request: SourceResearchRequest,
+    evidence_refs: list[str],
+) -> list[SourceObservation]:
+    cleaned = " ".join(text.split())
+    lower = cleaned.lower()
+    observations: list[SourceObservation] = []
+    price = _extract_price(cleaned)
+    if price:
+        observations.append(
+            _observation("total_price", price, 0.64, request, evidence_refs, "Visible car rental price text")
+        )
+    availability = _car_availability_signal(lower)
+    if availability:
+        observations.append(
+            _observation(
+                "availability_signal",
+                availability,
+                0.55,
+                request,
+                evidence_refs,
+                "Visible car rental booking/availability language",
+            )
+        )
+    transmission = _transmission_signal(lower)
+    if transmission:
+        observations.append(
+            _observation("transmission_signal", transmission, 0.62, request, evidence_refs)
+        )
+    seats = _seats_signal(cleaned)
+    if seats is not None:
+        observations.append(_observation("seats", seats, 0.58, request, evidence_refs))
+    luggage = _luggage_capacity_signal(cleaned)
+    if luggage:
+        observations.append(_observation("luggage_capacity", luggage, 0.50, request, evidence_refs))
+    model = _vehicle_model_signal(cleaned, request)
+    if model:
+        observations.append(_observation("vehicle_model_example", model, 0.56, request, evidence_refs))
+    cancellation = _cancellation_signal(lower)
+    if cancellation:
+        observations.append(
+            _observation("cancellation_signal", cancellation, 0.48, request, evidence_refs)
+        )
+    insurance = _insurance_signal(lower)
+    if insurance:
+        observations.append(_observation("insurance_signal", insurance, 0.45, request, evidence_refs))
+    fees = _car_fees_signal(lower)
+    if fees:
+        observations.append(_observation("fees_signal", fees, 0.48, request, evidence_refs))
+    pickup_date = _date_signal(cleaned, ["pick-up", "pickup", "collect", "collection"])
+    pickup_time = _time_signal(cleaned, ["pick-up", "pickup", "collect", "collection"])
+    if pickup_date or pickup_time:
+        observations.append(
+            _observation(
+                "pickup_datetime",
+                f"{pickup_date} {pickup_time}".strip(),
+                0.52,
+                request,
+                evidence_refs,
+            )
+        )
+    dropoff_date = _date_signal(cleaned, ["drop-off", "dropoff", "return", "drop off"])
+    dropoff_time = _time_signal(cleaned, ["drop-off", "dropoff", "return", "drop off"])
+    if dropoff_date or dropoff_time:
+        observations.append(
+            _observation(
+                "dropoff_datetime",
+                f"{dropoff_date} {dropoff_time}".strip(),
+                0.52,
+                request,
+                evidence_refs,
+            )
+        )
+    return observations
+
+
 def _flight_context_observations(
     request: SourceResearchRequest,
     *,
@@ -1579,6 +1904,96 @@ def _activity_availability_signal(lower: str) -> str:
         ]
     ):
         return "booking or availability signal visible; final inventory still needs source review"
+    return ""
+
+
+def _car_availability_signal(lower: str) -> str:
+    if any(term in lower for term in ["sold out", "not available", "unavailable", "no cars"]):
+        return "unavailable signal visible; choose another date or vehicle category"
+    if any(
+        term in lower
+        for term in ["reserve now", "book now", "available", "free cancellation", "select vehicle"]
+    ):
+        return "availability/booking signal visible; final inventory still needs source review"
+    return ""
+
+
+def _transmission_signal(lower: str) -> str:
+    if "automatic" in lower:
+        return "automatic transmission signal visible; verify exact vehicle model"
+    if "manual" in lower or "standard" in lower:
+        return "manual/standard transmission signal visible; confirm before booking if automatic is required"
+    return ""
+
+
+def _seats_signal(text: str) -> int | None:
+    match = re.search(
+        r"\b(\d)\s*(?:seat|passenger|pax|adult)s?\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        value = int(match.group(1))
+        if 2 <= value <= 9:
+            return value
+    return None
+
+
+def _luggage_capacity_signal(text: str) -> str:
+    match = re.search(
+        r"\b(\d+)\s*(?:large\s+)?(?:bag|suitcase|luggage|case)s?\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return f"{match.group(0).strip()} capacity signal visible; verify exact boot/trunk space"
+    if re.search(r"\b(?:large\s+suitcase|full\s+size\s+luggage|luggage\s+capacity)\b", text, flags=re.IGNORECASE):
+        return "luggage capacity language visible; verify exact number of bags"
+    return ""
+
+
+def _vehicle_model_signal(text: str, request: SourceResearchRequest) -> str:
+    context = request.context
+    vehicle_class = str(context.get("vehicle_class", "")).lower()
+    match = re.search(
+        r"\b(Toyota\s+\w+|Renault\s+\w+|Volkswagen\s+\w+|VW\s+\w+|Opel\s+\w+|Seat\s+\w+|Ford\s+\w+|Hyundai\s+\w+|Kia\s+\w+|Peugeot\s+\w+|Fiat\s+\w+|Skoda\s+\w+|BMW\s+\w+|Mercedes\s+\w+|Audi\s+\w+|Nissan\s+\w+|Suzuki\s+\w+)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        model = match.group(0).strip()
+        if not vehicle_class or vehicle_class.split()[0].lower() in model.lower():
+            return model
+        return model
+    return ""
+
+
+def _insurance_signal(lower: str) -> str:
+    if "collision damage waiver" in lower or "cdw" in lower:
+        return "CDW/collision damage waiver language visible; verify what is included and excluded"
+    if "theft protection" in lower or "tp" in lower:
+        return "theft protection language visible; verify coverage terms"
+    if "full insurance" in lower or "full protection" in lower:
+        return "full insurance/protection language visible; confirm what is covered"
+    if "excess" in lower and "insurance" in lower:
+        return "insurance excess language visible; verify deposit and excess reduction terms"
+    if "insurance" in lower:
+        return "insurance language visible; verify exact coverage, exclusions, and deposit"
+    return ""
+
+
+def _car_fees_signal(lower: str) -> str:
+    parts: list[str] = []
+    if "airport surcharge" in lower or "airport fee" in lower or "airport tax" in lower:
+        parts.append("airport surcharge/fee visible")
+    if "young driver" in lower or "additional driver" in lower:
+        parts.append("additional/young driver fee language visible")
+    if "fuel" in lower and ("policy" in lower or "charge" in lower or "prepaid" in lower):
+        parts.append("fuel policy language visible")
+    if "gps" in lower or "sat nav" in lower or "navigation" in lower:
+        parts.append("GPS/nav add-on language visible")
+    if parts:
+        return "; ".join(parts) + "; verify all fees in total before booking"
     return ""
 
 
@@ -1864,6 +2279,29 @@ def _remaining_activity_fields(observations: Iterable[SourceObservation]) -> lis
     return sorted(required)
 
 
+def _remaining_car_fields(observations: Iterable[SourceObservation]) -> list[str]:
+    found = {observation.field for observation in observations}
+    required = set(_car_missing_fields())
+    mapping = {
+        "total_price": "total_price",
+        "price_signal": "total_price",
+        "availability_signal": "exact_availability",
+        "seats": "exact_seats",
+        "luggage_capacity": "luggage_capacity",
+        "transmission_signal": "transmission",
+        "vehicle_model_example": "vehicle_model",
+        "cancellation_signal": "cancellation_terms",
+        "insurance_signal": "insurance_terms",
+        "fees_signal": "fees_breakdown",
+        "pickup_datetime": "pickup_datetime",
+        "dropoff_datetime": "dropoff_datetime",
+    }
+    for observation_field, missing_field in mapping.items():
+        if observation_field in found:
+            required.discard(missing_field)
+    return sorted(required)
+
+
 def _lodging_missing_fields() -> list[str]:
     return [
         "exact_availability",
@@ -1901,12 +2339,42 @@ def _activity_missing_fields() -> list[str]:
     ]
 
 
+def _car_missing_fields() -> list[str]:
+    return [
+        "total_price",
+        "exact_availability",
+        "exact_seats",
+        "luggage_capacity",
+        "transmission",
+        "vehicle_model",
+        "cancellation_terms",
+        "insurance_terms",
+        "fees_breakdown",
+        "pickup_datetime",
+        "dropoff_datetime",
+    ]
+
+
 def _missing_fields_for_category(category: str) -> list[str]:
     if category == ShortlistCategory.FLIGHTS.value:
         return _flight_missing_fields()
     if category == ShortlistCategory.ACTIVITIES.value:
         return _activity_missing_fields()
+    if category == ShortlistCategory.CARS.value:
+        return _car_missing_fields()
     return _lodging_missing_fields()
+
+
+def _remaining_fields_for_category(
+    category: str, observations: Iterable[SourceObservation]
+) -> list[str]:
+    if category == ShortlistCategory.FLIGHTS.value:
+        return _remaining_flight_fields(observations)
+    if category == ShortlistCategory.ACTIVITIES.value:
+        return _remaining_activity_fields(observations)
+    if category == ShortlistCategory.CARS.value:
+        return _remaining_car_fields(observations)
+    return _remaining_lodging_fields(observations)
 
 
 def _missing_high_value_fields(result: SourceResearchResult) -> bool:
@@ -1923,9 +2391,50 @@ def _missing_high_value_fields(result: SourceResearchResult) -> bool:
         )
     if result.request.category == ShortlistCategory.ACTIVITIES.value:
         return bool({"current_price", "exact_availability", "bookable_time"} & set(result.missing_fields))
+    if result.request.category == ShortlistCategory.CARS.value:
+        return bool(
+            {"total_price", "exact_seats", "transmission", "cancellation_terms"}
+            & set(result.missing_fields)
+        )
     return bool(
         {"final_total_price", "bed_layout", "min_three_beds_satisfied"} & set(result.missing_fields)
     )
+
+
+def _load_friction_context(
+    trip_id: str, category: ShortlistCategory
+) -> tuple[dict[ShortlistCategory, ResearchShortlistState], int | None]:
+    """Best-effort load of complementary state and party size for friction post-processing."""
+    complementary: dict[ShortlistCategory, ResearchShortlistState] = {}
+    party_size: int | None = None
+    try:
+        from trippy.services.shortlist_store import ShortlistStore
+
+        store = ShortlistStore()
+        for other in (
+            ShortlistCategory.FLIGHTS,
+            ShortlistCategory.LODGING,
+            ShortlistCategory.CARS,
+            ShortlistCategory.ACTIVITIES,
+        ):
+            if other == category:
+                continue
+            loaded = store.load(trip_id, other)
+            if loaded is not None:
+                complementary[other] = loaded
+    except Exception:
+        complementary = {}
+    try:
+        from trippy.services.trip_intake import TripIntakeService
+
+        intake = TripIntakeService().load(trip_id)
+        if intake is not None:
+            total = getattr(getattr(intake, "party", None), "total_travelers", None)
+            if isinstance(total, int) and total > 0:
+                party_size = total
+    except Exception:
+        party_size = None
+    return complementary, party_size
 
 
 def _flight_timing_flags(option: Any) -> list[str]:
@@ -2010,33 +2519,69 @@ def _dedupe_notes(notes: list[str]) -> list[str]:
     return deduped
 
 
+_OPENCLAW_FIELDS_BY_CATEGORY: dict[str, tuple[str, str]] = {
+    ShortlistCategory.FLIGHTS.value: (
+        "flight research",
+        "airline, flight_numbers, departure_airport, arrival_airport, departure_date, "
+        "departure_time, arrival_date, arrival_time, stops, layover_airports, "
+        "layover_duration, total_duration, price_signal, availability_signal, "
+        "cabin_signal, baggage_signal, source_url, booking_handoff_url, freshness_caveat",
+    ),
+    ShortlistCategory.LODGING.value: (
+        "lodging research",
+        "property_name, location_signal, check_in_date, check_out_date, "
+        "occupancy_supported, bed_layout_signal, min_three_beds_satisfied, "
+        "king_bed_preference_satisfied, room_count, total_price, nightly_price, "
+        "price_signal, availability_signal, cancellation_signal, review_score, "
+        "review_count, parking_signal, family_fit_signal, source_url, booking_handoff_url",
+    ),
+    ShortlistCategory.CARS.value: (
+        "rental car research",
+        "provider, pickup_location, dropoff_location, pickup_datetime, "
+        "dropoff_datetime, vehicle_class, vehicle_model_example, seats, "
+        "luggage_capacity, transmission_signal, total_price, price_signal, "
+        "availability_signal, insurance_signal, fees_signal, cancellation_signal, "
+        "source_url, booking_handoff_url",
+    ),
+    ShortlistCategory.ACTIVITIES.value: (
+        "activity research",
+        "activity_name, operator, date_signal, start_time, end_time, "
+        "duration_signal, location_signal, group_size_signal, age_signal, "
+        "fitness_signal, cancellation_signal, price_signal, availability_signal, "
+        "review_score, review_count, source_url, booking_handoff_url",
+    ),
+}
+
+
 def _openclaw_prompt(request: SourceResearchRequest) -> str:
-    if request.category == ShortlistCategory.FLIGHTS.value:
-        useful_fields = (
-            "airline, flight_numbers, departure_date, departure_time, arrival_date, arrival_time, "
-            "total_duration, stops, layover_airports, layover_duration, price_signal, availability_signal, "
-            "cabin_signal, baggage_signal"
-        )
-        category_note = "flight research"
-    elif request.category == ShortlistCategory.ACTIVITIES.value:
-        useful_fields = (
-            "price_signal, availability_signal, start_time, end_time, duration_signal, "
-            "cancellation_signal, group_size_signal, rating_summary"
-        )
-        category_note = "activity research"
-    else:
-        useful_fields = (
-            "price_signal, availability_signal, bed_layout_signal, "
-            "min_three_beds_satisfied, king_bed_preference_satisfied, parking_signal, "
-            "cancellation_signal, location_signal"
-        )
-        category_note = "lodging research"
+    category_note, useful_fields = _OPENCLAW_FIELDS_BY_CATEGORY.get(
+        request.category,
+        _OPENCLAW_FIELDS_BY_CATEGORY[ShortlistCategory.LODGING.value],
+    )
+    schema = (
+        '{"observations":[{"field":"...","value":"...","confidence":0.0,'
+        '"source_url":"...","notes":["..."]}],'
+        '"ready_to_click":"yes|no|partial","ready_to_click_reason":"...",'
+        '"missing_fields":["..."],"warnings":["..."],"notes":["..."]}'
+    )
     return (
         f"You are helping Trippy perform read-only {category_note}. "
-        "Do not log in, do not book, do not add anything to cart, and do not take payment actions. "
-        "Open or inspect this source and return ONLY valid JSON with an observations array. "
-        "Each observation must include field, value, confidence, and notes. "
-        f"Useful fields: {useful_fields}. "
+        "HARD RULES: search and read only. Do NOT log in, do NOT submit forms, "
+        "do NOT click 'book' or 'reserve' or 'pay', do NOT add to cart, do NOT start "
+        "checkout, do NOT take payment actions, do NOT accept cookies that require account login. "
+        "If a step would require any of the above, stop and report what is missing. "
+        "Return ONLY valid JSON (no prose, no markdown). "
+        f"Use this exact shape: {schema}. "
+        "Each observation field must be one of the requested fields below; "
+        "value is the literal extracted text or structured value; confidence is 0.0-1.0 "
+        "based on how directly the page evidences the value; notes is a short list. "
+        "Set ready_to_click to 'yes' only if every fact a buyer needs is on the page right now; "
+        "use 'partial' if key facts are present but freshness/price/availability are not pinned; "
+        "use 'no' if a click would still leave the buyer guessing. "
+        "ready_to_click_reason must explain in one sentence what is or is not pinned. "
+        "missing_fields lists requested fields that the page does not directly evidence. "
+        "warnings lists any login walls, paywalls, dynamic-pricing notices, or freshness gaps. "
+        f"Requested fields: {useful_fields}. "
         f"Source URL: {request.source_url}. Candidate: {request.candidate_name}. "
         f"Context: {json.dumps(request.context, sort_keys=True)[:3000]}"
     )
@@ -2056,49 +2601,91 @@ def _parse_openclaw_observations(
     for raw in raw_observations:
         if not isinstance(raw, dict) or "field" not in raw:
             continue
+        try:
+            confidence = float(raw.get("confidence", 0.45) or 0.45)
+        except (TypeError, ValueError):
+            confidence = 0.45
         observations.append(
             SourceObservation(
                 field=str(raw.get("field", "")),
                 value=raw.get("value"),
-                confidence=float(raw.get("confidence", 0.45) or 0.45),
-                source_url=request.source_url,
+                confidence=max(0.0, min(1.0, confidence)),
+                source_url=str(raw.get("source_url") or request.source_url),
                 notes=_raw_notes(raw.get("notes")),
             )
         )
-    notes = (
-        [str(note) for note in payload.get("notes", [])]
-        if isinstance(payload.get("notes"), list)
-        else []
-    )
+    notes: list[str] = []
+    raw_notes = payload.get("notes")
+    if isinstance(raw_notes, list):
+        notes.extend(str(note) for note in raw_notes if note)
+    ready = payload.get("ready_to_click")
+    reason = payload.get("ready_to_click_reason")
+    if isinstance(ready, str) and ready.strip():
+        ready_note = f"OpenClaw ready_to_click={ready.strip().lower()}"
+        if isinstance(reason, str) and reason.strip():
+            ready_note += f": {reason.strip()}"
+        notes.append(ready_note)
+    raw_warnings = payload.get("warnings")
+    if isinstance(raw_warnings, list):
+        for warning in raw_warnings:
+            if warning:
+                notes.append(f"OpenClaw warning: {warning}")
+    raw_missing = payload.get("missing_fields")
+    if isinstance(raw_missing, list) and raw_missing:
+        joined = ", ".join(str(field) for field in raw_missing if field)
+        if joined:
+            notes.append(f"OpenClaw reported missing fields: {joined}")
     return observations, notes
 
 
 def _raw_notes(value: object) -> list[str]:
     if isinstance(value, list):
-        return [str(note) for note in value]
+        return [str(note) for note in value if note]
     if value:
         return [str(value)]
     return []
 
 
+_MARKDOWN_FENCE_RE = re.compile(
+    r"```(?:json|JSON)?\s*\n(.*?)\n\s*```", re.DOTALL
+)
+
+
+def _strip_markdown_fences(text: str) -> str:
+    match = _MARKDOWN_FENCE_RE.search(text)
+    if match:
+        return match.group(1).strip()
+    return text
+
+
 def _extract_json_payload(text: str) -> dict[str, Any] | None:
-    try:
-        loaded = json.loads(text)
-    except json.JSONDecodeError:
-        loaded = None
-    if isinstance(loaded, dict):
-        nested = loaded.get("text") or loaded.get("message") or loaded.get("reply")
-        if isinstance(nested, str):
-            nested_payload = _extract_json_payload(nested)
-            if nested_payload is not None:
-                return nested_payload
-        return loaded
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
+    if not text or not text.strip():
         return None
-    try:
-        candidate = json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-    return candidate if isinstance(candidate, dict) else None
+    candidates: list[str] = [text]
+    fenced = _strip_markdown_fences(text)
+    if fenced != text:
+        candidates.append(fenced)
+    for candidate_text in candidates:
+        try:
+            loaded = json.loads(candidate_text)
+        except json.JSONDecodeError:
+            loaded = None
+        if isinstance(loaded, dict):
+            nested = loaded.get("text") or loaded.get("message") or loaded.get("reply")
+            if isinstance(nested, str):
+                nested_payload = _extract_json_payload(nested)
+                if nested_payload is not None:
+                    return nested_payload
+            return loaded
+    for candidate_text in candidates:
+        start = candidate_text.find("{")
+        end = candidate_text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            continue
+        try:
+            candidate = json.loads(candidate_text[start : end + 1])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            return candidate
+    return None
