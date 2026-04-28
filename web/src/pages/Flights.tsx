@@ -1,18 +1,27 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { StageNav } from "@/components/StageNav";
 import { ShortlistHero } from "@/components/ShortlistHero";
 import { EmptyShortlist } from "@/components/EmptyShortlist";
-import { FrictionFlags, GradeBadge } from "@/components/FrictionFlags";
 import { Button } from "@/components/ui/button";
 import {
-  Loader2, Plane, Check, ExternalLink, ArrowRight, Plus, RefreshCcw,
-  AlertCircle, Clock,
+  Loader2, Check, ExternalLink, ArrowRight, Plus, RefreshCcw,
+  AlertCircle, AlertTriangle, Plane,
 } from "lucide-react";
-import { api, type FlightOption } from "@/lib/api";
+import { api, type FlightOption, type TripIntake } from "@/lib/api";
 import { buildStages, shortlistOptions } from "@/lib/stages";
+import {
+  Chip,
+  LiveProvidersBanner,
+  RowHeaderStrip,
+  deriveLiveBanner,
+  deriveLivePill,
+  deriveRowLabel,
+} from "@/components/ShortlistRow";
+
+type SortKey = "best" | "price" | "duration";
 
 const Flights = () => {
   const { tripId } = useParams<{ tripId: string }>();
@@ -21,6 +30,8 @@ const Flights = () => {
   const [showAddCandidate, setShowAddCandidate] = useState(false);
   const [candidateLink, setCandidateLink] = useState("");
   const [candidateName, setCandidateName] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("best");
+  const [openWhyId, setOpenWhyId] = useState<string | null>(null);
 
   const tripQuery = useQuery({
     queryKey: ["trip", tripId],
@@ -30,7 +41,11 @@ const Flights = () => {
   });
 
   const buildMutation = useMutation({
-    mutationFn: () => api.buildShortlist(tripId!, "flights"),
+    mutationFn: () =>
+      api.buildShortlist(tripId!, "flights", {
+        validate_live: true,
+        deep_research: true,
+      }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["trip", tripId] }),
   });
 
@@ -60,8 +75,14 @@ const Flights = () => {
   const stages = buildStages(trip, "flights");
   const recommendedId = shortlist?.recommended_option_id;
   const flagCount = options.reduce((sum, o) => sum + o.friction_flags.length, 0);
-
   const hasSelection = options.some((o) => o.row_status === "approved");
+
+  const sorted = useMemo(() => sortOptions(options, sortKey), [options, sortKey]);
+
+  const liveBanner = useMemo(
+    () => deriveLiveBanner(shortlist?.warnings ?? [], options, "flights"),
+    [shortlist?.warnings, options],
+  );
 
   return (
     <AppShell>
@@ -76,7 +97,7 @@ const Flights = () => {
       </div>
 
       <div className="px-6 md:px-10 py-8">
-        <div className="flex items-end justify-between flex-wrap gap-3 mb-6">
+        <div className="flex items-end justify-between flex-wrap gap-3 mb-4">
           <div>
             <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">
               Stage 3 · Flights
@@ -84,9 +105,6 @@ const Flights = () => {
             <h2 className="font-[Fredoka] text-3xl md:text-4xl font-bold mt-1">
               Pick your flights.
             </h2>
-            {shortlist?.recommendation_summary && (
-              <p className="text-muted-foreground mt-1 max-w-2xl">{shortlist.recommendation_summary}</p>
-            )}
           </div>
           {options.length > 0 && (
             <div className="flex gap-2">
@@ -111,6 +129,8 @@ const Flights = () => {
             </div>
           )}
         </div>
+
+        <LiveProvidersBanner banner={liveBanner} />
 
         {tripQuery.isLoading && (
           <div className="flex items-center justify-center py-24 text-muted-foreground gap-3">
@@ -177,17 +197,42 @@ const Flights = () => {
           </div>
         )}
 
-        {/* Options grid */}
+        {/* Filter / sort strip */}
         {options.length > 0 && (
-          <div className="grid lg:grid-cols-2 gap-5">
-            {options.map((o) => (
-              <FlightCard
+          <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+            <div className="flex flex-wrap gap-2">
+              <Chip>✦ Preference applied: comfort &gt; schedule &gt; price</Chip>
+              <Chip>{partyChip(trip?.intake)}</Chip>
+              <Chip>{originChip(options)}</Chip>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Sort:</span>
+              <select
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value as SortKey)}
+                className="h-9 rounded-xl border-2 border-foreground/15 bg-card px-3 font-bold text-sm focus:outline-none focus:border-foreground/40"
+              >
+                <option value="best">Best overall</option>
+                <option value="price">Price</option>
+                <option value="duration">Duration</option>
+              </select>
+            </div>
+          </div>
+        )}
+
+        {/* Rows */}
+        {sorted.length > 0 && (
+          <div className="flex flex-col gap-4">
+            {sorted.map((o) => (
+              <FlightRow
                 key={o.option_id}
                 option={o}
                 isRecommended={o.option_id === recommendedId}
                 isSelected={o.row_status === "approved"}
                 onSelect={() => selectMutation.mutate(o.option_id)}
                 isSelecting={selectMutation.isPending}
+                whyOpen={openWhyId === o.option_id}
+                onToggleWhy={() => setOpenWhyId(openWhyId === o.option_id ? null : o.option_id)}
               />
             ))}
           </div>
@@ -204,179 +249,304 @@ const Flights = () => {
             </Button>
           </div>
         )}
-
-        {/* Warnings */}
-        {shortlist && shortlist.warnings.length > 0 && (
-          <div className="mt-6 rounded-3xl border-2 border-coral/30 bg-coral/5 p-5">
-            <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
-              Friction warnings
-            </div>
-            <ul className="space-y-1 text-sm">
-              {shortlist.warnings.map((w) => (
-                <li key={w}>· {w}</li>
-              ))}
-            </ul>
-          </div>
-        )}
       </div>
     </AppShell>
   );
 };
 
-function FlightCard({
+function partyChip(intake: TripIntake | undefined): string {
+  if (!intake) return "Party · checked bags";
+  const total = intake.travelers || (intake.party.adults + intake.party.children);
+  return `Party of ${total} · checked bags`;
+}
+
+function originChip(options: FlightOption[]): string {
+  const origin = options[0]?.departure_airport || "origin";
+  return `${origin} origin locked`;
+}
+
+function sortOptions(options: FlightOption[], key: SortKey): FlightOption[] {
+  const arr = [...options];
+  if (key === "price") {
+    arr.sort((a, b) => priceAmount(a) - priceAmount(b));
+  } else if (key === "duration") {
+    arr.sort((a, b) => durationHours(a.total_travel_duration) - durationHours(b.total_travel_duration));
+  } else {
+    arr.sort((a, b) => a.rank - b.rank);
+  }
+  return arr;
+}
+
+function priceAmount(o: FlightOption): number {
+  const m = (o.fare_estimate_cad || o.price_band || "").match(/([\d][\d,]*(?:\.\d{2})?)/);
+  return m ? parseFloat(m[1].replace(/,/g, "")) : Number.POSITIVE_INFINITY;
+}
+
+function durationHours(value: string): number {
+  const m = (value || "").match(/(\d+(?:\.\d+)?)\s*h(?:ours?)?\s*(?:(\d+)\s*m)?/i);
+  if (!m) return Number.POSITIVE_INFINITY;
+  return parseFloat(m[1]) + (parseFloat(m[2] || "0") || 0) / 60;
+}
+
+function FlightRow({
   option,
   isRecommended,
   isSelected,
   onSelect,
   isSelecting,
+  whyOpen,
+  onToggleWhy,
 }: {
   option: FlightOption;
   isRecommended: boolean;
   isSelected: boolean;
   onSelect: () => void;
   isSelecting: boolean;
+  whyOpen: boolean;
+  onToggleWhy: () => void;
 }) {
+  const label = deriveRowLabel(option.recommendation_label, isRecommended, option.recommendation_grade);
+  const pill = deriveLivePill(option);
+  const stopText =
+    option.stops === 0
+      ? "Nonstop"
+      : `${option.stops} stop${option.stops > 1 ? "s" : ""}${option.layover_airports.length ? ` (${option.layover_airports.join(", ")})` : ""}`;
+  const fare = option.fare_estimate_cad || option.price_band;
+  const band = option.price_band && option.price_band !== fare ? option.price_band : null;
+  const pros = derivePros(option);
+  const cons = option.friction_flags;
+
   return (
     <article
-      className={`rounded-3xl border-2 bg-card overflow-hidden transition-bounce flex flex-col ${
+      className={`rounded-3xl border-2 bg-card overflow-hidden transition-bounce ${
         isSelected
-          ? "border-foreground shadow-sticker -translate-y-1"
+          ? "border-foreground shadow-sticker"
           : "border-foreground/10 shadow-card hover:-translate-y-0.5"
       }`}
     >
-      <div className="px-5 pt-5 flex items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <Plane className="h-5 w-5 text-secondary" />
-            <span className="font-[Fredoka] text-xl font-bold">{option.airline}</span>
-            <span className="text-sm text-muted-foreground font-mono">
-              {option.flight_numbers.join(" / ")}
-            </span>
-          </div>
-          <div className="text-sm font-semibold mt-1 text-foreground/80">
-            {option.departure_airport} → {option.arrival_airport}
-            {option.stops > 0 && (
-              <span className="text-muted-foreground">
-                {" "}· {option.stops} stop{option.stops !== 1 ? "s" : ""}
-                {option.layover_airports.length > 0 && ` (${option.layover_airports.join(", ")})`}
+      <RowHeaderStrip
+        label={label}
+        pill={pill}
+        left={
+          <>
+            <Plane className="h-4 w-4 text-foreground/60" />
+            <span className="font-bold truncate">{option.airline}</span>
+            {option.flight_numbers.length > 0 && (
+              <span className="text-xs text-muted-foreground font-mono ml-1 truncate">
+                {option.flight_numbers.join(" → ")}
               </span>
             )}
-          </div>
+          </>
+        }
+      />
+
+      {/* Body */}
+      <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_minmax(220px,_auto)] gap-5 px-5 py-5">
+        {/* Departure */}
+        <TimeBlock
+          time={option.departure_time}
+          subline={`${option.departure_date || ""} · ${option.departure_airport}`.trim()}
+        />
+        {/* Arrival + route timeline below */}
+        <div>
+          <TimeBlock
+            time={option.arrival_time}
+            subline={`${option.arrival_date || ""} · ${option.arrival_airport}`.trim()}
+          />
         </div>
-        <div className="flex flex-col items-end gap-1.5 shrink-0">
-          <GradeBadge grade={option.recommendation_grade} />
-          {isRecommended && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-foreground text-background text-[10px] font-bold uppercase tracking-wider">
-              Hermes' pick
+        {/* Price */}
+        <div className="md:text-right">
+          <div className="font-[Fredoka] text-3xl font-bold leading-none">
+            {fare || "—"}{" "}
+            <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+              per person
             </span>
+          </div>
+          {band && (
+            <div className="text-xs text-muted-foreground mt-1.5 font-mono uppercase tracking-wider">
+              Band {band}
+            </div>
           )}
         </div>
       </div>
 
-      <div className="px-5 pt-3 grid grid-cols-2 gap-3 text-sm">
-        <div className="flex items-center gap-2">
-          <Clock className="h-4 w-4 text-muted-foreground" />
-          <div>
-            <div className="font-bold tabular-nums">{option.departure_time || "—"}</div>
-            <div className="text-xs text-muted-foreground">{option.departure_date}</div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Clock className="h-4 w-4 text-muted-foreground" />
-          <div>
-            <div className="font-bold tabular-nums">{option.arrival_time || "—"}</div>
-            <div className="text-xs text-muted-foreground">{option.arrival_date}</div>
-          </div>
+      {/* Route timeline + stop info */}
+      <div className="px-5 pb-3">
+        <RouteTimeline
+          origin={option.departure_airport}
+          destination={option.arrival_airport}
+          layovers={option.layover_airports}
+        />
+        <div className="text-xs font-bold text-muted-foreground mt-2">
+          {option.total_travel_duration || "duration unknown"} · {stopText}
         </div>
       </div>
 
-      <div className="px-5 pt-3 flex flex-wrap gap-1.5 text-xs">
-        <span className="px-2 py-0.5 rounded-full bg-muted border border-foreground/10 font-bold">
-          {option.total_travel_duration || "duration unknown"}
-        </span>
-        <span className="px-2 py-0.5 rounded-full bg-sunshine/30 border border-foreground/10 font-bold">
-          {option.fare_estimate_cad || option.price_band}
-        </span>
-        {option.timing_fit && (
-          <span className="px-2 py-0.5 rounded-full bg-card border border-foreground/15 font-medium">
-            {option.timing_fit}
-          </span>
-        )}
-      </div>
-
-      {option.recommendation_rationale && (
-        <p className="px-5 pt-3 text-sm text-foreground/85 leading-snug">
-          {option.recommendation_rationale}
-        </p>
-      )}
-
-      <div className="px-5 pt-3 grid grid-cols-2 gap-3">
-        <ScoreBar label="Comfort" value={option.family_comfort_score} color="hsl(18 95% 55%)" />
-        <ScoreBar label="Friction" value={option.friction_score} color="hsl(0 70% 60%)" inverted />
-      </div>
-
-      {option.tradeoffs.length > 0 && (
-        <ul className="px-5 pt-3 space-y-1">
-          {option.tradeoffs.slice(0, 3).map((t) => (
-            <li key={t} className="text-xs text-foreground/75 leading-snug">· {t}</li>
+      {/* Pros / cons */}
+      <div className="px-5 pb-4 grid md:grid-cols-2 gap-4">
+        <ul className="space-y-1.5 text-sm">
+          {pros.slice(0, 3).map((p) => (
+            <li key={p} className="flex items-start gap-2">
+              <Check className="h-4 w-4 text-palm shrink-0 mt-0.5" />
+              <span className="text-foreground/85">{p}</span>
+            </li>
           ))}
         </ul>
-      )}
-
-      {option.friction_flags.length > 0 && (
-        <div className="px-5 pt-3">
-          <FrictionFlags flags={option.friction_flags} />
-        </div>
-      )}
-
-      <div className="mt-auto p-5 pt-4 flex items-center gap-2 border-t-2 border-foreground/10 mt-4">
-        {option.deep_link && (
-          <a
-            href={option.deep_link}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline"
-          >
-            <ExternalLink className="h-3 w-3" /> {option.booking_source || "open"}
-          </a>
+        {cons.length > 0 && (
+          <div className="rounded-xl border border-coral/40 bg-coral/5 px-3 py-2 space-y-1">
+            {cons.slice(0, 3).map((f) => (
+              <div key={f} className="flex items-start gap-2 text-xs text-foreground/80">
+                <AlertTriangle className="h-3.5 w-3.5 text-coral shrink-0 mt-0.5" />
+                <span>{f}</span>
+              </div>
+            ))}
+          </div>
         )}
+      </div>
+
+      {/* Action bar */}
+      <div className="px-5 py-3 border-t-2 border-foreground/10 flex items-center gap-3 flex-wrap">
         <Button
           onClick={onSelect}
           disabled={isSelecting}
-          className={`ml-auto h-10 rounded-xl font-bold border-2 px-5 ${
+          className={`h-10 rounded-xl font-bold border-2 px-5 ${
             isSelected
-              ? "bg-palm text-primary-foreground border-foreground shadow-card hover:bg-palm/90"
+              ? "bg-primary text-primary-foreground border-foreground shadow-card"
               : "bg-card text-foreground border-foreground/20 hover:border-foreground/50"
           }`}
         >
           {isSelecting ? (
             <Loader2 className="h-4 w-4 animate-spin" />
           ) : isSelected ? (
-            <><Check className="h-4 w-4" /> Selected</>
+            <><Check className="h-4 w-4" /> Using this flight</>
           ) : (
-            "Select"
+            "Use this flight"
           )}
         </Button>
+        {option.deep_link && (
+          <a
+            href={option.deep_link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-sm font-bold text-foreground/80 hover:text-foreground"
+          >
+            <ArrowRight className="h-4 w-4" /> Open search
+          </a>
+        )}
+        {option.deep_link && (
+          <a
+            href={option.deep_link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
+          >
+            <ExternalLink className="h-3.5 w-3.5" /> Book / confirm
+          </a>
+        )}
+        <button
+          type="button"
+          onClick={onToggleWhy}
+          className="ml-auto text-sm font-medium text-muted-foreground hover:text-foreground"
+        >
+          {whyOpen ? "Hide details" : "Why not this?"}
+        </button>
       </div>
+
+      {whyOpen && (
+        <div className="px-5 pb-5 pt-1 text-sm text-foreground/80 space-y-2 border-t border-foreground/10">
+          {option.recommendation_rationale && (
+            <p className="leading-snug">{option.recommendation_rationale}</p>
+          )}
+          {option.tradeoffs.length > 0 && (
+            <ul className="space-y-1">
+              {option.tradeoffs.map((t) => (
+                <li key={t} className="text-xs">· {t}</li>
+              ))}
+            </ul>
+          )}
+          <div className="flex flex-wrap gap-3 text-xs text-muted-foreground pt-1">
+            <span>Comfort {option.family_comfort_score}</span>
+            <span>Friction {option.friction_score}</span>
+            {option.validation?.adapter_used && (
+              <span>Source: {option.validation.adapter_used}</span>
+            )}
+            {option.validation?.confidence !== undefined && (
+              <span>Confidence {Math.round((option.validation.confidence ?? 0) * 100)}%</span>
+            )}
+          </div>
+        </div>
+      )}
     </article>
   );
 }
 
-function ScoreBar({
-  label, value, color, inverted = false,
-}: { label: string; value: number; color: string; inverted?: boolean }) {
-  const display = inverted ? `${value}` : `${value}`;
+function TimeBlock({ time, subline }: { time: string; subline: string }) {
   return (
     <div>
-      <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">
-        <span>{label}</span>
-        <span className="text-foreground">{display}</span>
+      <div className="font-[Fredoka] text-3xl md:text-4xl font-bold leading-none tabular-nums">
+        {time || "—"}
       </div>
-      <div className="h-2 rounded-full bg-muted border border-foreground/10 overflow-hidden">
-        <div className="h-full rounded-full" style={{ width: `${value}%`, background: color }} />
+      <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mt-1.5">
+        {subline}
       </div>
     </div>
   );
+}
+
+function RouteTimeline({
+  origin,
+  destination,
+  layovers,
+}: {
+  origin: string;
+  destination: string;
+  layovers: string[];
+}) {
+  const stops = layovers.length;
+  return (
+    <div className="relative h-6">
+      <div className="absolute left-2 right-2 top-1/2 -translate-y-1/2 h-[2px] bg-foreground/30 rounded-full" />
+      <div className="absolute left-0 top-1/2 -translate-y-1/2 h-3 w-3 rounded-full bg-foreground border-2 border-foreground" />
+      <div className="absolute right-0 top-1/2 -translate-y-1/2 h-3 w-3 rounded-full bg-foreground border-2 border-foreground" />
+      {stops > 0 &&
+        layovers.map((code, idx) => {
+          const pct = ((idx + 1) / (stops + 1)) * 100;
+          return (
+            <div
+              key={`${code}-${idx}`}
+              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 flex flex-col items-center"
+              style={{ left: `${pct}%` }}
+            >
+              <span className="text-[10px] font-bold text-foreground/70 -translate-y-3 absolute">
+                {code}
+              </span>
+              <div className="h-3 w-3 rounded-full bg-coral border-2 border-foreground" />
+            </div>
+          );
+        })}
+      <span className="absolute -bottom-4 left-0 text-[10px] font-bold text-muted-foreground">
+        {origin}
+      </span>
+      <span className="absolute -bottom-4 right-0 text-[10px] font-bold text-muted-foreground">
+        {destination}
+      </span>
+    </div>
+  );
+}
+
+function derivePros(option: FlightOption): string[] {
+  const pros: string[] = [];
+  if (option.stops === 0) pros.push("Nonstop — protects the first day and avoids layover risk");
+  if (option.recommendation_rationale) {
+    const first = option.recommendation_rationale.split(". ").slice(0, 1)[0];
+    if (first && !pros.some((p) => p.includes(first))) pros.push(first.replace(/\.$/, ""));
+  }
+  if (option.timing_fit) pros.push(option.timing_fit);
+  for (const t of option.tradeoffs) {
+    if (pros.length >= 3) break;
+    if (!pros.includes(t)) pros.push(t);
+  }
+  return pros;
 }
 
 export default Flights;

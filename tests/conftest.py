@@ -24,6 +24,20 @@ from trippy.db.models import (
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def _disable_live_apis(monkeypatch):  # type: ignore[no-untyped-def]
+    """Keep tests offline by clearing live-data API keys regardless of .env state."""
+    from trippy import config as trippy_config
+
+    monkeypatch.setenv("SERPAPI_KEY", "")
+    monkeypatch.setenv("DUFFEL_ACCESS_TOKEN", "")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "")
+    monkeypatch.setattr(trippy_config, "SERPAPI_KEY", "", raising=False)
+    monkeypatch.setattr(trippy_config, "DUFFEL_ACCESS_TOKEN", "", raising=False)
+    monkeypatch.setattr(trippy_config, "FIRECRAWL_API_KEY", "", raising=False)
+    yield
+
+
 @pytest.fixture
 def engine():  # type: ignore[no-untyped-def]
     """In-memory SQLite engine with all tables created."""

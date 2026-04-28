@@ -27,6 +27,8 @@ from trippy.models.shortlists import (
 )
 from trippy.models.sources import TravelSourceCategory
 from trippy.services.destination_profiles import profile_for_intake
+from trippy.services import serpapi_client
+from trippy.services.serpapi_options import flight_options_from_serpapi
 from trippy.services.live_validation import LiveValidationService
 from trippy.services.shortlist_store import (
     ShortlistContext,
@@ -69,6 +71,11 @@ class FlightShortlistService:
         profile = profile_for_intake(ctx.intake)
         gateway = profile.gateway_airports[0] if profile.gateway_airports else "destination"
         live_options, live_notes = _duffel_live_options(ctx, gateway)
+        if not live_options:
+            serp_options, serp_notes = _serpapi_live_flights(ctx, gateway)
+            live_notes = [*live_notes, *serp_notes]
+            if serp_options:
+                live_options = serp_options
         options = live_options or _azores_options(ctx, gateway)
         state = ResearchShortlistState(
             trip_id=trip_id,
@@ -1423,3 +1430,36 @@ def _timing_fit(arrival: str, departure: str) -> str:
     if arrival.lower().endswith("pm"):
         return "Check whether arrival aligns with car pickup, lodging check-in, and first-night access."
     return "Timing supplied by user; validate against source before treating as exact."
+
+
+def _serpapi_live_flights(
+    ctx: ShortlistContext,
+    gateway: str,
+) -> tuple[list[FlightOption], list[str]]:
+    if not serpapi_client.is_configured():
+        return [], ["SERPAPI_KEY is not configured, so SerpAPI flight fallback is unavailable."]
+    origin = _iata_or_text(ctx.intake.departure_airports[0] if ctx.intake.departure_airports else "YYZ")
+    destination = _iata_or_text(gateway)
+    if not _looks_like_iata(origin) or not _looks_like_iata(destination):
+        return [], [
+            f"SerpAPI flight search skipped because route codes are not IATA: {origin} to {destination}."
+        ]
+    departure_date, return_date = _flight_dates(ctx)
+    offers, notes = serpapi_client.search_flights(
+        origin=origin,
+        destination=destination,
+        departure_date=departure_date,
+        return_date=return_date,
+        adults=max(1, ctx.intake.party.adults or 1),
+        children=max(0, ctx.intake.party.children or 0),
+    )
+    if not offers:
+        return [], notes
+    deep_link = _flight_source_url("Google Flights", origin, destination, ctx)
+    options = flight_options_from_serpapi(
+        offers,
+        origin=origin,
+        destination=destination,
+        deep_link=deep_link,
+    )
+    return options, notes

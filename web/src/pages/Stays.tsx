@@ -1,21 +1,28 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { StageNav } from "@/components/StageNav";
 import { ShortlistHero } from "@/components/ShortlistHero";
 import { EmptyShortlist } from "@/components/EmptyShortlist";
-import { FrictionFlags, GradeBadge } from "@/components/FrictionFlags";
 import { Button } from "@/components/ui/button";
 import {
   Loader2, Hotel, Check, ExternalLink, ArrowRight, Plus, RefreshCcw,
-  AlertCircle, MapPin, Bed,
+  AlertCircle, AlertTriangle, MapPin, Bed,
 } from "lucide-react";
-import { api, type LodgingOption } from "@/lib/api";
+import { api, type LodgingOption, type TripIntake } from "@/lib/api";
 import { buildStages, shortlistOptions } from "@/lib/stages";
 import { TripMap } from "@/components/TripMap";
 import { useGeocodes } from "@/lib/geocode";
 import { buildLodgingPins, makeGeocodeLookup } from "@/lib/pinBuilders";
+import {
+  Chip,
+  LiveProvidersBanner,
+  RowHeaderStrip,
+  deriveLiveBanner,
+  deriveLivePill,
+  deriveRowLabel,
+} from "@/components/ShortlistRow";
 
 const GROUP_COLORS = [
   "hsl(18 95% 55%)",
@@ -25,6 +32,8 @@ const GROUP_COLORS = [
   "hsl(45 100% 60%)",
 ];
 
+type SortKey = "best" | "price" | "comfort";
+
 const Stays = () => {
   const { tripId } = useParams<{ tripId: string }>();
   const navigate = useNavigate();
@@ -32,6 +41,8 @@ const Stays = () => {
   const [showAdd, setShowAdd] = useState(false);
   const [link, setLink] = useState("");
   const [name, setName] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("best");
+  const [openWhyId, setOpenWhyId] = useState<string | null>(null);
 
   const tripQuery = useQuery({
     queryKey: ["trip", tripId],
@@ -41,7 +52,7 @@ const Stays = () => {
   });
 
   const buildMutation = useMutation({
-    mutationFn: () => api.buildShortlist(tripId!, "lodging"),
+    mutationFn: () => api.buildShortlist(tripId!, "lodging", { validate_live: true, deep_research: true }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["trip", tripId] }),
   });
 
@@ -67,6 +78,12 @@ const Stays = () => {
   const recommendedId = shortlist?.recommended_option_id;
   const flagCount = options.reduce((s, o) => s + o.friction_flags.length, 0);
   const hasSelection = options.some((o) => o.row_status === "approved");
+
+  const sorted = useMemo(() => sortLodging(options, sortKey), [options, sortKey]);
+  const banner = useMemo(
+    () => deriveLiveBanner(shortlist?.warnings ?? [], options, "lodging"),
+    [shortlist?.warnings, options],
+  );
 
   const lodgingQueries = options.map((o) =>
     [o.location_area, o.island_or_region].filter(Boolean).join(", ")
@@ -94,28 +111,18 @@ const Stays = () => {
 
   return (
     <AppShell>
-      <ShortlistHero
-        intake={trip?.intake}
-        stageLabel="Stays"
-        stageNumber={4}
-        flagCount={flagCount}
-      />
+      <ShortlistHero intake={trip?.intake} stageLabel="Stays" stageNumber={4} flagCount={flagCount} />
       <div className="px-6 md:px-10 py-5 border-b-2 border-foreground/10 bg-card/60 backdrop-blur sticky top-0 z-30">
         <StageNav stages={stages} />
       </div>
 
       <div className="px-6 md:px-10 py-8">
-        <div className="flex items-end justify-between flex-wrap gap-3 mb-6">
+        <div className="flex items-end justify-between flex-wrap gap-3 mb-4">
           <div>
             <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">
               Stage 4 · Stays
             </div>
-            <h2 className="font-[Fredoka] text-3xl md:text-4xl font-bold mt-1">
-              Pick where you sleep.
-            </h2>
-            {shortlist?.recommendation_summary && (
-              <p className="text-muted-foreground mt-1 max-w-2xl">{shortlist.recommendation_summary}</p>
-            )}
+            <h2 className="font-[Fredoka] text-3xl md:text-4xl font-bold mt-1">Pick where you sleep.</h2>
           </div>
           {options.length > 0 && (
             <div className="flex gap-2">
@@ -130,16 +137,14 @@ const Stays = () => {
                 disabled={buildMutation.isPending}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-card border-2 border-foreground/15 text-sm font-bold hover:border-foreground/40 transition-colors"
               >
-                {buildMutation.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCcw className="h-4 w-4" />
-                )}
+                {buildMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
                 Re-research
               </button>
             </div>
           )}
         </div>
+
+        <LiveProvidersBanner banner={banner} />
 
         {tripQuery.isLoading && (
           <div className="flex items-center justify-center py-24 text-muted-foreground gap-3">
@@ -153,9 +158,7 @@ const Stays = () => {
             <AlertCircle className="h-6 w-6 text-destructive shrink-0 mt-0.5" />
             <div className="text-sm">
               <div className="font-bold text-destructive">Couldn't load trip</div>
-              <div className="text-muted-foreground mt-1">
-                {(tripQuery.error as Error)?.message}
-              </div>
+              <div className="text-muted-foreground mt-1">{(tripQuery.error as Error)?.message}</div>
             </div>
           </div>
         )}
@@ -216,15 +219,39 @@ const Stays = () => {
         )}
 
         {options.length > 0 && (
-          <div className="grid lg:grid-cols-2 gap-5">
-            {options.map((o) => (
-              <LodgingCard
+          <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+            <div className="flex flex-wrap gap-2">
+              <Chip>✦ Comfort &gt; location &gt; price</Chip>
+              <Chip>{partyChip(trip?.intake)}</Chip>
+              <Chip>{regionsChip(options)}</Chip>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Sort:</span>
+              <select
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value as SortKey)}
+                className="h-9 rounded-xl border-2 border-foreground/15 bg-card px-3 font-bold text-sm focus:outline-none focus:border-foreground/40"
+              >
+                <option value="best">Best overall</option>
+                <option value="price">Price</option>
+                <option value="comfort">Comfort</option>
+              </select>
+            </div>
+          </div>
+        )}
+
+        {sorted.length > 0 && (
+          <div className="flex flex-col gap-4">
+            {sorted.map((o) => (
+              <LodgingRow
                 key={o.option_id}
                 option={o}
                 isRecommended={o.option_id === recommendedId}
                 isSelected={o.row_status === "approved"}
                 onSelect={() => selectMutation.mutate(o.option_id)}
                 isSelecting={selectMutation.isPending}
+                whyOpen={openWhyId === o.option_id}
+                onToggleWhy={() => setOpenWhyId(openWhyId === o.option_id ? null : o.option_id)}
               />
             ))}
           </div>
@@ -240,149 +267,180 @@ const Stays = () => {
             </Button>
           </div>
         )}
-
-        {shortlist && shortlist.warnings.length > 0 && (
-          <div className="mt-6 rounded-3xl border-2 border-coral/30 bg-coral/5 p-5">
-            <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
-              Friction warnings
-            </div>
-            <ul className="space-y-1 text-sm">
-              {shortlist.warnings.map((w) => <li key={w}>· {w}</li>)}
-            </ul>
-          </div>
-        )}
       </div>
     </AppShell>
   );
 };
 
-function LodgingCard({
-  option, isRecommended, isSelected, onSelect, isSelecting,
+function partyChip(intake: TripIntake | undefined): string {
+  if (!intake) return "Party · checked bags";
+  const total = intake.travelers || (intake.party.adults + intake.party.children);
+  return `Party of ${total}`;
+}
+
+function regionsChip(options: LodgingOption[]): string {
+  const region = options[0]?.island_or_region || options[0]?.location_area || "region";
+  return `${region}`;
+}
+
+function sortLodging(options: LodgingOption[], key: SortKey): LodgingOption[] {
+  const arr = [...options];
+  if (key === "price") {
+    arr.sort((a, b) => priceAmount(a.price_band || a.current_price_signal) - priceAmount(b.price_band || b.current_price_signal));
+  } else if (key === "comfort") {
+    arr.sort((a, b) => b.family_comfort_score - a.family_comfort_score);
+  } else {
+    arr.sort((a, b) => a.rank - b.rank);
+  }
+  return arr;
+}
+
+function priceAmount(value: string): number {
+  const m = (value || "").match(/([\d][\d,]*(?:\.\d{2})?)/);
+  return m ? parseFloat(m[1].replace(/,/g, "")) : Number.POSITIVE_INFINITY;
+}
+
+function LodgingRow({
+  option,
+  isRecommended,
+  isSelected,
+  onSelect,
+  isSelecting,
+  whyOpen,
+  onToggleWhy,
 }: {
   option: LodgingOption;
   isRecommended: boolean;
   isSelected: boolean;
   onSelect: () => void;
   isSelecting: boolean;
+  whyOpen: boolean;
+  onToggleWhy: () => void;
 }) {
+  const label = deriveRowLabel("", isRecommended, option.recommendation_grade);
+  const pill = deriveLivePill(option);
+
   return (
     <article
-      className={`rounded-3xl border-2 bg-card overflow-hidden transition-bounce flex flex-col ${
-        isSelected
-          ? "border-foreground shadow-sticker -translate-y-1"
-          : "border-foreground/10 shadow-card hover:-translate-y-0.5"
+      className={`rounded-3xl border-2 bg-card overflow-hidden transition-bounce ${
+        isSelected ? "border-foreground shadow-sticker" : "border-foreground/10 shadow-card hover:-translate-y-0.5"
       }`}
     >
-      <div className="px-5 pt-5 flex items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <Hotel className="h-5 w-5 text-secondary" />
-            <span className="font-[Fredoka] text-xl font-bold leading-tight">{option.name}</span>
+      <RowHeaderStrip
+        label={label}
+        pill={pill}
+        left={
+          <>
+            <Hotel className="h-4 w-4 text-foreground/60" />
+            <span className="font-bold truncate">{option.name}</span>
+            <span className="text-xs text-muted-foreground ml-1 truncate">{option.lodging_type}</span>
+          </>
+        }
+      />
+
+      <div className="grid grid-cols-1 md:grid-cols-[1fr_minmax(220px,_auto)] gap-5 px-5 py-5">
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-foreground/85">
+            <MapPin className="h-4 w-4 text-foreground/50" />
+            {option.location_area}
+            {option.island_or_region && <span className="text-muted-foreground">· {option.island_or_region}</span>}
           </div>
-          <div className="text-xs text-muted-foreground font-semibold mt-1 flex items-center gap-1">
-            <MapPin className="h-3 w-3" /> {option.location_area}{option.island_or_region && ` · ${option.island_or_region}`}
+          <div className="flex items-start gap-1.5 text-sm">
+            <Bed className="h-4 w-4 text-foreground/50 shrink-0 mt-0.5" />
+            <span className="text-foreground/85">{option.bed_layout || "bed layout not confirmed"}</span>
           </div>
-          <div className="text-xs text-muted-foreground mt-0.5">{option.lodging_type}</div>
         </div>
-        <div className="flex flex-col items-end gap-1.5 shrink-0">
-          <GradeBadge grade={option.recommendation_grade} />
-          {isRecommended && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-foreground text-background text-[10px] font-bold uppercase tracking-wider">
-              Hermes' pick
-            </span>
+        <div className="md:text-right">
+          <div className="font-[Fredoka] text-3xl font-bold leading-none">
+            {option.current_price_signal || option.price_band}
+          </div>
+          {option.price_band && option.price_band !== option.current_price_signal && (
+            <div className="text-xs text-muted-foreground mt-1.5 font-mono uppercase tracking-wider">
+              Total {option.price_band}
+            </div>
           )}
         </div>
       </div>
 
-      <div className="px-5 pt-3 flex items-start gap-2 text-sm">
-        <Bed className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-        <span className="text-foreground/85 leading-snug">{option.bed_layout || "bed layout not confirmed"}</span>
-      </div>
-
-      <div className="px-5 pt-3 flex flex-wrap gap-1.5 text-xs">
-        <span className="px-2 py-0.5 rounded-full bg-sunshine/30 border border-foreground/10 font-bold">
-          {option.current_price_signal || option.price_band}
-        </span>
-        {option.occupancy_fit && (
-          <span className="px-2 py-0.5 rounded-full bg-card border border-foreground/15 font-medium">{option.occupancy_fit}</span>
-        )}
-        {option.parking_practicality && (
-          <span className="px-2 py-0.5 rounded-full bg-card border border-foreground/15 font-medium">parking: {option.parking_practicality}</span>
-        )}
-        {option.walkability && (
-          <span className="px-2 py-0.5 rounded-full bg-card border border-foreground/15 font-medium">walk: {option.walkability}</span>
-        )}
-      </div>
-
-      {option.comfort_fit && (
-        <p className="px-5 pt-3 text-sm text-foreground/85 leading-snug">{option.comfort_fit}</p>
-      )}
-
-      <div className="px-5 pt-3 grid grid-cols-2 gap-3">
-        <ScoreBar label="Comfort" value={option.family_comfort_score} color="hsl(18 95% 55%)" />
-        <ScoreBar label="Friction" value={option.friction_score} color="hsl(0 70% 60%)" />
-      </div>
-
-      {option.tradeoffs.length > 0 && (
-        <ul className="px-5 pt-3 space-y-1">
-          {option.tradeoffs.slice(0, 3).map((t) => (
-            <li key={t} className="text-xs text-foreground/75 leading-snug">· {t}</li>
+      <div className="px-5 pb-4 grid md:grid-cols-2 gap-4">
+        <ul className="space-y-1.5 text-sm">
+          {derivePros(option).slice(0, 3).map((p) => (
+            <li key={p} className="flex items-start gap-2">
+              <Check className="h-4 w-4 text-palm shrink-0 mt-0.5" />
+              <span className="text-foreground/85">{p}</span>
+            </li>
           ))}
         </ul>
-      )}
-
-      {option.friction_flags.length > 0 && (
-        <div className="px-5 pt-3">
-          <FrictionFlags flags={option.friction_flags} />
-        </div>
-      )}
-
-      {option.cancellation_notes && (
-        <div className="px-5 pt-3 text-xs text-muted-foreground">
-          Cancellation: {option.cancellation_notes}
-        </div>
-      )}
-
-      <div className="mt-auto p-5 pt-4 flex items-center gap-2 border-t-2 border-foreground/10 mt-4">
-        {option.deep_link && (
-          <a
-            href={option.deep_link}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline"
-          >
-            <ExternalLink className="h-3 w-3" /> {option.source || "open"}
-          </a>
+        {option.friction_flags.length > 0 && (
+          <div className="rounded-xl border border-coral/40 bg-coral/5 px-3 py-2 space-y-1">
+            {option.friction_flags.slice(0, 3).map((f) => (
+              <div key={f} className="flex items-start gap-2 text-xs text-foreground/80">
+                <AlertTriangle className="h-3.5 w-3.5 text-coral shrink-0 mt-0.5" />
+                <span>{f}</span>
+              </div>
+            ))}
+          </div>
         )}
+      </div>
+
+      <div className="px-5 py-3 border-t-2 border-foreground/10 flex items-center gap-3 flex-wrap">
         <Button
           onClick={onSelect}
           disabled={isSelecting}
-          className={`ml-auto h-10 rounded-xl font-bold border-2 px-5 ${
-            isSelected
-              ? "bg-palm text-primary-foreground border-foreground shadow-card hover:bg-palm/90"
-              : "bg-card text-foreground border-foreground/20 hover:border-foreground/50"
+          className={`h-10 rounded-xl font-bold border-2 px-5 ${
+            isSelected ? "bg-primary text-primary-foreground border-foreground shadow-card" : "bg-card text-foreground border-foreground/20 hover:border-foreground/50"
           }`}
         >
-          {isSelecting ? <Loader2 className="h-4 w-4 animate-spin" /> :
-            isSelected ? <><Check className="h-4 w-4" /> Selected</> : "Select"}
+          {isSelecting ? <Loader2 className="h-4 w-4 animate-spin" /> : isSelected ? <><Check className="h-4 w-4" /> Using this stay</> : "Use this stay"}
         </Button>
+        {option.deep_link && (
+          <a href={option.deep_link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-bold text-foreground/80 hover:text-foreground">
+            <ArrowRight className="h-4 w-4" /> Open listing
+          </a>
+        )}
+        {option.deep_link && (
+          <a href={option.deep_link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground">
+            <ExternalLink className="h-3.5 w-3.5" /> Book / confirm
+          </a>
+        )}
+        <button type="button" onClick={onToggleWhy} className="ml-auto text-sm font-medium text-muted-foreground hover:text-foreground">
+          {whyOpen ? "Hide details" : "Why not this?"}
+        </button>
       </div>
+
+      {whyOpen && (
+        <div className="px-5 pb-5 pt-1 text-sm text-foreground/80 space-y-2 border-t border-foreground/10">
+          {option.comfort_fit && <p className="leading-snug">{option.comfort_fit}</p>}
+          {option.tradeoffs.length > 0 && (
+            <ul className="space-y-1">
+              {option.tradeoffs.map((t) => (
+                <li key={t} className="text-xs">· {t}</li>
+              ))}
+            </ul>
+          )}
+          <div className="flex flex-wrap gap-3 text-xs text-muted-foreground pt-1">
+            <span>Comfort {option.family_comfort_score}</span>
+            <span>Friction {option.friction_score}</span>
+            {option.parking_practicality && <span>Parking: {option.parking_practicality}</span>}
+            {option.walkability && <span>Walk: {option.walkability}</span>}
+            {option.cancellation_notes && <span>Cancel: {option.cancellation_notes}</span>}
+            {option.validation?.adapter_used && <span>Source: {option.validation.adapter_used}</span>}
+          </div>
+        </div>
+      )}
     </article>
   );
 }
 
-function ScoreBar({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <div>
-      <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">
-        <span>{label}</span>
-        <span className="text-foreground">{value}</span>
-      </div>
-      <div className="h-2 rounded-full bg-muted border border-foreground/10 overflow-hidden">
-        <div className="h-full rounded-full" style={{ width: `${value}%`, background: color }} />
-      </div>
-    </div>
-  );
+function derivePros(option: LodgingOption): string[] {
+  const pros: string[] = [];
+  if (option.comfort_fit) pros.push(option.comfort_fit);
+  for (const t of option.tradeoffs) {
+    if (pros.length >= 3) break;
+    if (!pros.includes(t)) pros.push(t);
+  }
+  if (pros.length === 0 && option.bed_layout) pros.push(option.bed_layout);
+  return pros;
 }
 
 export default Stays;

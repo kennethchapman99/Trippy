@@ -164,6 +164,15 @@ export interface FlightOption {
   tradeoffs: string[];
   friction_flags: string[];
   row_status: RowStatus;
+  live_data_status?: "live_verified" | "live_signal" | "handoff_required" | "stale" | string;
+  validation?: {
+    source_name?: string;
+    source_type?: string;
+    verification_status?: string;
+    confidence?: number;
+    evidence_url?: string;
+    adapter_used?: string;
+  };
 }
 
 export interface LodgingOption {
@@ -190,6 +199,14 @@ export interface LodgingOption {
   tradeoffs: string[];
   friction_flags: string[];
   row_status: RowStatus;
+  live_data_status?: "live_verified" | "live_signal" | "handoff_required" | "stale" | "partial" | string;
+  validation?: {
+    source_name?: string;
+    verification_status?: string;
+    confidence?: number;
+    evidence_url?: string;
+    adapter_used?: string;
+  };
 }
 
 export interface CarOption {
@@ -216,6 +233,14 @@ export interface CarOption {
   tradeoffs: string[];
   friction_flags: string[];
   row_status: RowStatus;
+  live_data_status?: "live_verified" | "live_signal" | "handoff_required" | "stale" | "partial" | string;
+  validation?: {
+    source_name?: string;
+    verification_status?: string;
+    confidence?: number;
+    evidence_url?: string;
+    adapter_used?: string;
+  };
 }
 
 export interface ActivityOption {
@@ -246,6 +271,14 @@ export interface ActivityOption {
   tradeoffs: string[];
   friction_flags: string[];
   row_status: RowStatus;
+  live_data_status?: "live_verified" | "live_signal" | "handoff_required" | "stale" | "partial" | string;
+  validation?: {
+    source_name?: string;
+    verification_status?: string;
+    confidence?: number;
+    evidence_url?: string;
+    adapter_used?: string;
+  };
 }
 
 export interface ShortlistState {

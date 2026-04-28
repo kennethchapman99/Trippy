@@ -52,6 +52,8 @@ FIRECRAWL_BASE_URL: str = os.environ.get("FIRECRAWL_BASE_URL", "https://api.fire
 FIRECRAWL_ENABLED: bool = _bool("FIRECRAWL_ENABLED", True)
 FIRECRAWL_CACHE_TTL_SECONDS: int = int(os.environ.get("FIRECRAWL_CACHE_TTL_SECONDS", "900"))
 FIRECRAWL_MAX_RESULTS: int = int(os.environ.get("FIRECRAWL_MAX_RESULTS", "5"))
+SERPAPI_KEY: str = os.environ.get("SERPAPI_KEY", "")
+SERPAPI_TIMEOUT_SECONDS: float = float(os.environ.get("TRIPPY_SERPAPI_TIMEOUT_SECONDS", "12"))
 
 # Google Sheet template
 SHEET_TEMPLATE_ID: str = os.environ.get("TRIPPY_SHEET_TEMPLATE_ID", "")

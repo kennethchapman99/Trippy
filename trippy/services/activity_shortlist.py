@@ -14,6 +14,8 @@ from trippy.models.shortlists import (
     ShortlistCategory,
     ShortlistRowStatus,
 )
+from trippy.services import serpapi_client
+from trippy.services.serpapi_options import activity_options_from_serpapi
 from trippy.models.sources import TravelSourceCategory
 from trippy.models.trip_planning import TripIntake
 from trippy.services.destination_profiles import profile_for_intake
@@ -61,6 +63,11 @@ class ActivityShortlistService:
         plan = source_plan(TravelSourceCategory.TOURS)
         existing = self._store.load(trip_id, ShortlistCategory.ACTIVITIES)
         options = _options_from_profile(profile, ctx.intake, ctx.option.regions)
+        live_options, live_notes = _serpapi_live_activities(ctx)
+        if live_options:
+            options = live_options + options
+            for index, option in enumerate(options, start=1):
+                option.rank = index
         state = ResearchShortlistState(
             trip_id=trip_id,
             category=ShortlistCategory.ACTIVITIES,
@@ -75,6 +82,7 @@ class ActivityShortlistService:
             warnings=[
                 "Review count, operator safety practices, exact duration, and cancellation need live validation.",
                 "Weather-dependent tours need backup plans and buffer days.",
+                *live_notes,
             ],
             next_actions=[
                 "Open GetYourGuide for top candidates and filter by rating, cancellation, and group size.",
@@ -465,3 +473,24 @@ def _normalize_location(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value)
     ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
     return " ".join(ascii_value.lower().replace("-", " ").split())
+
+
+def _serpapi_live_activities(ctx: ShortlistContext) -> tuple[list[ActivityOption], list[str]]:
+    if not serpapi_client.is_configured():
+        return [], ["SERPAPI_KEY is not configured, so activity rows are search handoffs."]
+    region = (ctx.option.regions[0] if ctx.option.regions else "") or (
+        ctx.intake.destination_seeds[0] if ctx.intake.destination_seeds else ""
+    )
+    if not region:
+        return [], ["SerpAPI activity search skipped: no destination region on the trip plan yet."]
+    results, notes = serpapi_client.search_things_to_do(
+        query="things to do",
+        near=region,
+    )
+    if not results:
+        return [], notes
+    deep_link = (
+        f"https://www.google.com/maps/search/things+to+do+{region.replace(' ', '+')}"
+    )
+    options = activity_options_from_serpapi(results, region=region, deep_link=deep_link)
+    return options, notes

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import date, timedelta
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from trippy.models.shortlists import (
@@ -15,6 +15,8 @@ from trippy.models.shortlists import (
     ShortlistCategory,
     ShortlistRowStatus,
 )
+from trippy.services import serpapi_client
+from trippy.services.serpapi_options import lodging_options_from_serpapi
 from trippy.models.sources import TravelSourceCategory
 from trippy.models.trip_planning import TripIntake, TripPlanOption
 from trippy.services.destination_profiles import profile_for_intake
@@ -70,6 +72,11 @@ class LodgingShortlistService:
         requires_three_beds = (
             ctx.intake.party.total_travelers >= 5 or ctx.intake.party.children >= 2
         )
+        live_options, live_notes = _serpapi_live_lodging(ctx, requires_three_beds)
+        if live_options:
+            options = live_options + options
+            for index, option in enumerate(options, start=1):
+                option.rank = index
         recommended = next(
             (
                 option.option_id
@@ -103,6 +110,7 @@ class LodgingShortlistService:
                     if not requires_three_beds
                     else "Two-room hotel solutions can work, but only if total comfort beats a private rental."
                 ),
+                *live_notes,
             ],
             next_actions=[
                 (
@@ -1302,3 +1310,51 @@ def _comfort_fit(fit_category: LodgingFitCategory, party_summary: str) -> str:
     if value == "weak_fit":
         return f"Technically possible but likely uncomfortable or admin-heavy for {party_summary}."
     return f"Technical fit only until live bed/privacy details are proven for {party_summary}."
+
+
+def _serpapi_live_lodging(
+    ctx: ShortlistContext,
+    requires_three_beds: bool,
+) -> tuple[list[LodgingOption], list[str]]:
+    """Pull a few live Google Hotels listings via SerpAPI for the selected region."""
+    if not serpapi_client.is_configured():
+        return [], ["SERPAPI_KEY is not configured, so lodging rows are search handoffs."]
+    region = (ctx.option.regions[0] if ctx.option.regions else "") or (
+        ctx.intake.destination_seeds[0] if ctx.intake.destination_seeds else ""
+    )
+    if not region:
+        return [], ["SerpAPI lodging skipped: no destination region on the trip plan yet."]
+    check_in, check_out = _serpapi_lodging_dates(ctx)
+    children_ages = list(ctx.intake.party.child_ages or [])
+    properties, notes = serpapi_client.search_hotels(
+        query=region,
+        check_in=check_in,
+        check_out=check_out,
+        adults=max(1, ctx.intake.party.adults or 2),
+        children_ages=children_ages,
+    )
+    if not properties:
+        return [], notes
+    deep_link = (
+        f"https://www.google.com/travel/hotels?q={region.replace(' ', '+')}"
+        f"&checkin={check_in.isoformat()}&checkout={check_out.isoformat()}"
+    )
+    options = lodging_options_from_serpapi(
+        properties,
+        region=region,
+        deep_link=deep_link,
+        requires_three_beds=requires_three_beds,
+    )
+    return options, notes
+
+
+def _serpapi_lodging_dates(ctx: ShortlistContext) -> tuple[date, date]:
+    window = ctx.intake.travel_window
+    if window.start_date and window.end_date:
+        return window.start_date, window.end_date
+    today = date.today()
+    nights = ctx.intake.duration_days or ctx.intake.duration_min_days or ctx.option.duration_days or 7
+    if window.start_date:
+        return window.start_date, window.start_date + timedelta(days=max(1, nights))
+    fallback_start = today + timedelta(days=60)
+    return fallback_start, fallback_start + timedelta(days=max(1, nights))

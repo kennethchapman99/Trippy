@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from trippy.models.shortlists import (
     CarOption,
     LiveDataStatus,
@@ -10,6 +12,8 @@ from trippy.models.shortlists import (
     ShortlistCategory,
     ShortlistRowStatus,
 )
+from trippy.services import serpapi_client
+from trippy.services.serpapi_options import car_options_from_serpapi
 from trippy.models.sources import TravelSourceCategory
 from trippy.models.trip_planning import TripIntake
 from trippy.services.destination_profiles import profile_for_intake
@@ -56,6 +60,11 @@ class CarShortlistService:
         profile = profile_for_intake(ctx.intake)
         plan = source_plan(TravelSourceCategory.CAR_RENTALS)
         options = _options_from_profile(profile, ctx.intake, ctx.option.regions)
+        live_options, live_notes = _serpapi_live_cars(ctx)
+        if live_options:
+            options = live_options + options
+            for index, option in enumerate(options, start=1):
+                option.rank = index
         state = ResearchShortlistState(
             trip_id=trip_id,
             category=ShortlistCategory.CARS,
@@ -70,6 +79,7 @@ class CarShortlistService:
             warnings=[
                 "Vehicle model, transmission, luggage capacity, and fees must be confirmed on the live listing.",
                 "Azores driving can be practical, but narrow roads and parking still need local validation.",
+                *live_notes,
             ],
             next_actions=[
                 "Open Booking.com car rental search and filter automatic SUV/minivan.",
@@ -203,3 +213,38 @@ def _options_from_profile(
 
 def _car_by_id(state: ResearchShortlistState, option_id: str) -> CarOption | None:
     return next((option for option in state.car_options if option.option_id == option_id), None)
+
+
+def _serpapi_live_cars(ctx: ShortlistContext) -> tuple[list[CarOption], list[str]]:
+    if not serpapi_client.is_configured():
+        return [], ["SERPAPI_KEY is not configured, so car rows are search handoffs."]
+    location = (ctx.option.regions[0] if ctx.option.regions else "") or (
+        ctx.intake.destination_seeds[0] if ctx.intake.destination_seeds else ""
+    )
+    if not location:
+        return [], ["SerpAPI car search skipped: no destination region on the trip plan yet."]
+    pickup, dropoff = _serpapi_car_dates(ctx)
+    results, notes = serpapi_client.search_car_rentals(
+        location=location,
+        pickup_date=pickup,
+        return_date=dropoff,
+    )
+    if not results:
+        return [], notes
+    deep_link = (
+        "https://www.google.com/search?q="
+        f"car+rental+{location.replace(' ', '+')}+{pickup.isoformat()}+to+{dropoff.isoformat()}"
+    )
+    options = car_options_from_serpapi(results, location=location, deep_link=deep_link)
+    return options, notes
+
+
+def _serpapi_car_dates(ctx: ShortlistContext) -> tuple[date, date]:
+    window = ctx.intake.travel_window
+    if window.start_date and window.end_date:
+        return window.start_date, window.end_date
+    nights = ctx.intake.duration_days or ctx.intake.duration_min_days or ctx.option.duration_days or 7
+    if window.start_date:
+        return window.start_date, window.start_date + timedelta(days=max(1, nights))
+    fallback = date.today() + timedelta(days=60)
+    return fallback, fallback + timedelta(days=max(1, nights))
