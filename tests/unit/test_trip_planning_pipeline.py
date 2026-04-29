@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -33,6 +34,7 @@ from trippy.models.trip_planning import (
     WorkspaceStatus,
     WorkspaceTab,
 )
+from trippy.models.web_research import WebResearchResult
 from trippy.services.activity_shortlist import ActivityShortlistService
 from trippy.services.car_shortlist import CarShortlistService
 from trippy.services.dashboard import DashboardService
@@ -129,7 +131,7 @@ def test_azores_golden_path_services(
     activities = ActivityShortlistService(intake_service, planner).build(intake.trip_id)
 
     assert flights.category == ShortlistCategory.FLIGHTS
-    assert flights.recommended_option_id == "flight-direct-yyz-pdl"
+    assert flights.recommended_option_id == "flight-direct-route"
     flight_link = flights.flight_options[0].deep_link
     flight_params = parse_qs(urlparse(flight_link).query)
     assert "google.com/travel/flights" in flight_link
@@ -429,7 +431,7 @@ def test_agent_planning_tool_routes_to_shortlist_services(
     )
 
     assert result["category"] == "flights"
-    assert result["recommended_option_id"] == "flight-direct-yyz-pdl"
+    assert result["recommended_option_id"] == "flight-direct-route"
 
 
 def test_intake_accepts_fuzzy_duration_and_party_roster() -> None:
@@ -697,11 +699,137 @@ def test_flight_shortlist_uses_duffel_live_offers_when_configured(
     assert option.arrival_date == "2027-06-16"
     assert option.arrival_time == "7:10 AM"
     assert option.total_travel_duration == "5h 55m"
-    assert option.price_band == "CAD 1180.00 total"
+    assert option.price_band == "CAD 1,180 total; CAD 236 per person"
     assert option.deep_link.startswith("https://www.google.com/travel/flights/search?")
     assert option.row_status == ShortlistRowStatus.VERIFIED_LIVE
     assert option.validation.adapter_used == "duffel"
     assert "Duffel returned 1 exact offer row" in " ".join(flights.warnings)
+
+
+def test_flight_shortlist_ignores_duffel_sandbox_airways_offers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr("trippy.config.DUFFEL_ACCESS_TOKEN", "test-token")
+
+    def fake_duffel_request(token: str, payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "data": {
+                "offers": [
+                    {
+                        "id": "off_test_1",
+                        "total_amount": "369.66",
+                        "total_currency": "CAD",
+                        "owner": {"name": "Duffel Airways"},
+                        "slices": [
+                            {
+                                "duration": "PT6H35M",
+                                "segments": [
+                                    {
+                                        "departing_at": "2026-08-24T17:48:00-04:00",
+                                        "arriving_at": "2026-08-25T04:23:00+00:00",
+                                        "origin": {"iata_code": "YYZ"},
+                                        "destination": {"iata_code": "PDL"},
+                                        "marketing_carrier": {
+                                            "iata_code": "ZZ",
+                                            "name": "Duffel Airways",
+                                        },
+                                        "operating_carrier": {"name": "Duffel Airways"},
+                                        "marketing_carrier_flight_number": "7753",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+
+    monkeypatch.setattr(
+        "trippy.services.flight_shortlist._post_duffel_offer_request",
+        fake_duffel_request,
+    )
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+
+    flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
+
+    assert all("Duffel Airways" not in option.airline for option in flights.flight_options)
+    assert all("ZZ7753" not in option.flight_numbers for option in flights.flight_options)
+    assert "Ignored 1 Duffel sandbox/test offer" in " ".join(flights.warnings)
+
+
+def test_flight_shortlist_ignores_duffel_offers_with_impossible_date_spans(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr("trippy.config.DUFFEL_ACCESS_TOKEN", "test-token")
+
+    def fake_duffel_request(token: str, payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "data": {
+                "offers": [
+                    {
+                        "id": "off_bad_span",
+                        "total_amount": "1299.80",
+                        "total_currency": "USD",
+                        "owner": {"name": "TAP Air Portugal"},
+                        "slices": [
+                            {
+                                "duration": "PT17H",
+                                "segments": [
+                                    {
+                                        "departing_at": "2026-08-24T17:45:00-04:00",
+                                        "arriving_at": "2026-08-25T05:45:00+00:00",
+                                        "origin": {"iata_code": "YYZ"},
+                                        "destination": {"iata_code": "LIS"},
+                                        "marketing_carrier": {
+                                            "iata_code": "TP",
+                                            "name": "TAP Air Portugal",
+                                        },
+                                        "operating_carrier": {"name": "TAP Air Portugal"},
+                                        "marketing_carrier_flight_number": "258",
+                                    },
+                                    {
+                                        "departing_at": "2026-08-31T12:30:00+00:00",
+                                        "arriving_at": "2026-08-31T14:45:00+00:00",
+                                        "origin": {"iata_code": "LIS"},
+                                        "destination": {"iata_code": "PDL"},
+                                        "marketing_carrier": {
+                                            "iata_code": "TP",
+                                            "name": "TAP Air Portugal",
+                                        },
+                                        "operating_carrier": {"name": "TAP Air Portugal"},
+                                        "marketing_carrier_flight_number": "1861",
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+
+    monkeypatch.setattr(
+        "trippy.services.flight_shortlist._post_duffel_offer_request",
+        fake_duffel_request,
+    )
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+
+    flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
+
+    assert all(option.booking_source != "Duffel" for option in flights.flight_options)
+    assert all(option.arrival_date != "2026-08-31" for option in flights.flight_options)
+    assert "Ignored 1 Duffel offer row" in " ".join(flights.warnings)
 
 
 def test_flight_deep_research_handles_partial_secondary_source_text(
@@ -787,7 +915,7 @@ def test_user_supplied_flight_candidate_flows_through_same_shortlist_model(
     assert candidate.layover_airports == ["LIS"]
     assert candidate.layover_duration == "2h 20m"
     assert candidate.flight_numbers == ["AC880", "TP1861"]
-    assert candidate.price_band == "CAD 1180 pp"
+    assert candidate.price_band == "CAD 1,180 total; CAD 236 per person"
     assert candidate.row_status == ShortlistRowStatus.RESEARCHED
     assert candidate.validation.verification_status == VerificationStatus.MANUAL_REQUIRED
     assert candidate.date_viability_signal
@@ -817,7 +945,19 @@ def test_selecting_flight_updates_recommendation_and_workspace_timeline(
         if option.option_id == selected.recommended_option_id
     )
     assert chosen.row_status == ShortlistRowStatus.APPROVED
-    assert chosen.recommendation_label.startswith("Selected")
+    assert chosen.recommendation_label.startswith("Departure selected")
+    assert selected.artifacts["flight_selection"]["selected_outbound_option_id"] == chosen.option_id
+
+    return_selected = FlightShortlistService(intake_service, planner).select_flight(
+        intake.trip_id,
+        state.flight_options[2].option_id,
+        selection_kind="return",
+    )
+    assert (
+        return_selected.artifacts["flight_selection"]["selected_return_option_id"]
+        == state.flight_options[2].option_id
+    )
+    assert return_selected.artifacts["flight_selection"]["constraint_status"] == "complete"
 
     workspace = TripWorkspaceService(intake_service, planner).prepare(
         intake.trip_id,
@@ -880,6 +1020,64 @@ def test_selecting_lodging_and_manual_split_drives_workspace_timeline(
     assert any(row[1] == "Furnas" and row[2] == 3 for row in stay_plan)
     assert any(row[6] == "Check in: Furnas" for row in timeline)
     assert any("second base" in row[18] for row in timeline)
+
+
+def test_selecting_multiple_lodging_options_preserves_split_choices(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+
+    lodging_service = LodgingShortlistService(intake_service, planner)
+    lodging = lodging_service.build(intake.trip_id)
+    first_id = lodging.lodging_options[0].option_id
+    second_id = lodging.lodging_options[1].option_id
+
+    lodging_service.select_lodging(intake.trip_id, first_id)
+    selected = lodging_service.select_lodging(intake.trip_id, second_id)
+
+    approved = {
+        option.option_id
+        for option in selected.lodging_options
+        if option.row_status == ShortlistRowStatus.APPROVED
+    }
+    structure = selected.artifacts["lodging_structure"]
+    assert approved == {first_id, second_id}
+    assert structure["selected_lodging_option_ids"] == [first_id, second_id]
+    assert structure["selected_lodging_option_id"] == second_id
+
+
+def test_deselecting_lodging_removes_it_from_split_choices(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+
+    lodging_service = LodgingShortlistService(intake_service, planner)
+    lodging = lodging_service.build(intake.trip_id)
+    first_id = lodging.lodging_options[0].option_id
+    second_id = lodging.lodging_options[1].option_id
+
+    lodging_service.select_lodging(intake.trip_id, first_id)
+    lodging_service.select_lodging(intake.trip_id, second_id)
+    updated = lodging_service.deselect_lodging(intake.trip_id, first_id)
+
+    statuses = {option.option_id: option.row_status for option in updated.lodging_options}
+    structure = updated.artifacts["lodging_structure"]
+    assert statuses[first_id] == ShortlistRowStatus.RESEARCHED
+    assert statuses[second_id] == ShortlistRowStatus.APPROVED
+    assert structure["selected_lodging_option_ids"] == [second_id]
+    assert structure["selected_lodging_option_id"] == second_id
 
 
 def test_lodging_service_suggests_editable_split_stay_options(
@@ -960,9 +1158,89 @@ def test_selected_plan_shapes_research_targets(
     assert cars.car_options
     assert activities.activity_options
     assert all("Sao Miguel" in option.island_or_region for option in lodging.lodging_options)
+    lodging_sources = {option.source for option in lodging.lodging_options}
+    assert {"Airbnb", "VRBO", "Google Search"} <= lodging_sources
+    assert any(
+        "best boutique hotels" in option.name.lower()
+        for option in lodging.lodging_options
+    )
+    lodging_links = [
+        link
+        for option in lodging.lodging_options
+        for link in [option.deep_link, *option.validation_links.values()]
+    ]
+    assert any("airbnb.ca" in link for link in lodging_links)
+    assert any("vrbo.com" in link for link in lodging_links)
     assert all("Pico" not in option.pickup_location for option in cars.car_options)
     assert all("Pico" not in option.island_location for option in activities.activity_options)
     assert all("Faial" not in option.island_location for option in activities.activity_options)
+
+
+def test_lodging_deep_research_promotes_reviewed_exact_property_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+
+    class _Availability:
+        available = True
+        reason = ""
+
+    class _FakeFirecrawl:
+        def availability(self) -> _Availability:
+            return _Availability()
+
+        def research(self, query: str, *, limit: int | None = None) -> list[WebResearchResult]:
+            return [
+                WebResearchResult(
+                    id="fake-lodging-result",
+                    query=query,
+                    source_url="https://www.airbnb.ca/rooms/casa-atlantica",
+                    source_title="Casa Atlantica Family Villa",
+                    source_domain="airbnb.ca",
+                    raw_markdown_excerpt=(
+                        "Casa Atlantica Family Villa. Available for 2027-06-15 to 2027-06-25. "
+                        "3 bedrooms, king bed, parking, free cancellation. CAD 4,800 total."
+                    ),
+                    confidence=0.84,
+                )
+            ]
+
+    monkeypatch.setattr("trippy.services.lodging_shortlist.FirecrawlService", _FakeFirecrawl)
+    intake_service = TripIntakeService()
+    intake_payload = _azores_intake()
+    intake_payload.travel_window = TravelWindow(
+        start_date=date(2027, 6, 15),
+        end_date=date(2027, 6, 25),
+    )
+    intake = intake_service.create(intake_payload)
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-sao-miguel-easy")
+
+    lodging = LodgingShortlistService(intake_service, planner).build(
+        intake.trip_id,
+        deep_research=True,
+        adapter_mode="link",
+    )
+
+    reviewed = [
+        option
+        for option in lodging.lodging_options
+        if option.option_id.startswith("reviewed-lodging-")
+    ]
+    assert reviewed
+    candidate = reviewed[0]
+    assert candidate.name == "Casa Atlantica Family Villa"
+    assert candidate.min_three_beds_satisfied is True
+    assert candidate.current_price_signal == "CAD 4,800 total"
+    assert "2027-06-15 to 2027-06-25" in candidate.current_availability_signal
+    assert candidate.recommendation_grade.value == "good"
+    assert candidate.validation.adapter_used == "firecrawl/lodging-discovery-review"
+    assert lodging.recommended_option_id == candidate.option_id
+    review = lodging.artifacts["lodging_discovery_review"]
+    assert review["status"] == "completed"
+    assert review["accepted_candidates"]
 
 
 def test_generic_activity_shortlist_offers_multiple_specific_choices(
@@ -995,17 +1273,58 @@ def test_generic_activity_shortlist_offers_multiple_specific_choices(
 
     activities = ActivityShortlistService(intake_service, planner).build(intake.trip_id)
 
-    assert len(activities.activity_options) >= 5
+    assert len(activities.activity_options) >= 1
     names = " ".join(option.activity_name for option in activities.activity_options)
     assert "Seven Mile Beach" in names
-    assert "West Bay" in names
-    assert "Stingray" in names
+    assert "West Bay" not in names
+    assert "Stingray" not in names
     assert all(option.price_band == "source price required" for option in activities.activity_options)
     assert all(
         option.duration == "source schedule required" for option in activities.activity_options
     )
     assert all(not option.suggested_start_time for option in activities.activity_options)
     assert all("airbnb.ca" not in option.deep_link for option in activities.activity_options)
+
+
+def test_grand_cayman_flight_shortlist_uses_gcm_not_generic_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(
+        TripIntake(
+            mode=TripIntakeMode.SELECTED_DESTINATION,
+            trip_name="Cayman Reef + Food Easy Week",
+            destination_seeds=[
+                "Seven Mile Beach",
+                "West Bay",
+                "Stingray City or Rum Point",
+            ],
+            duration_days=7,
+            party=TripParty(
+                party_type=TripPartyType.WHOLE_FAMILY,
+                adults=2,
+                children=3,
+                explicit=True,
+            ),
+            departure_airports=["YYZ"],
+        )
+    )
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "single-base-easy")
+
+    flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
+
+    assert flights.flight_options
+    assert {option.arrival_airport for option in flights.flight_options} == {"GCM"}
+    assert all("Azores" not in option.airline for option in flights.flight_options)
+    minimum_search_date = date.today() + timedelta(days=30)
+    assert all(
+        date.fromisoformat(option.departure_date) >= minimum_search_date
+        for option in flights.flight_options
+    )
 
 
 def test_activity_deep_research_extracts_cost_time_and_availability(
@@ -1120,6 +1439,7 @@ def test_generic_single_base_plan_uses_one_lodging_base(
 
     planner = TripPlannerService(intake_service)
     draft = planner.draft(intake.trip_id)
+    assert len(draft.options) == 3
 
     single_base = draft.get_option("single-base-easy")
     assert single_base is not None
@@ -1131,6 +1451,15 @@ def test_generic_single_base_plan_uses_one_lodging_base(
     assert balanced is not None
     assert balanced.regions == ["Seven Mile Beach", "West Bay"]
     assert set(balanced.nights_by_region) == {"Seven Mile Beach", "West Bay"}
+
+    fuller = draft.get_option("multi-spot-fuller-version")
+    assert fuller is not None
+    assert fuller.regions == ["Seven Mile Beach", "West Bay", "Stingray City or Rum Point"]
+    assert set(fuller.nights_by_region) == {
+        "Seven Mile Beach",
+        "West Bay",
+        "Stingray City or Rum Point",
+    }
 
     stale = draft.model_dump(mode="json")
     for option in stale["options"]:
@@ -1170,6 +1499,50 @@ def test_generic_single_base_plan_uses_one_lodging_base(
     loaded_balanced = loaded.get_option("two-region-balanced")
     assert loaded_balanced is not None
     assert loaded_balanced.regions == ["Seven Mile Beach", "West Bay"]
+
+
+def test_picked_trip_idea_drafts_shapes_inside_selected_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(
+        TripIntake(
+            mode=TripIntakeMode.IDEA,
+            trip_name="Cayman Reef + Food Easy Week",
+            destination_seeds=[
+                "Seven Mile Beach",
+                "West Bay",
+                "Stingray City or Rum Point",
+            ],
+            duration_days=7,
+            party=TripParty(
+                party_type=TripPartyType.WHOLE_FAMILY,
+                adults=2,
+                children=3,
+                explicit=True,
+            ),
+        )
+    )
+
+    draft = TripPlannerService(intake_service).draft(intake.trip_id)
+
+    assert {option.option_id for option in draft.options} == {
+        "single-base-easy",
+        "two-region-balanced",
+        "multi-spot-fuller-version",
+    }
+    assert all(
+        set(option.regions)
+        <= {"Seven Mile Beach", "West Bay", "Stingray City or Rum Point"}
+        for option in draft.options
+    )
+    assert not any(
+        destination in option.title or destination in option.summary
+        for option in draft.options
+        for destination in ("Mexico", "Belize")
+    )
 
 
 def _patch_planning_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

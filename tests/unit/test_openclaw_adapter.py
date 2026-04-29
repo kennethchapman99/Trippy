@@ -39,10 +39,12 @@ from trippy.models.trip_planning import (
 )
 from trippy.services.activity_shortlist import ActivityShortlistService
 from trippy.services.car_shortlist import CarShortlistService
+from trippy.services.firecrawl import FirecrawlService
 from trippy.services.flight_shortlist import FlightShortlistService
 from trippy.services.lodging_shortlist import LodgingShortlistService
 from trippy.services.shortlist_friction import apply_shortlist_friction
 from trippy.services.source_research import (
+    FirecrawlResearchAdapter,
     LinkResearchAdapter,
     OpenClawResearchAdapter,
     PlaywrightCarAdapter,
@@ -123,18 +125,19 @@ def _adapter_with_runner(
     returncode: int = 0,
     enabled: bool = True,
     gateway: bool = True,
-) -> tuple[OpenClawResearchAdapter, dict[str, int]]:
+) -> tuple[OpenClawResearchAdapter, dict[str, object]]:
     monkeypatch.setattr(
         "trippy.services.source_research.shutil.which", lambda command: "/fake/openclaw"
     )
-    invocations = {"runner": 0, "gateway": 0}
+    invocations: dict[str, object] = {"runner": 0, "gateway": 0, "args": []}
 
-    def fake_runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        invocations["runner"] += 1
+    def fake_runner(*args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        invocations["runner"] = int(invocations["runner"]) + 1
+        invocations["args"] = list(args[0]) if args else []
         return _completed(stdout=stdout, returncode=returncode)
 
     def fake_gateway() -> bool:
-        invocations["gateway"] += 1
+        invocations["gateway"] = int(invocations["gateway"]) + 1
         return gateway
 
     adapter = OpenClawResearchAdapter(
@@ -197,6 +200,11 @@ def test_openclaw_valid_json_maps_to_observations(
     assert any("ready_to_click=partial" in note for note in result.notes)
     assert any("dynamic-pricing notice" in note for note in result.notes)
     assert invocations["runner"] == 1
+    args = invocations["args"]
+    assert isinstance(args, list)
+    assert "--agent" in args
+    assert "main" in args
+    assert "--local" in args
 
 
 def test_openclaw_markdown_fenced_json_parses(
@@ -347,6 +355,58 @@ def test_openclaw_lodging_extraction_maps_key_fields(
     assert first.min_three_beds_satisfied is True
     assert first.cancellation_notes == "Free cancellation"
     assert first.bed_layout == "3 beds, king"
+
+
+def test_auto_lodging_falls_through_firecrawl_when_price_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    lodging = LodgingShortlistService(intake_service, planner).build(intake.trip_id)
+    target = lodging.lodging_options[0]
+
+    firecrawl = FirecrawlService(api_key="test-key", enabled=True)
+
+    def fake_firecrawl_request(path: str, payload: dict[str, object]) -> dict[str, object]:
+        if "scrape" in path:
+            return {"data": {"markdown": "Available. 4 bedrooms. King bed. Parking."}}
+        return {
+            "data": [
+                {
+                    "url": "https://www.vrbo.com/search",
+                    "title": "VRBO Sao Miguel",
+                    "markdown": "Available. 4 bedrooms. King bed. Parking.",
+                }
+            ]
+        }
+
+    firecrawl._request = fake_firecrawl_request  # type: ignore[method-assign]
+    payload = {
+        "observations": [
+            {"field": "price_signal", "value": "CAD 2,950 total", "confidence": 0.84},
+            {"field": "bed_layout_signal", "value": "4 bedrooms; king bed", "confidence": 0.78},
+            {"field": "min_three_beds_satisfied", "value": True, "confidence": 0.9},
+        ],
+    }
+    openclaw, invocations = _adapter_with_runner(monkeypatch, stdout=json.dumps(payload))
+
+    researched = SourceResearchService(
+        adapters=[
+            FirecrawlResearchAdapter(service=firecrawl),
+            openclaw,
+            LinkResearchAdapter(),
+        ]
+    ).research_state(lodging, adapter_mode="auto", option_ids=[target.option_id])
+
+    updated = next(option for option in researched.lodging_options if option.option_id == target.option_id)
+    assert invocations["runner"] == 1
+    assert updated.validation.adapter_used == SourceAdapterCapability.OPENCLAW.value
+    assert updated.current_price_signal == "CAD 2,950 total"
+    assert updated.live_data_status == LiveDataStatus.PARTIAL
 
 
 def test_openclaw_car_extraction_maps_key_fields(

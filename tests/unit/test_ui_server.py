@@ -302,6 +302,18 @@ def test_ui_can_select_lodging_and_override_stay_structure(
     )
     assert chosen["row_status"] == "approved"
 
+    deselected = service.deselect_lodging({"trip_id": trip_id, "option_id": option_id})
+    removed = next(
+        option
+        for option in deselected["shortlist"]["lodging_options"]
+        if option["option_id"] == option_id
+    )
+    assert removed["row_status"] == "researched"
+    assert deselected["shortlist"]["artifacts"]["lodging_structure"]["selected_lodging_option_ids"] == []
+
+    selected = service.select_lodging({"trip_id": trip_id, "option_id": option_id})
+    assert selected["shortlist"]["recommended_option_id"] == option_id
+
     updated = service.update_lodging_structure(
         {
             "trip_id": trip_id,
@@ -389,7 +401,7 @@ def test_ui_lodging_for_couple_does_not_force_family_bed_query(
     result = service.build_shortlist(trip_id, "lodging")
 
     first = result["shortlist"]["lodging_options"][0]
-    assert "king" in first["bed_layout"]
+    assert first["bed_layout"] == "bed layout not confirmed yet"
     assert "family+room+3+beds" not in first["deep_link"]
     assert "king+room" in first["deep_link"]
 
@@ -548,7 +560,7 @@ def test_ui_flight_candidate_is_evaluated_in_shortlist(
     assert candidate["arrival_date"] == "2026-08-25"
     assert candidate["arrival_time"] == "2:20 PM"
     assert candidate["layover_airports"] == ["LIS"]
-    assert candidate["price_band"] == "CAD 1180 pp"
+    assert candidate["price_band"] == "CAD 1,180 total; CAD 236 per person"
 
     logs = service.logs(trip_id=trip_id)
     assert any(event["title"] == "ui-trip-plan-flight-candidate" for event in logs["events"])
@@ -573,8 +585,17 @@ def test_ui_select_flight_updates_canonical_shortlist(
         if option["option_id"] == option_id
     ][0]
     assert chosen["row_status"] == "approved"
-    assert chosen["recommendation_label"].startswith("Selected")
+    assert chosen["recommendation_label"].startswith("Departure selected")
     assert chosen["date_viability_signal"]
+
+    return_id = flights["shortlist"]["flight_options"][2]["option_id"]
+    returned = service.select_flight(
+        {"trip_id": trip_id, "option_id": return_id, "selection_kind": "return"}
+    )
+    selection = returned["shortlist"]["artifacts"]["flight_selection"]
+    assert selection["selected_outbound_option_id"] == option_id
+    assert selection["selected_return_option_id"] == return_id
+    assert selection["constraint_status"] == "complete"
     logs = service.logs(trip_id=trip_id)
     assert any(event["title"] == "ui-trip-plan-flight-select" for event in logs["events"])
 

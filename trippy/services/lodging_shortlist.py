@@ -3,25 +3,33 @@
 from __future__ import annotations
 
 import re
-from datetime import date, timedelta
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from datetime import date, datetime, timedelta
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 from trippy.models.shortlists import (
+    AvailabilityStatus,
+    FreshnessStatus,
     LiveDataStatus,
     LodgingFitCategory,
     LodgingOption,
+    PriceStatus,
     RecommendationGrade,
     ResearchShortlistState,
     ShortlistCategory,
     ShortlistRowStatus,
+    SourceType,
+    SourceValidation,
+    VerificationStatus,
 )
-from trippy.services import serpapi_client
-from trippy.services.serpapi_options import lodging_options_from_serpapi
 from trippy.models.sources import TravelSourceCategory
 from trippy.models.trip_planning import TripIntake, TripPlanOption
+from trippy.models.web_research import WebResearchResult
+from trippy.services import serpapi_client
 from trippy.services.destination_profiles import profile_for_intake
+from trippy.services.firecrawl import FirecrawlService
 from trippy.services.live_validation import LiveValidationService
 from trippy.services.planning_advisor import PlanningAdvisorService
+from trippy.services.serpapi_options import lodging_options_from_serpapi
 from trippy.services.shortlist_store import (
     ShortlistContext,
     ShortlistStore,
@@ -69,6 +77,19 @@ class LodgingShortlistService:
         )
         plan = source_plan(category)
         options = _options_from_profile(profile, ctx.intake, ctx.option.regions)
+        options = _dedupe_lodging_options(
+            [
+                *options,
+                *_curated_list_lodging_options(
+                    ctx.intake,
+                    ctx.option.regions,
+                    profile_title=getattr(profile, "title", ""),
+                    rank_offset=len(options),
+                ),
+            ]
+        )
+        for index, option in enumerate(options, start=1):
+            option.rank = index
         requires_three_beds = (
             ctx.intake.party.total_travelers >= 5 or ctx.intake.party.children >= 2
         )
@@ -77,14 +98,7 @@ class LodgingShortlistService:
             options = live_options + options
             for index, option in enumerate(options, start=1):
                 option.rank = index
-        recommended = next(
-            (
-                option.option_id
-                for option in options
-                if option.recommendation_grade == RecommendationGrade.GOOD
-            ),
-            options[0].option_id if options else None,
-        )
+        recommended = _recommended_lodging_option_id(options)
         state = ResearchShortlistState(
             trip_id=trip_id,
             category=ShortlistCategory.LODGING,
@@ -100,6 +114,7 @@ class LodgingShortlistService:
                 "location before optimizing price. Queen-bed compromises remain conditional."
             ),
             warnings=[
+                "Airbnb, VRBO, and boutique-hotel list rows are discovery inputs only; Trippy must promote exact properties only after reviewing source evidence, dates, beds, price, location, cancellation, and access.",
                 (
                     "Exact room availability, king-bed signal, cancellation, and location/access must be verified live."
                     if not requires_three_beds
@@ -148,12 +163,20 @@ class LodgingShortlistService:
             if advisor.night_plan:
                 structure["advisor_night_plan"] = advisor.night_plan
         LiveValidationService().validate_state(state, attempt_network=validate_live)
-        if deep_research:
+        fallback_research = bool(validate_live and not live_options and _serpapi_lodging_problem(live_notes))
+        if deep_research or fallback_research:
+            if fallback_research and not deep_research:
+                state.warnings.append(
+                    "SerpAPI did not return usable lodging rows, so Trippy ran Firecrawl/OpenClaw-capable source research against source links."
+                )
             SourceResearchService().research_state(state, adapter_mode=adapter_mode)
+        if deep_research:
+            _review_lodging_discovery_sources(state, ctx.intake)
+            state.recommended_option_id = _recommended_lodging_option_id(state.lodging_options)
         return self._store.save(state)
 
     def select_lodging(self, trip_id: str, option_id: str) -> ResearchShortlistState:
-        """Promote a lodging option as the current human-preferred planning choice."""
+        """Add a lodging option to the current human-preferred planning set."""
         ctx = ShortlistContext(
             trip_id,
             intake_service=self._intakes,
@@ -169,14 +192,23 @@ class LodgingShortlistService:
         for option in state.lodging_options:
             if option.option_id == option_id:
                 option.row_status = ShortlistRowStatus.APPROVED
-            elif option.row_status == ShortlistRowStatus.APPROVED:
-                option.row_status = ShortlistRowStatus.RESEARCHED
         structure = state.artifacts.setdefault(
             "lodging_structure",
             _lodging_structure_guidance(ctx.option, ctx.intake),
         )
         if isinstance(structure, dict):
+            selected_ids = [
+                str(value)
+                for value in structure.get("selected_lodging_option_ids", [])
+                if isinstance(value, str)
+            ]
+            legacy_id = structure.get("selected_lodging_option_id")
+            if isinstance(legacy_id, str) and legacy_id and legacy_id not in selected_ids:
+                selected_ids.append(legacy_id)
+            if option_id not in selected_ids:
+                selected_ids.append(option_id)
             structure["selected_lodging_option_id"] = option_id
+            structure["selected_lodging_option_ids"] = selected_ids
             structure["data_status"] = (
                 "manual_lodging_selection"
                 if structure.get("data_status") != "manual_override"
@@ -184,7 +216,66 @@ class LodgingShortlistService:
             )
         state.next_actions.insert(
             0,
-            "Selected lodging now drives stay-structure review, workspace timeline, and map planning.",
+            "Selected lodging now drives stay-structure review, workspace timeline, and map planning. Select additional stays when the trip needs a split, then allocate nights.",
+        )
+        return self._store.save(state)
+
+    def deselect_lodging(self, trip_id: str, option_id: str) -> ResearchShortlistState:
+        """Remove a lodging option from the current human-preferred planning set."""
+        ctx = ShortlistContext(
+            trip_id,
+            intake_service=self._intakes,
+            planner_service=self._planner,
+        )
+        state = self._store.load(trip_id, ShortlistCategory.LODGING)
+        if state is None:
+            state = self.build(trip_id, validate_live=False)
+        option_ids = {option.option_id for option in state.lodging_options}
+        if option_id not in option_ids:
+            raise ValueError(f"Lodging option {option_id!r} was not found for trip {trip_id!r}")
+
+        for option in state.lodging_options:
+            if option.option_id == option_id and option.row_status == ShortlistRowStatus.APPROVED:
+                option.row_status = ShortlistRowStatus.RESEARCHED
+
+        selected_ids = [
+            option.option_id
+            for option in state.lodging_options
+            if option.row_status == ShortlistRowStatus.APPROVED
+        ]
+        state.recommended_option_id = (
+            selected_ids[-1]
+            if selected_ids
+            else _recommended_lodging_option_id(state.lodging_options)
+        )
+
+        structure = state.artifacts.setdefault(
+            "lodging_structure",
+            _lodging_structure_guidance(ctx.option, ctx.intake),
+        )
+        if isinstance(structure, dict):
+            existing_selected_ids = [
+                str(value)
+                for value in structure.get("selected_lodging_option_ids", [])
+                if isinstance(value, str)
+            ]
+            selected_ids = [value for value in existing_selected_ids if value != option_id]
+            current_selected = structure.get("selected_lodging_option_id")
+            structure["selected_lodging_option_ids"] = selected_ids
+            structure["selected_lodging_option_id"] = (
+                current_selected
+                if isinstance(current_selected, str) and current_selected in selected_ids
+                else None
+            )
+            if selected_ids and not structure["selected_lodging_option_id"]:
+                structure["selected_lodging_option_id"] = selected_ids[-1]
+            for row in structure.get("night_plan", []):
+                if isinstance(row, dict) and row.get("lodging_option_id") == option_id:
+                    row.pop("lodging_option_id", None)
+
+        state.next_actions.insert(
+            0,
+            "Removed lodging from the selected stay set. Pick another stay or adjust the stay structure before continuing.",
         )
         return self._store.save(state)
 
@@ -422,7 +513,7 @@ def _options_from_profile(
                 bed_layout=(
                     "target 3+ beds; exact layout must be live-verified"
                     if requires_three_beds
-                    else "king bed strongly preferred; queen compromise needs a clear upside"
+                    else "bed layout not confirmed yet"
                 ),
                 adult_child_fit=(
                     f"Validate {party.adults} adult(s), {party.children} child(ren), "
@@ -471,6 +562,762 @@ def _options_from_profile(
     return options
 
 
+def _curated_list_lodging_options(
+    intake: TripIntake,
+    selected_regions: list[str],
+    *,
+    profile_title: str,
+    rank_offset: int = 0,
+) -> list[LodgingOption]:
+    regions = _lodging_search_regions(intake, selected_regions, profile_title)
+    options: list[LodgingOption] = []
+    rank = rank_offset
+    for region in regions:
+        for source, lodging_type in [
+            ("Google Search", "boutique hotel best-of list search"),
+            ("Airbnb", "Airbnb vacation rental best-of search"),
+            ("VRBO", "VRBO vacation rental best-of search"),
+        ]:
+            rank += 1
+            options.append(
+                _curated_list_lodging_option(
+                    intake,
+                    region=region,
+                    source=source,
+                    lodging_type=lodging_type,
+                    rank=rank,
+                )
+            )
+    return options
+
+
+def _lodging_search_regions(
+    intake: TripIntake,
+    selected_regions: list[str],
+    profile_title: str,
+) -> list[str]:
+    selected = [region for region in selected_regions if region.strip()]
+    candidates = selected or [
+        *(seed for seed in intake.destination_seeds if seed.strip()),
+        profile_title.strip(),
+        intake.trip_name.strip(),
+    ]
+    regions: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = " ".join(candidate.split())
+        if not normalized:
+            continue
+        key = normalized.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        regions.append(normalized)
+    return regions[:4]
+
+
+def _curated_list_lodging_option(
+    intake: TripIntake,
+    *,
+    region: str,
+    source: str,
+    lodging_type: str,
+    rank: int,
+) -> LodgingOption:
+    party = intake.party
+    traveler_count = party.total_travelers
+    requires_three_beds = traveler_count >= 5 or party.children >= 2
+    is_private = source in {"Airbnb", "VRBO"}
+    source_slug = source.lower().replace(".", "").replace(" ", "-")
+    if source == "Google Search":
+        query = _query_for_party(f"best boutique hotels {region} family rooms walkable", requires_three_beds)
+        direct_link = source_search_url("Google", query)
+        validation_links = {
+            "Best boutique hotel lists": source_search_url(
+                "Google", f"best boutique hotels {region} family rooms"
+            ),
+            "Booking.com": _lodging_source_url("Booking.com", query, intake),
+            "Tripadvisor": source_search_url("Tripadvisor", f"best boutique hotels {region}"),
+        }
+        name = f"{region} best boutique hotels list search"
+        room_layout = "best-of list search seed; choose exact hotel and room next"
+        bed_layout = (
+            "target family room or two-room setup; exact beds must be verified"
+            if requires_three_beds
+            else "target king room; exact bed must be verified"
+        )
+        bed_confidence = 0.2
+        fit_category = LodgingFitCategory.TECHNICAL
+        grade = RecommendationGrade.CONDITIONAL
+        comfort = 58
+        friction = 52
+        flags = [
+            "best-of list search seed; exact property still required",
+            "hotel bed layout not proven",
+        ]
+    else:
+        query = (
+            f"{region} 3 bedroom vacation rental family parking"
+            if requires_three_beds
+            else f"{region} vacation rental king bed parking"
+        )
+        direct_link = _lodging_source_url(source, query, intake)
+        validation_links = {
+            source: direct_link,
+            "Best vacation rental lists": source_search_url(
+                "Google", f"best {source} vacation rentals {region} family"
+            ),
+            "Tripadvisor": source_search_url(
+                "Tripadvisor", f"{region} vacation rentals family reviews"
+            ),
+        }
+        name = f"{region} best {source} vacation rentals search"
+        room_layout = "whole-home/unit list search seed; choose exact rental next"
+        bed_layout = (
+            "target 3+ beds; exact layout must be verified"
+            if requires_three_beds
+            else "target king bed or strong couple setup; exact bed must be verified"
+        )
+        bed_confidence = 0.3 if requires_three_beds else 0.22
+        fit_category = LodgingFitCategory.TECHNICAL
+        grade = RecommendationGrade.CONDITIONAL
+        comfort = 54
+        friction = 56
+        flags = [
+            "vacation-rental list search seed; exact property still required",
+            "bed layout not proven",
+            "parking/access practicality not proven",
+        ]
+    option_id = f"list-{source_slug}-lodging-{_slug(region)}"
+    return LodgingOption(
+        option_id=option_id,
+        rank=rank,
+        source=source,
+        name=name,
+        location_area=region,
+        island_or_region=region,
+        lodging_type=lodging_type,
+        room_layout=room_layout,
+        bed_layout=bed_layout,
+        adult_child_fit=(
+            f"Use list results to find candidates for {party.adults} adult(s), "
+            f"{party.children} child(ren), {traveler_count} traveler(s) total."
+        ),
+        traveler_roster_supported=None,
+        min_three_beds_satisfied=None,
+        king_bed_preference_satisfied=None,
+        family_of_five_fit=None,
+        separate_room_privacy_fit=True if is_private else None,
+        occupancy_fit=f"Search seed only; exact occupancy for {traveler_count} traveler(s) is not proven.",
+        comfort_fit=_comfort_fit(fit_category, party.summary()),
+        fit_category=fit_category,
+        bed_layout_confidence=bed_confidence,
+        current_availability_signal="list/direct source search required",
+        current_price_signal="live price required",
+        parking_practicality="not proven; filter for practical parking/loading access",
+        driving_practicality="validate road access, driveway/loading, and daily route fit",
+        walkability="validate map position against meals, groceries, activities, and transit",
+        cancellation_notes="not supplied; verify refund deadline before shortlisting exact property",
+        price_band="live verify; compare total stay cost including taxes/fees",
+        deep_link=direct_link,
+        validation_links=validation_links,
+        friction_score=friction,
+        family_comfort_score=comfort,
+        recommendation_grade=grade,
+        tradeoffs=[
+            "This row exists to force best-of list discovery into the lodging shortlist.",
+            "Promote only after an exact property proves beds, price, cancellation, location, and access.",
+        ],
+        friction_flags=flags,
+        confidence_notes=[
+            "Generated from the selected city/location so Airbnb, VRBO, vacation rentals, and boutique-hotel lists are always represented.",
+            "This is a source-list search row, not a verified property.",
+        ],
+        live_data_status=LiveDataStatus.SEARCH_LINK_ONLY,
+    )
+
+
+def _recommended_lodging_option_id(options: list[LodgingOption]) -> str | None:
+    vetted = [
+        option
+        for option in options
+        if option.live_data_status != LiveDataStatus.SEARCH_LINK_ONLY
+        and not option.option_id.startswith("list-")
+    ]
+    return next(
+        (
+            option.option_id
+            for option in vetted
+            if option.recommendation_grade == RecommendationGrade.GOOD
+        ),
+        vetted[0].option_id if vetted else None,
+    )
+
+
+def _review_lodging_discovery_sources(
+    state: ResearchShortlistState,
+    intake: TripIntake,
+    *,
+    max_candidates: int = 6,
+) -> None:
+    discovery_rows = [
+        option
+        for option in state.lodging_options
+        if option.option_id.startswith("list-")
+    ]
+    review_queries: list[str] = []
+    review_notes = [
+        "Discovery rows are reviewed into exact candidates only when a source result names a property/listing."
+    ]
+    review: dict[str, object] = {
+        "status": "skipped",
+        "started_at": datetime.utcnow().isoformat(),
+        "source_rows": len(discovery_rows),
+        "queries": review_queries,
+        "accepted_candidates": [],
+        "rejected_candidates": [],
+        "notes": review_notes,
+    }
+    state.artifacts["lodging_discovery_review"] = review
+    if not discovery_rows:
+        review_notes.append("No lodging discovery source rows were available.")
+        return
+    firecrawl = FirecrawlService()
+    availability = firecrawl.availability()
+    if not availability.available:
+        review["status"] = "blocked"
+        review_notes.append(availability.reason)
+        state.warnings.append(
+            "Lodging discovery review could not fetch list/search evidence because Firecrawl is unavailable."
+        )
+        return
+
+    existing_keys = {_lodging_candidate_key(option.name, option.deep_link) for option in state.lodging_options}
+    candidates: list[tuple[LodgingOption, int]] = []
+    rejected: list[dict[str, str]] = []
+    for source_row in discovery_rows[:12]:
+        query = _discovery_review_query(source_row, intake)
+        review_queries.append(query)
+        rows = firecrawl.research(query, limit=4)
+        for row in rows:
+            for candidate in _exact_lodging_candidates_from_result(
+                row,
+                source_row,
+                intake,
+                state,
+            ):
+                key = _lodging_candidate_key(candidate.name, candidate.deep_link)
+                if key in existing_keys:
+                    rejected.append({"name": candidate.name, "reason": "duplicate candidate"})
+                    continue
+                score = _reviewed_candidate_priority(candidate)
+                if score <= 0:
+                    rejected.append({"name": candidate.name, "reason": "insufficient exact lodging evidence"})
+                    continue
+                existing_keys.add(key)
+                candidates.append((candidate, score))
+
+    candidates.sort(key=lambda item: item[1], reverse=True)
+    next_rank = max((option.rank for option in state.lodging_options), default=0) + 1
+    accepted = [candidate for candidate, _score in candidates[:max_candidates]]
+    for candidate in accepted:
+        candidate.rank = next_rank
+        next_rank += 1
+        state.lodging_options.append(candidate)
+    state.lodging_options.sort(key=lambda option: option.rank)
+    review["status"] = "completed"
+    review["ended_at"] = datetime.utcnow().isoformat()
+    review["accepted_candidates"] = [
+        {
+            "option_id": candidate.option_id,
+            "name": candidate.name,
+            "source": candidate.source,
+            "grade": candidate.recommendation_grade.value,
+            "fit_category": candidate.fit_category.value,
+        }
+        for candidate in accepted
+    ]
+    review["rejected_candidates"] = rejected[:20]
+    if accepted:
+        state.next_actions.insert(
+            0,
+            "Review the exact lodging candidates Trippy promoted from boutique-hotel/Airbnb/VRBO discovery, then open only the strongest few for final date/price verification.",
+        )
+    else:
+        state.warnings.append(
+            "Lodging discovery reviewed the source lists/searches but did not find enough exact property evidence to promote candidates."
+        )
+
+
+def _discovery_review_query(source_row: LodgingOption, intake: TripIntake) -> str:
+    checkin, checkout = _booking_dates(intake)
+    date_text = f"{checkin} to {checkout}" if checkin and checkout else intake.travel_window.display()
+    party_text = f"{max(1, intake.party.total_travelers or intake.travelers or 1)} travelers"
+    if source_row.source == "Airbnb":
+        source_text = "Airbnb vacation rental listing"
+    elif source_row.source == "VRBO":
+        source_text = "VRBO vacation rental listing"
+    else:
+        source_text = "best boutique hotels family rooms"
+    return " ".join(
+        part
+        for part in [
+            source_text,
+            source_row.location_area,
+            date_text,
+            party_text,
+            "3 bedrooms parking cancellation reviews",
+        ]
+        if part
+    )
+
+
+def _exact_lodging_candidates_from_result(
+    row: WebResearchResult,
+    source_row: LodgingOption,
+    intake: TripIntake,
+    state: ResearchShortlistState,
+) -> list[LodgingOption]:
+    names = _property_name_candidates(row, source_row)
+    candidates: list[LodgingOption] = []
+    for index, name in enumerate(names[:4], start=1):
+        option = _reviewed_lodging_candidate_option(
+            row,
+            source_row,
+            intake,
+            state,
+            name=name,
+            index=index,
+        )
+        if option is not None:
+            candidates.append(option)
+    return candidates
+
+
+def _property_name_candidates(row: WebResearchResult, source_row: LodgingOption) -> list[str]:
+    candidates: list[str] = []
+    title = _clean_property_name(row.source_title)
+    if title and not _is_generic_lodging_result_title(title, source_row):
+        candidates.append(title)
+    text = row.raw_markdown_excerpt or str(row.structured_data.get("description") or "")
+    for line in text.splitlines():
+        stripped = line.strip()
+        match = re.match(r"^(?:#{1,4}\s*)?(?:\d+[\).]\s*)?(?:\*\*)?([^#\n\[][^:\n]{4,90})(?:\*\*)?", stripped)
+        if not match:
+            link_match = re.search(r"\[([^\]]{4,90})\]\((https?://[^)]+)\)", stripped)
+            if link_match:
+                candidates.append(_clean_property_name(link_match.group(1)))
+            continue
+        value = _clean_property_name(match.group(1))
+        if value and not _is_generic_lodging_result_title(value, source_row):
+            candidates.append(value)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = re.sub(r"[^a-z0-9]+", "", candidate.lower())
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(candidate)
+    return deduped[:6]
+
+
+def _reviewed_lodging_candidate_option(
+    row: WebResearchResult,
+    source_row: LodgingOption,
+    intake: TripIntake,
+    state: ResearchShortlistState,
+    *,
+    name: str,
+    index: int,
+) -> LodgingOption | None:
+    evidence_text = " ".join(
+        [
+            row.source_title,
+            str(row.structured_data.get("description") or ""),
+            row.raw_markdown_excerpt,
+        ]
+    )
+    lower = evidence_text.lower()
+    if _has_unavailable_lodging_signal(lower):
+        return None
+    is_private = source_row.source in {"Airbnb", "VRBO"} or any(
+        token in lower for token in ["vacation rental", "villa", "condo", "apartment", "entire home"]
+    )
+    party = intake.party
+    traveler_count = party.total_travelers
+    requires_three_beds = traveler_count >= 5 or party.children >= 2
+    three_beds = _mentions_three_beds(lower)
+    king = True if "king" in lower else False if "queen" in lower and "king" not in lower else None
+    price = _price_signal(evidence_text)
+    availability = _reviewed_availability_signal(lower, intake)
+    parking = "parking mentioned; verify exact access and fees" if "parking" in lower else "not proven"
+    cancellation = _reviewed_cancellation_signal(lower)
+    fit_category = _reviewed_fit_category(
+        is_private=is_private,
+        requires_three_beds=requires_three_beds,
+        three_beds=three_beds,
+        availability=availability,
+        price=price,
+    )
+    grade = (
+        RecommendationGrade.GOOD
+        if fit_category in {LodgingFitCategory.PREFERRED, LodgingFitCategory.COMFORTABLE}
+        and "not date-verified" not in availability
+        else RecommendationGrade.CONDITIONAL
+    )
+    flags = _reviewed_lodging_flags(
+        requires_three_beds=requires_three_beds,
+        three_beds=three_beds,
+        availability=availability,
+        price=price,
+        parking=parking,
+        cancellation=cancellation,
+    )
+    source_name = source_row.source if source_row.source in {"Airbnb", "VRBO"} else _source_label_from_url(row.source_url)
+    option_id = _reviewed_lodging_option_id(state, name, source_name, index)
+    evidence_url = row.source_url or source_row.deep_link
+    source_type = SourceType.DIRECT_LISTING if _looks_like_direct_lodging_url(evidence_url) else SourceType.VALIDATION
+    confidence = _reviewed_candidate_confidence(
+        name=name,
+        price=price,
+        availability=availability,
+        three_beds=three_beds,
+        parking=parking,
+        evidence_url=evidence_url,
+    )
+    return LodgingOption(
+        option_id=option_id,
+        rank=9999,
+        source=source_name,
+        name=name,
+        location_area=source_row.location_area,
+        island_or_region=source_row.island_or_region,
+        lodging_type="private rental candidate" if is_private else "boutique hotel candidate",
+        room_layout="exact candidate promoted from reviewed lodging discovery evidence",
+        bed_layout=(
+            "3+ bed/bedroom evidence visible"
+            if three_beds
+            else "bed layout not proven from discovery evidence"
+        ),
+        adult_child_fit=(
+            f"Reviewed for {party.adults} adult(s), {party.children} child(ren), "
+            f"{traveler_count} traveler(s) total."
+        ),
+        traveler_roster_supported=True if three_beds or not requires_three_beds else None,
+        min_three_beds_satisfied=True if three_beds else None,
+        king_bed_preference_satisfied=king,
+        family_of_five_fit=True if requires_three_beds and three_beds else None,
+        separate_room_privacy_fit=True if is_private else None,
+        occupancy_fit=(
+            f"Strong candidate for {traveler_count} travelers only if source confirms occupancy on final dated listing."
+            if three_beds or not requires_three_beds
+            else f"Not enough bed/occupancy proof yet for {traveler_count} travelers."
+        ),
+        comfort_fit=_comfort_fit(fit_category, party.summary()),
+        fit_category=fit_category,
+        bed_layout_confidence=0.74 if three_beds else 0.28,
+        current_availability_signal=availability,
+        current_price_signal=price or "price not proven from discovery evidence",
+        parking_practicality=parking,
+        driving_practicality="validate route, road access, luggage loading, and daily driving burden",
+        walkability="validate exact map position against meals, groceries, activities, and transit",
+        cancellation_notes=cancellation,
+        price_band=price or "live verify total including taxes/fees",
+        deep_link=evidence_url,
+        validation_links={
+            source_name: evidence_url,
+            "Tripadvisor": source_search_url("Tripadvisor", f"{name} {source_row.location_area} reviews"),
+            "Booking.com": _lodging_source_url("Booking.com", f"{name} {source_row.location_area}", intake),
+        },
+        friction_score=min(90, 18 + len(flags) * 8),
+        family_comfort_score=max(35, 86 - len(flags) * 7 + (6 if is_private else 0)),
+        recommendation_grade=grade,
+        tradeoffs=[
+            "Promoted from a reviewed lodging source/list result, not from a blind search row.",
+            "Final handoff still requires opening the dated source page to confirm inventory, taxes/fees, cancellation, and exact bed setup.",
+        ],
+        friction_flags=flags,
+        confidence_notes=[
+            f"Evidence source: {row.source_title or row.source_domain or evidence_url}",
+            "Trippy reviewed source text for exact-property fit signals before adding this row.",
+        ],
+        live_data_status=LiveDataStatus.PARTIAL,
+        row_status=ShortlistRowStatus.RESEARCHED,
+        validation=SourceValidation(
+            source_name=source_name,
+            source_type=source_type,
+            verified_at=datetime.utcnow(),
+            freshness_status=FreshnessStatus.CURRENT,
+            verification_status=VerificationStatus.PARTIAL,
+            availability_status=(
+                AvailabilityStatus.UNAVAILABLE_SIGNAL
+                if "unavailable" in availability
+                else AvailabilityStatus.AVAILABILITY_SIGNAL
+                if "not date-verified" not in availability
+                else AvailabilityStatus.UNKNOWN
+            ),
+            price_status=PriceStatus.LIVE_SIGNAL if price else PriceStatus.UNKNOWN,
+            confidence=confidence,
+            evidence_url=evidence_url,
+            adapter_used="firecrawl/lodging-discovery-review",
+            extracted_fields={
+                "candidate_name": name,
+                "price_signal": price,
+                "availability_signal": availability,
+                "min_three_beds_satisfied": three_beds,
+                "king_bed_preference_satisfied": king,
+                "parking_signal": parking,
+                "cancellation_signal": cancellation,
+                "source_list_option_id": source_row.option_id,
+            },
+            notes=[
+                "Exact candidate promoted from lodging discovery review.",
+                "Treat as ready for human comparison, not purchase, until the dated source page is opened.",
+            ],
+            missing_fields=_reviewed_missing_fields(
+                price=price,
+                availability=availability,
+                three_beds=three_beds,
+                requires_three_beds=requires_three_beds,
+                cancellation=cancellation,
+            ),
+        ),
+    )
+
+
+def _reviewed_candidate_priority(option: LodgingOption) -> int:
+    if option.validation.availability_status == AvailabilityStatus.UNAVAILABLE_SIGNAL:
+        return 0
+    score = option.family_comfort_score - option.friction_score
+    if option.min_three_beds_satisfied is True:
+        score += 22
+    if option.current_price_signal and "not proven" not in option.current_price_signal:
+        score += 8
+    if option.current_availability_signal and "not date-verified" not in option.current_availability_signal:
+        score += 10
+    if option.parking_practicality.startswith("parking mentioned"):
+        score += 5
+    if option.validation.source_type == SourceType.DIRECT_LISTING:
+        score += 6
+    return score
+
+
+def _reviewed_lodging_flags(
+    *,
+    requires_three_beds: bool,
+    three_beds: bool,
+    availability: str,
+    price: str,
+    parking: str,
+    cancellation: str,
+) -> list[str]:
+    flags = []
+    if requires_three_beds and not three_beds:
+        flags.append("3+ beds not proven for family roster")
+    if "not date-verified" in availability:
+        flags.append("date-specific availability not proven")
+    if not price:
+        flags.append("total price not proven")
+    if parking == "not proven":
+        flags.append("parking/access practicality not proven")
+    if cancellation == "cancellation terms not proven":
+        flags.append("cancellation terms not proven")
+    return flags
+
+
+def _reviewed_fit_category(
+    *,
+    is_private: bool,
+    requires_three_beds: bool,
+    three_beds: bool,
+    availability: str,
+    price: str,
+) -> LodgingFitCategory:
+    if requires_three_beds and not three_beds:
+        return LodgingFitCategory.TECHNICAL
+    if "unavailable" in availability:
+        return LodgingFitCategory.WEAK
+    if three_beds and price and "not date-verified" not in availability:
+        return LodgingFitCategory.PREFERRED if is_private else LodgingFitCategory.COMFORTABLE
+    if three_beds:
+        return LodgingFitCategory.COMFORTABLE
+    return LodgingFitCategory.TECHNICAL
+
+
+def _reviewed_availability_signal(lower: str, intake: TripIntake) -> str:
+    if _has_unavailable_lodging_signal(lower):
+        return "unavailable/no-inventory signal visible"
+    checkin, checkout = _booking_dates(intake)
+    if checkin and checkout and checkin in lower and checkout in lower:
+        return f"date-specific availability signal visible for {checkin} to {checkout}; final inventory still needs source review"
+    if any(term in lower for term in ["available", "reserve", "book now", "check availability"]):
+        return "availability/search-result signal visible; final inventory still needs dated source review"
+    return "not date-verified; open dated source link before recommending"
+
+
+def _reviewed_cancellation_signal(lower: str) -> str:
+    if "free cancellation" in lower:
+        return "free cancellation mentioned; verify deadline"
+    if "refundable" in lower:
+        return "refundable terms mentioned; verify deadline and exclusions"
+    if "cancellation" in lower or "cancel" in lower:
+        return "cancellation terms mentioned; verify exact deadline"
+    return "cancellation terms not proven"
+
+
+def _reviewed_missing_fields(
+    *,
+    price: str,
+    availability: str,
+    three_beds: bool,
+    requires_three_beds: bool,
+    cancellation: str,
+) -> list[str]:
+    missing = []
+    if "not date-verified" in availability:
+        missing.append("exact_availability")
+    if not price:
+        missing.append("final_total_price")
+    if requires_three_beds and not three_beds:
+        missing.append("min_three_beds_satisfied")
+    if cancellation == "cancellation terms not proven":
+        missing.append("cancellation_terms")
+    return missing
+
+
+def _reviewed_candidate_confidence(
+    *,
+    name: str,
+    price: str,
+    availability: str,
+    three_beds: bool,
+    parking: str,
+    evidence_url: str,
+) -> float:
+    score = 0.35
+    if name:
+        score += 0.12
+    if evidence_url:
+        score += 0.1
+    if price:
+        score += 0.12
+    if "not date-verified" not in availability:
+        score += 0.12
+    if three_beds:
+        score += 0.12
+    if parking.startswith("parking mentioned"):
+        score += 0.05
+    return min(0.88, score)
+
+
+def _reviewed_lodging_option_id(
+    state: ResearchShortlistState,
+    name: str,
+    source_name: str,
+    index: int,
+) -> str:
+    base = f"reviewed-lodging-{_slug(source_name)}-{_slug(name)}"
+    existing = {option.option_id for option in state.lodging_options}
+    if base not in existing:
+        return base
+    suffix = index + 1
+    while f"{base}-{suffix}" in existing:
+        suffix += 1
+    return f"{base}-{suffix}"
+
+
+def _lodging_candidate_key(name: str, link: str) -> str:
+    host = urlparse(link).netloc.lower()
+    normalized_name = re.sub(r"[^a-z0-9]+", "", name.lower())
+    return f"{normalized_name}:{host}"
+
+
+def _clean_property_name(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value.replace("|", " - ")).strip(" -*#")
+    cleaned = re.sub(
+        r"\s+-\s+(?:official site|booking\.com|airbnb|vrbo|tripadvisor|expedia).*$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned[:90]
+
+
+def _is_generic_lodging_result_title(value: str, source_row: LodgingOption) -> bool:
+    lower = value.lower()
+    generic_terms = [
+        "search results",
+        "best hotels",
+        "best boutique hotels",
+        "vacation rentals",
+        "airbnb",
+        "vrbo",
+        "booking.com",
+        "tripadvisor",
+        "things to do",
+        "hotels in",
+    ]
+    if any(term == lower or lower.startswith(term) for term in generic_terms):
+        return True
+    if source_row.location_area.lower() == lower:
+        return True
+    return len(value.split()) > 12
+
+
+def _looks_like_direct_lodging_url(url: str) -> bool:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    path = parsed.path.lower()
+    if "airbnb." in host and "/rooms/" in path:
+        return True
+    if "vrbo." in host and ("/vacation-rental/" in path or "/property/" in path):
+        return True
+    return bool("booking." in host and "/hotel/" in path)
+
+
+def _source_label_from_url(url: str) -> str:
+    host = urlparse(url).netloc.lower()
+    if "airbnb" in host:
+        return "Airbnb"
+    if "vrbo" in host:
+        return "VRBO"
+    if "booking" in host:
+        return "Booking.com"
+    if "tripadvisor" in host:
+        return "Tripadvisor"
+    return host.replace("www.", "") or "Reviewed web source"
+
+
+def _has_unavailable_lodging_signal(lower: str) -> bool:
+    return any(
+        term in lower
+        for term in [
+            "sold out",
+            "not available",
+            "unavailable",
+            "no availability",
+            "no rooms available",
+            "no properties available",
+        ]
+    )
+
+
+def _dedupe_lodging_options(options: list[LodgingOption]) -> list[LodgingOption]:
+    deduped: list[LodgingOption] = []
+    seen_ids: set[str] = set()
+    for option in options:
+        base_id = option.option_id
+        candidate_id = base_id
+        suffix = 2
+        while candidate_id in seen_ids:
+            candidate_id = f"{base_id}-{suffix}"
+            suffix += 1
+        option.option_id = candidate_id
+        seen_ids.add(candidate_id)
+        deduped.append(option)
+    return deduped
+
+
 def _query_for_party(query: str, requires_three_beds: bool) -> str:
     if requires_three_beds:
         return query
@@ -491,6 +1338,12 @@ def _query_for_party(query: str, requires_three_beds: bool) -> str:
 def _lodging_source_url(source: str, query: str, intake: TripIntake) -> str:
     if source == "Booking.com":
         return _booking_url(query, intake)
+    if source == "Airbnb":
+        return _airbnb_url(query, intake)
+    if source == "VRBO":
+        return _vrbo_url(query, intake)
+    if source in {"Tripadvisor", "Trivago"}:
+        return _dated_lodging_search_url(source, query, intake)
     return source_search_url(source, query)
 
 
@@ -543,6 +1396,40 @@ def _booking_dates(intake: TripIntake) -> tuple[str, str]:
     if end <= start:
         end = start + timedelta(days=1)
     return start.isoformat(), end.isoformat()
+
+
+def _airbnb_url(query: str, intake: TripIntake) -> str:
+    checkin, checkout = _booking_dates(intake)
+    params: dict[str, object] = {
+        "adults": max(1, intake.party.adults or intake.party.total_travelers or 1),
+        "children": max(0, intake.party.children or 0),
+        "currency": "CAD",
+    }
+    if checkin and checkout:
+        params["checkin"] = checkin
+        params["checkout"] = checkout
+    return f"https://www.airbnb.ca/s/{quote_plus(query)}/homes?{urlencode(params)}"
+
+
+def _vrbo_url(query: str, intake: TripIntake) -> str:
+    checkin, checkout = _booking_dates(intake)
+    params: dict[str, object] = {
+        "adults": max(1, intake.party.adults or intake.party.total_travelers or 1),
+        "children": max(0, intake.party.children or 0),
+    }
+    if checkin and checkout:
+        params["startDate"] = checkin
+        params["endDate"] = checkout
+    return f"https://www.vrbo.com/search/keywords:{quote_plus(query)}?{urlencode(params)}"
+
+
+def _dated_lodging_search_url(source: str, query: str, intake: TripIntake) -> str:
+    checkin, checkout = _booking_dates(intake)
+    details = [query]
+    if checkin and checkout:
+        details.append(f"{checkin} to {checkout}")
+    details.append(f"{max(1, intake.party.total_travelers or intake.travelers or 1)} travelers")
+    return source_search_url(source, " ".join(details))
 
 
 def _booking_child_ages(intake: TripIntake) -> list[int]:
@@ -1023,7 +1910,7 @@ def _stay_region_search_option(
         bed_layout=(
             "target 3+ beds; exact layout must be live-verified"
             if requires_three_beds
-            else "king bed strongly preferred; exact layout must be verified"
+            else "bed layout not confirmed yet"
         ),
         adult_child_fit=(
             f"Validate {party.adults} adult(s), {party.children} child(ren), "
@@ -1252,16 +2139,25 @@ def _mentions_three_beds(text: str) -> bool:
             "three bed",
             "3-bedroom",
             "3 bedroom",
+            "3 bedrooms",
             "3br",
             "4 bed",
             "4-bedroom",
             "4 bedroom",
+            "4 bedrooms",
             "4br",
         ]
     )
 
 
 def _price_signal(notes: str) -> str:
+    match = re.search(
+        r"(?:(?:CAD|USD|EUR|CA\$|C\$|US\$|\$|€)\s?[\d][\d,]*(?:\.\d{2})?(?:\s?(?:/night|per night|night|total|pp|per person))?)",
+        notes,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return match.group(0).strip()
     tokens = [token.strip(",.;") for token in notes.replace("\n", " ").split()]
     for index, token in enumerate(tokens):
         upper = token.upper()
@@ -1346,6 +2242,20 @@ def _serpapi_live_lodging(
         requires_three_beds=requires_three_beds,
     )
     return options, notes
+
+
+def _serpapi_lodging_problem(notes: list[str]) -> bool:
+    text = " ".join(notes).lower()
+    return any(
+        marker in text
+        for marker in (
+            "serpapi_key is not configured",
+            "serpapi request failed",
+            "serpapi returned error",
+            "returned no properties",
+            "returned no payload",
+        )
+    )
 
 
 def _serpapi_lodging_dates(ctx: ShortlistContext) -> tuple[date, date]:

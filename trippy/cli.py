@@ -628,16 +628,21 @@ def trip_plan_flights(
 def trip_plan_select_flight(
     trip_id: str = typer.Option(..., "--trip-id", help="Trip intake ID"),
     option_id: str = typer.Option(..., "--option-id", help="Flight option ID to use for planning"),
+    selection_kind: str = typer.Option("outbound", "--selection-kind", help="Flight role: outbound or return"),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
 ) -> None:
-    """Select a flight option so timing can drive workspace and timeline planning."""
+    """Select an outbound or return flight option so timing can drive planning."""
     from trippy.services.flight_shortlist import FlightShortlistService
 
-    state = FlightShortlistService().select_flight(trip_id, option_id)
+    state = FlightShortlistService().select_flight(
+        trip_id,
+        option_id,
+        selection_kind=selection_kind,
+    )
     _run_shortlist_command(
         trip_id=trip_id,
         workflow_name="trip-plan-select-flight",
-        summary=f"Selected flight {option_id}",
+        summary=f"Selected {selection_kind} flight {option_id}",
         state=state,
         propose_learning=False,
         json_output=json_output,

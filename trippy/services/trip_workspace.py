@@ -365,7 +365,7 @@ class TripWorkspaceService:
                 headers=[
                     "Rank",
                     "Status",
-                    "Recommended",
+                    "Planning Role",
                     "Recommendation",
                     "Airline",
                     "Flight Numbers",
@@ -935,6 +935,7 @@ def _overview_rows(
     packet: TripPacketState | None = None,
 ) -> list[list[Any]]:
     best_flight = _recommended_option(shortlists.get("flights"))
+    selected_flights = _flight_selection_context(shortlists.get("flights"))
     best_lodging = _recommended_option(shortlists.get("lodging"))
     best_car = _recommended_option(shortlists.get("cars"))
     activities = _top_options(shortlists.get("activities"), limit=3)
@@ -963,6 +964,8 @@ def _overview_rows(
         ["Crowd Tolerance", intake.crowd_tolerance.value],
         ["Food Priority", intake.food_priority.value],
         ["Best Flight", _option_summary(best_flight)],
+        ["Selected Departure Flight", selected_flights.get("outbound", "")],
+        ["Selected Return Flight", selected_flights.get("return", "")],
         ["Best Flight Rationale", getattr(best_flight, "recommendation_rationale", "")],
         ["Best Flight Date Fit", getattr(best_flight, "date_viability_signal", "")],
         ["Best Lodging", _option_summary(best_lodging)],
@@ -978,12 +981,20 @@ def _overview_rows(
 def _flight_rows(state: Any | None) -> list[list[Any]]:
     rows = []
     recommended_id = getattr(state, "recommended_option_id", None)
+    selection = getattr(state, "artifacts", {}).get("flight_selection", {}) if state else {}
+    outbound_id = selection.get("selected_outbound_option_id")
+    return_id = selection.get("selected_return_option_id")
     for option in getattr(state, "flight_options", []):
+        roles = []
+        if option.option_id == outbound_id:
+            roles.append("departure")
+        if option.option_id == return_id:
+            roles.append("return")
         rows.append(
             [
                 option.rank,
                 option.row_status.value,
-                _yes_no(option.option_id == recommended_id),
+                " + ".join(roles) or _yes_no(option.option_id == recommended_id),
                 option.recommendation_label,
                 option.airline,
                 " + ".join(getattr(option, "flight_numbers", [])),
@@ -1129,6 +1140,19 @@ def _stay_plan_rows(option: TripPlanOption, lodging_state: Any | None) -> list[l
             ]
         )
     return rows
+
+
+def _flight_selection_context(state: Any | None) -> dict[str, str]:
+    if state is None:
+        return {}
+    selection = getattr(state, "artifacts", {}).get("flight_selection", {})
+    outbound_id = selection.get("selected_outbound_option_id")
+    return_id = selection.get("selected_return_option_id")
+    options = {getattr(option, "option_id", ""): option for option in getattr(state, "flight_options", [])}
+    return {
+        "outbound": _option_summary(options.get(outbound_id)) if outbound_id else "",
+        "return": _option_summary(options.get(return_id)) if return_id else "",
+    }
 
 
 def _lodging_structure(lodging_state: Any | None) -> dict[str, Any]:

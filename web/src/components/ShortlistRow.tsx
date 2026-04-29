@@ -49,19 +49,26 @@ export function deriveLiveBanner(
   options: Array<{ live_data_status?: string }>,
   category: "flights" | "lodging" | "cars" | "activities",
 ): { title: string; detail: string } | null {
+  if (options.length === 0 && warnings.length === 0) return null;
   const hasLive = options.some(
     (o) => o.live_data_status === "live_verified" || o.live_data_status === "live_signal" || o.live_data_status === "partial",
   );
   if (hasLive) return null;
-  const provider = warnings.find((w) => /serpapi|duffel|openclaw|playwright|live/i.test(w));
+  const provider = warnings.find((w) => /serpapi|duffel|openclaw|playwright|firecrawl/i.test(w));
+  const missingProvider = warnings.some((w) => /not configured|missing|unavailable/i.test(w));
   const labels: Record<typeof category, string> = {
     flights: "flight",
     lodging: "lodging",
     cars: "car",
     activities: "activity",
   };
+  const title = missingProvider
+    ? `No live ${labels[category]} provider connected — rows are search handoffs.`
+    : provider
+      ? `No live ${labels[category]} rows returned — showing search handoffs.`
+      : `No live ${labels[category]} rows in this shortlist — showing search handoffs.`;
   return {
-    title: `No live ${labels[category]} provider connected — rows are search handoffs.`,
+    title,
     detail:
       provider ||
       "Set SERPAPI_KEY (and optionally DUFFEL_ACCESS_TOKEN for flights) in .env, then click Re-research.",

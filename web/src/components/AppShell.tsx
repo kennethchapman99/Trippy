@@ -1,13 +1,10 @@
 import { Link, NavLink, useLocation } from "react-router-dom";
-import { Home, Plus, Map, Settings, Sun, Palmtree, Layers, CalendarDays } from "lucide-react";
+import { Home, Plus, Settings, Sun, Palmtree } from "lucide-react";
 import logo from "@/assets/trippy-logo.png";
 
 const nav = [
   { to: "/", label: "Trips", icon: Home },
   { to: "/new", label: "New trip", icon: Plus },
-  { to: "/trip/shape", label: "Shape", icon: Layers },
-  { to: "/trip/timeline", label: "Timeline", icon: CalendarDays },
-  { to: "/map", label: "Map", icon: Map },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -17,9 +14,8 @@ export const AppShell = ({ children }: { children: React.ReactNode }) => {
     <div className="min-h-screen flex flex-col md:flex-row">
       {/* Sidebar */}
       <aside className="md:w-64 md:min-h-screen md:sticky md:top-0 bg-card/80 backdrop-blur border-b-2 md:border-b-0 md:border-r-2 border-foreground/10 flex md:flex-col items-center md:items-stretch p-4 md:p-6 gap-2 md:gap-1 z-40">
-        <Link to="/" className="flex items-center gap-2 md:mb-8 mr-auto md:mr-0">
-          <img src={logo} alt="Trippy" className="h-10 w-10 object-contain" />
-          <span className="font-[Fredoka] text-2xl font-bold text-gradient-sunset">Trippy</span>
+        <Link to="/" className="flex items-center md:mb-8 mr-auto md:mr-0">
+          <img src={logo} alt="Trippy" className="h-16 w-auto object-contain" />
         </Link>
         <nav className="flex md:flex-col gap-1 md:gap-2 ml-auto md:ml-0">
           {nav.map((n) => {

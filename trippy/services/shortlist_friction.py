@@ -217,11 +217,13 @@ def _lodging_flags(
             (_MEDIUM, "cancellation terms unclear — confirm refund window before booking")
         )
 
-    if "final_total_price" in missing or not (
+    has_price_signal = bool(
         extracted.get("total_price")
         or extracted.get("price_signal")
-        or getattr(option, "current_price_signal", "")
-    ):
+        or _usable_price_text(getattr(option, "price_band", ""))
+        or _usable_price_text(getattr(option, "current_price_signal", ""))
+    )
+    if not has_price_signal:
         flags.append((_HIGH, "final total price is not pinned in extracted observations"))
 
     if flight_state is not None:
@@ -423,6 +425,24 @@ def _hour_before(time_text: str, threshold_hour: int) -> bool:
 _LAYOVER_RE = re.compile(
     r"(?:(?P<hours>\d+)\s*h)?\s*(?:(?P<minutes>\d+)\s*m)?", re.IGNORECASE
 )
+
+
+def _usable_price_text(value: object) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    if any(
+        marker in text
+        for marker in (
+            "live price required",
+            "live verify",
+            "source price required",
+            "price not proven",
+            "open listing",
+        )
+    ):
+        return False
+    return any(char.isdigit() for char in text)
 
 
 def _layover_minutes_below(layover_text: str, threshold_minutes: int) -> bool:

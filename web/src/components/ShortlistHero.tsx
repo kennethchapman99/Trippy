@@ -1,26 +1,31 @@
 import { Link } from "react-router-dom";
-import { ArrowLeft, AlertTriangle } from "lucide-react";
-import type { TripIntake } from "@/lib/api";
+import { ArrowLeft, AlertTriangle, ChevronDown } from "lucide-react";
+import type { FlightOption, ShortlistState, TripIntake } from "@/lib/api";
 import { TripMap } from "@/components/TripMap";
 import { useGeocodes } from "@/lib/geocode";
 import { buildSeedPins, makeGeocodeLookup } from "@/lib/pinBuilders";
 
 export function ShortlistHero({
   intake,
+  shortlists,
   stageLabel,
   stageNumber,
   flagCount,
+  flagHref = "#friction-review",
   showMap = true,
 }: {
   intake: TripIntake | null | undefined;
+  shortlists?: ShortlistState[];
   stageLabel: string;
   stageNumber: number;
   flagCount?: number;
+  flagHref?: string;
   showMap?: boolean;
 }) {
   const tripName = intake?.trip_name ?? "Your trip";
   const seeds = intake?.destination_seeds ?? [];
   const destination = seeds.join(" · ");
+  const dateRange = deriveTripDateRangeLabel(intake, shortlists);
 
   const geocodeResults = useGeocodes(seeds);
   const lookup = makeGeocodeLookup(
@@ -40,10 +45,16 @@ export function ShortlistHero({
         <span className="px-3 py-1 rounded-full bg-card border-2 border-foreground/15 text-xs font-bold uppercase tracking-wider">
           Planning · Stage {stageNumber} of 8 — {stageLabel}
         </span>
-        {intake?.duration_days && (
-          <span className="px-3 py-1 rounded-full bg-sunshine/40 border-2 border-foreground/15 text-xs font-bold">
-            {intake.duration_days} days
+        {dateRange ? (
+          <span className="px-4 py-1.5 rounded-full bg-sunshine/45 border-2 border-foreground/15 text-base md:text-lg font-bold leading-none">
+            {dateRange}
           </span>
+        ) : (
+          intake?.duration_days && (
+            <span className="px-3 py-1 rounded-full bg-sunshine/40 border-2 border-foreground/15 text-xs font-bold">
+              {intake.duration_days} days
+            </span>
+          )
         )}
         {intake?.party && (
           <span className="px-3 py-1 rounded-full bg-coral/30 border-2 border-foreground/15 text-xs font-bold">
@@ -51,13 +62,18 @@ export function ShortlistHero({
           </span>
         )}
         {flagCount !== undefined && flagCount > 0 && (
-          <div className="ml-auto flex items-center gap-2 px-3 py-2 rounded-2xl bg-foreground text-background border-2 border-foreground shadow-sticker">
+          <a
+            href={flagHref}
+            className="ml-auto flex items-center gap-2 px-3 py-2 rounded-2xl bg-foreground text-background border-2 border-foreground shadow-sticker hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background transition-bounce"
+            aria-label={`Review ${flagCount} friction flag${flagCount !== 1 ? "s" : ""}`}
+          >
             <AlertTriangle className="h-4 w-4 text-sunshine" />
             <div className="text-xs leading-tight">
               <div className="font-bold">{flagCount} friction flag{flagCount !== 1 ? "s" : ""}</div>
-              <div className="opacity-70">Trippy is watching</div>
+              <div className="opacity-70">Review friction</div>
             </div>
-          </div>
+            <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+          </a>
         )}
       </div>
       <h1 className="font-[Fredoka] text-4xl md:text-5xl font-bold leading-[1.05] max-w-3xl">
@@ -79,4 +95,101 @@ export function ShortlistHero({
       )}
     </div>
   );
+}
+
+export function deriveTripDateRangeLabel(
+  intake: TripIntake | null | undefined,
+  shortlists?: ShortlistState[],
+): string {
+  const selectedFlight = findSelectedFlight(shortlists);
+  const selectedReturnFlight = findSelectedReturnFlight(shortlists);
+  const flightStart = parseIsoDateOnly(selectedFlight?.departure_date);
+  const flightEnd = flightStart
+    ? findExplicitReturnDate(selectedReturnFlight, flightStart) ??
+      (selectedFlight ? findFlightReturnDate(selectedFlight, flightStart) : null)
+    : null;
+  const intakeStart = parseIsoDateOnly(intake?.travel_window?.start_date);
+  const intakeEnd = parseIsoDateOnly(intake?.travel_window?.end_date);
+  const start = flightStart ?? intakeStart;
+  const end = flightEnd ?? intakeEnd;
+
+  if (start && end) return formatDateRange(start, end);
+  if (start) return formatSingleDate(start);
+  return "";
+}
+
+function findSelectedFlight(shortlists?: ShortlistState[]): FlightOption | null {
+  const flights = shortlists?.find((shortlist) => shortlist.category === "flights");
+  if (!flights) return null;
+  const outboundId = flights.artifacts?.flight_selection?.selected_outbound_option_id;
+  const outbound = flights.flight_options.find((option) => option.option_id === outboundId);
+  if (outbound) return outbound;
+  const selectedStatuses = new Set(["approved", "booked", "confirmed"]);
+  const recommended = flights.flight_options.find((option) => option.option_id === flights.recommended_option_id);
+  if (recommended && selectedStatuses.has(recommended.row_status)) return recommended;
+  return (
+    flights.flight_options.find((option) => selectedStatuses.has(option.row_status)) ??
+    null
+  );
+}
+
+function findSelectedReturnFlight(shortlists?: ShortlistState[]): FlightOption | null {
+  const flights = shortlists?.find((shortlist) => shortlist.category === "flights");
+  if (!flights) return null;
+  const returnId = flights.artifacts?.flight_selection?.selected_return_option_id;
+  return flights.flight_options.find((option) => option.option_id === returnId) ?? null;
+}
+
+function findExplicitReturnDate(option: FlightOption | null, start: Date): Date | null {
+  if (!option) return null;
+  const candidates = [option.departure_date, option.arrival_date]
+    .map(parseIsoDateOnly)
+    .filter((date): date is Date => Boolean(date))
+    .filter((date) => date.getTime() >= start.getTime());
+  if (candidates.length === 0) return null;
+  return candidates.sort((a, b) => b.getTime() - a.getTime())[0];
+}
+
+function findFlightReturnDate(option: FlightOption, start: Date): Date | null {
+  const candidates = [
+    ...isoDatesFromText(option.deep_link),
+    ...Object.values(option.comparison_links ?? {}).flatMap(isoDatesFromText),
+  ]
+    .map(parseIsoDateOnly)
+    .filter((date): date is Date => Boolean(date))
+    .filter((date) => date.getTime() >= start.getTime());
+
+  if (candidates.length === 0) return null;
+  return candidates.sort((a, b) => b.getTime() - a.getTime())[0];
+}
+
+function isoDatesFromText(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  return value.match(/\b\d{4}-\d{2}-\d{2}\b/g) ?? [];
+}
+
+function parseIsoDateOnly(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+}
+
+function formatDateRange(start: Date, end: Date): string {
+  if (start.getUTCFullYear() === end.getUTCFullYear()) {
+    return `${formatDatePart(start)} - ${formatDatePart(end)}, ${end.getUTCFullYear()}`;
+  }
+  return `${formatSingleDate(start)} - ${formatSingleDate(end)}`;
+}
+
+function formatSingleDate(date: Date): string {
+  return `${formatDatePart(date)}, ${date.getUTCFullYear()}`;
+}
+
+function formatDatePart(date: Date): string {
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
 }

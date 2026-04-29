@@ -38,6 +38,7 @@ from trippy.models.source_research import (
     SourceResearchResult,
     SourceResearchStatus,
 )
+from trippy.models.web_research import WebResearchResult
 from trippy.services.firecrawl import FirecrawlService
 from trippy.services.learning import LearningEventStore
 
@@ -208,18 +209,25 @@ class SourceResearchService:
             if not adapter.can_handle(request):
                 continue
             result = adapter.research(request, artifact_dir=artifact_dir)
-            if first_result is None:
+            if first_result is None or (
+                result.status in {SourceResearchStatus.SUCCESS, SourceResearchStatus.PARTIAL}
+                and result.confidence > first_result.confidence
+            ):
                 first_result = result
             if adapter.capability == SourceAdapterCapability.LINK:
+                if mode == SourceResearchMode.AUTO and first_result is not None:
+                    return first_result
                 return result
             if mode != SourceResearchMode.AUTO:
                 return result
-            if result.status in {SourceResearchStatus.SUCCESS, SourceResearchStatus.PARTIAL} and (
-                result.confidence >= 0.55 or not _missing_high_value_fields(result)
-            ):
+            if result.status == SourceResearchStatus.SUCCESS:
                 return result
+            if result.status == SourceResearchStatus.PARTIAL:
+                if not _missing_high_value_fields(result):
+                    return result
+                continue
             if adapter.capability == SourceAdapterCapability.OPENCLAW:
-                return result
+                return first_result
         if first_result is not None:
             return first_result
         return _result(
@@ -357,8 +365,7 @@ class FirecrawlResearchAdapter:
         query = (
             request.query or f"{request.candidate_name} {request.source_name} travel policy details"
         )
-        research_results = self._firecrawl.research(query)
-        first = research_results[0] if research_results else None
+        first, observations, evidence_refs = self._extract_first_useful_result(request, query)
         if first is None:
             return _result(
                 request,
@@ -370,24 +377,6 @@ class FirecrawlResearchAdapter:
             )
         text = first.raw_markdown_excerpt
         evidence_url = first.source_url or request.source_url
-        evidence_refs = [evidence_url] if evidence_url else []
-        observations: list[SourceObservation]
-        if request.category == ShortlistCategory.FLIGHTS.value:
-            observations = _extract_flight_observations(
-                text, request=request, evidence_refs=evidence_refs
-            )
-        elif request.category == ShortlistCategory.LODGING.value:
-            observations = _extract_lodging_observations(
-                text, request=request, evidence_refs=evidence_refs
-            )
-        elif request.category == ShortlistCategory.CARS.value:
-            observations = _extract_car_observations(
-                text, request=request, evidence_refs=evidence_refs
-            )
-        else:
-            observations = _extract_activity_observations(
-                text, request=request, evidence_refs=evidence_refs
-            )
         if not observations:
             observations = [
                 SourceObservation(field="raw_markdown_excerpt", value=text[:400], confidence=0.4)
@@ -422,6 +411,69 @@ class FirecrawlResearchAdapter:
             ],
             missing_fields=missing_fields,
         )
+
+    def _extract_first_useful_result(
+        self, request: SourceResearchRequest, query: str
+    ) -> tuple[WebResearchResult | None, list[SourceObservation], list[str]]:
+        if request.source_url:
+            scraped = self._firecrawl.scrape_url(request.source_url)
+            if scraped.raw_markdown_excerpt:
+                scraped.query = query
+                evidence_refs = [scraped.source_url or request.source_url]
+                observations = self._extract_observations(
+                    scraped.raw_markdown_excerpt,
+                    request=request,
+                    evidence_refs=evidence_refs,
+                )
+                if observations:
+                    return scraped, observations, evidence_refs
+                first = scraped
+                first_observations = observations
+                first_refs = evidence_refs
+            else:
+                first = None
+                first_observations = []
+                first_refs = []
+        else:
+            first = None
+            first_observations = []
+            first_refs = []
+
+        for candidate in self._firecrawl.research(query):
+            if first is None:
+                first = candidate
+            evidence_url = candidate.source_url or request.source_url
+            evidence_refs = [evidence_url] if evidence_url else []
+            observations = self._extract_observations(
+                candidate.raw_markdown_excerpt,
+                request=request,
+                evidence_refs=evidence_refs,
+            )
+            if first_observations == []:
+                first_observations = observations
+                first_refs = evidence_refs
+            if observations:
+                return candidate, observations, evidence_refs
+        return first, first_observations, first_refs
+
+    def _extract_observations(
+        self,
+        text: str,
+        *,
+        request: SourceResearchRequest,
+        evidence_refs: list[str],
+    ) -> list[SourceObservation]:
+        if request.category == ShortlistCategory.FLIGHTS.value:
+            return _extract_flight_observations(
+                text, request=request, evidence_refs=evidence_refs
+            )
+        if request.category == ShortlistCategory.LODGING.value:
+            return _extract_lodging_observations(
+                text, request=request, evidence_refs=evidence_refs
+            )
+        if request.category == ShortlistCategory.CARS.value:
+            return _extract_car_observations(text, request=request, evidence_refs=evidence_refs)
+        return _extract_activity_observations(text, request=request, evidence_refs=evidence_refs)
 
 
 class PlaywrightFlightAdapter:
@@ -836,6 +888,7 @@ class OpenClawResearchAdapter:
     ) -> None:
         self._command = command or config.OPENCLAW_COMMAND
         self._gateway_url = gateway_url or config.OPENCLAW_GATEWAY_URL
+        self._agent_id = config.OPENCLAW_AGENT_ID
         self._timeout = timeout_seconds or config.SOURCE_RESEARCH_TIMEOUT_SECONDS
         self._enabled = config.SOURCE_RESEARCH_OPENCLAW_ENABLED if enabled is None else enabled
         self._runner: OpenClawRunner = runner or subprocess.run
@@ -869,6 +922,9 @@ class OpenClawResearchAdapter:
                 [
                     self._command,
                     "agent",
+                    "--agent",
+                    self._agent_id,
+                    "--local",
                     "--json",
                     "--message",
                     prompt,
@@ -1079,14 +1135,17 @@ def _request_for_car_option(
 
 def _apply_lodging_observations(option: Any, result: SourceResearchResult, *, run_id: str) -> None:
     validation: SourceValidation = option.validation or SourceValidation()
+    previous_fields = _clean_lodging_extracted_fields(validation.extracted_fields)
+    _clear_invalid_lodging_bed_state(option)
     validation.adapter_used = result.adapter_used.value
     validation.research_run_id = run_id
     validation.verified_at = result.ended_at
     validation.evidence_url = result.request.source_url or validation.evidence_url
     validation.evidence_artifacts = result.evidence_artifacts
-    validation.extracted_fields = {
+    validation.extracted_fields = previous_fields | {
         observation.field: observation.value for observation in result.observations
     }
+    _preserve_lodging_price_evidence(option, validation)
     validation.notes = _dedupe_notes(
         [
             *validation.notes,
@@ -1094,7 +1153,10 @@ def _apply_lodging_observations(option: Any, result: SourceResearchResult, *, ru
             "Deep source research extracts evidence only; final inventory, fees, and booking terms still need human review before purchase.",
         ]
     )
-    validation.missing_fields = sorted(set(result.missing_fields))
+    missing_fields = set(result.missing_fields)
+    if validation.extracted_fields.get("price_signal") or validation.extracted_fields.get("total_price"):
+        missing_fields.discard("final_total_price")
+    validation.missing_fields = sorted(missing_fields)
     validation.confidence = max(validation.confidence, result.confidence)
     validation.price_status = (
         PriceStatus.LIVE_SIGNAL
@@ -1154,6 +1216,52 @@ def _apply_lodging_observations(option: Any, result: SourceResearchResult, *, ru
     option.bed_layout_confidence = max(option.bed_layout_confidence, min(result.confidence, 0.9))
     option.fit_category = _updated_fit_category(option)
     option.validation = validation
+
+
+def _preserve_lodging_price_evidence(option: Any, validation: SourceValidation) -> None:
+    """Keep earlier API/search price signals when a follow-up source page is sparse.
+
+    Booking.com and some hotel sites often return a challenge or shell page to Firecrawl/
+    browser fetches. That follow-up should not erase an existing SerpAPI/Google Hotels
+    rate signal, but the value remains a live signal rather than purchase-ready proof.
+    """
+    if validation.extracted_fields.get("price_signal") or validation.extracted_fields.get("total_price"):
+        return
+    for value in (
+        getattr(option, "price_band", ""),
+        getattr(option, "current_price_signal", ""),
+        str(getattr(option, "validation", SourceValidation()).extracted_fields.get("total_rate", "")),
+        str(getattr(option, "validation", SourceValidation()).extracted_fields.get("rate_per_night", "")),
+    ):
+        price = _extract_price(str(value))
+        if price and not _placeholder_price_text(str(value)):
+            validation.extracted_fields["price_signal"] = str(value).strip()
+            validation.notes = _dedupe_notes(
+                [
+                    *validation.notes,
+                    "Preserved prior live price signal because follow-up source research did not expose a new total.",
+                ]
+            )
+            return
+
+
+def _clean_lodging_extracted_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    cleaned = dict(fields)
+    bed_signal = cleaned.get("bed_layout_signal")
+    if isinstance(bed_signal, str) and _invalid_bed_layout_signal(bed_signal):
+        cleaned.pop("bed_layout_signal", None)
+        cleaned.pop("min_three_beds_satisfied", None)
+    return cleaned
+
+
+def _clear_invalid_lodging_bed_state(option: Any) -> None:
+    bed_layout = str(getattr(option, "bed_layout", "") or "")
+    if not _invalid_bed_layout_signal(bed_layout):
+        return
+    option.bed_layout = "bed layout not confirmed yet"
+    option.min_three_beds_satisfied = None
+    option.traveler_roster_supported = None
+    option.bed_layout_confidence = min(float(getattr(option, "bed_layout_confidence", 0.35)), 0.35)
 
 
 def _apply_flight_observations(option: Any, result: SourceResearchResult, *, run_id: str) -> None:
@@ -1392,6 +1500,11 @@ def _apply_car_observations(option: Any, result: SourceResearchResult, *, run_id
             if observations["vehicle_model_example"] not in option.vehicle_class
             else option.vehicle_class
         )
+    image_url = observations.get("image_url") or observations.get("photo_url")
+    if isinstance(image_url, str) and image_url.startswith("http"):
+        current_photos = list(getattr(option, "photo_urls", []) or [])
+        if image_url not in current_photos:
+            option.photo_urls = [image_url, *current_photos][:6]
     if isinstance(observations.get("seats"), int):
         option.seating_capacity = int(observations["seats"])
     if isinstance(observations.get("cancellation_signal"), str):
@@ -1806,6 +1919,9 @@ def _extract_car_observations(
         observations.append(
             _observation("vehicle_model_example", model, 0.56, request, evidence_refs)
         )
+    image_url = _image_url_signal(cleaned)
+    if image_url:
+        observations.append(_observation("image_url", image_url, 0.42, request, evidence_refs))
     cancellation = _cancellation_signal(lower)
     if cancellation:
         observations.append(
@@ -2089,6 +2205,11 @@ def _vehicle_model_signal(text: str, request: SourceResearchRequest) -> str:
     return ""
 
 
+def _image_url_signal(text: str) -> str:
+    match = re.search(r"https?://[^\s\"'<>]+\.(?:jpg|jpeg|png|webp)(?:\?[^\s\"'<>]+)?", text)
+    return match.group(0) if match else ""
+
+
 def _insurance_signal(lower: str) -> str:
     if "collision damage waiver" in lower or "cdw" in lower:
         return "CDW/collision damage waiver language visible; verify what is included and excluded"
@@ -2300,6 +2421,8 @@ def _bed_layout_signal(text: str) -> str:
     ]:
         for match in re.finditer(pattern, text, flags=re.IGNORECASE):
             value = match.group(0).strip()
+            if not _valid_bed_layout_snippet(value):
+                continue
             if value.lower() not in [snippet.lower() for snippet in snippets]:
                 snippets.append(value)
             if len(snippets) >= 4:
@@ -2307,6 +2430,34 @@ def _bed_layout_signal(text: str) -> str:
         if len(snippets) >= 4:
             break
     return "; ".join(snippets)
+
+
+def _valid_bed_layout_snippet(value: str) -> bool:
+    lower = value.lower()
+    match = re.match(r"(\d+)\s+bed(?:room)?s?$", lower)
+    return not (match and int(match.group(1)) > 8)
+
+
+def _invalid_bed_layout_signal(value: str) -> bool:
+    snippets = [snippet.strip() for snippet in value.split(";") if snippet.strip()]
+    if not snippets:
+        return False
+    return all(not _valid_bed_layout_snippet(snippet) for snippet in snippets)
+
+
+def _placeholder_price_text(value: str) -> bool:
+    lower = value.lower()
+    return any(
+        marker in lower
+        for marker in (
+            "live price required",
+            "live verify",
+            "source price required",
+            "price not proven",
+            "open listing",
+            "?",
+        )
+    )
 
 
 def _has_three_bed_signal(lower: str) -> bool:
@@ -2411,6 +2562,8 @@ def _remaining_car_fields(observations: Iterable[SourceObservation]) -> list[str
         "luggage_capacity": "luggage_capacity",
         "transmission_signal": "transmission",
         "vehicle_model_example": "vehicle_model",
+        "image_url": "vehicle_image",
+        "photo_url": "vehicle_image",
         "cancellation_signal": "cancellation_terms",
         "insurance_signal": "insurance_terms",
         "fees_signal": "fees_breakdown",
@@ -2468,6 +2621,7 @@ def _car_missing_fields() -> list[str]:
         "luggage_capacity",
         "transmission",
         "vehicle_model",
+        "vehicle_image",
         "cancellation_terms",
         "insurance_terms",
         "fees_breakdown",
@@ -2664,7 +2818,7 @@ _OPENCLAW_FIELDS_BY_CATEGORY: dict[str, tuple[str, str]] = {
         "dropoff_datetime, vehicle_class, vehicle_model_example, seats, "
         "luggage_capacity, transmission_signal, total_price, price_signal, "
         "availability_signal, insurance_signal, fees_signal, cancellation_signal, "
-        "source_url, booking_handoff_url",
+        "image_url, photo_url, source_url, booking_handoff_url",
     ),
     ShortlistCategory.ACTIVITIES.value: (
         "activity research",

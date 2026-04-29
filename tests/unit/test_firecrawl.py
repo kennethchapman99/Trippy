@@ -4,7 +4,20 @@ from pathlib import Path
 
 import pytest
 
-from trippy.models.shortlists import ResearchShortlistState, ShortlistCategory
+from trippy.models.shortlists import (
+    AvailabilityStatus,
+    FreshnessStatus,
+    LiveDataStatus,
+    LodgingFitCategory,
+    LodgingOption,
+    PriceStatus,
+    RecommendationGrade,
+    ResearchShortlistState,
+    ShortlistCategory,
+    ShortlistRowStatus,
+    SourceValidation,
+    VerificationStatus,
+)
 from trippy.models.source_research import (
     SourceAdapterCapability,
     SourceResearchMode,
@@ -105,6 +118,188 @@ def test_firecrawl_adapter_returns_observations() -> None:
     assert result.adapter_used == SourceAdapterCapability.FIRECRAWL
     assert result.observations
     assert any(ob.field in {"baggage_signal", "fare_rules"} for ob in result.observations)
+
+
+def test_firecrawl_adapter_scrapes_source_url_before_search() -> None:
+    service = FirecrawlService(api_key="test-key", enabled=True)
+    calls: list[str] = []
+
+    def fake_request(path: str, payload: dict[str, object]) -> dict[str, object]:
+        calls.append(path)
+        assert "search" not in path
+        assert payload["url"] == "https://example.com/stay"
+        return {
+            "data": {
+                "metadata": {"title": "Family Stay"},
+                "markdown": "CAD 780 total. Available now. 3 bedrooms. King bed. Free cancellation.",
+            }
+        }
+
+    service._request = fake_request  # type: ignore[method-assign]
+    adapter = FirecrawlResearchAdapter(service=service)
+    request = SourceResearchRequest(
+        trip_id="trip-1",
+        category=ShortlistCategory.LODGING.value,
+        option_id="lodging-1",
+        source_name="Booking.com",
+        source_url="https://example.com/stay",
+        candidate_name="Family Stay",
+        adapter_mode=SourceResearchMode.FIRECRAWL,
+    )
+
+    result = adapter.research(request, artifact_dir=Path("/tmp/firecrawl-test"))
+    fields = {ob.field: ob.value for ob in result.observations}
+
+    assert calls == ["/v1/scrape"]
+    assert "3 bedrooms" in str(fields["bed_layout_signal"])
+    assert "King bed" in str(fields["bed_layout_signal"])
+    assert fields["min_three_beds_satisfied"] is True
+
+
+def test_firecrawl_adapter_searches_when_source_scrape_has_no_observations() -> None:
+    service = FirecrawlService(api_key="test-key", enabled=True)
+    calls: list[str] = []
+
+    def fake_request(path: str, payload: dict[str, object]) -> dict[str, object]:
+        calls.append(path)
+        if "scrape" in path and len(calls) == 1:
+            return {"data": {"markdown": "401 unauthorized"}}
+        if "scrape" in path:
+            return {"data": {"markdown": "Available. 3 bedrooms. King bed."}}
+        if "search" in path:
+            return {
+                "data": [
+                    {
+                        "url": "https://example.com/hotel",
+                        "title": "Family Hotel",
+                        "markdown": "Available. 3 bedrooms. King bed.",
+                    }
+                ]
+            }
+        raise AssertionError(f"unexpected path {path}")
+
+    service._request = fake_request  # type: ignore[method-assign]
+    adapter = FirecrawlResearchAdapter(service=service)
+    request = SourceResearchRequest(
+        trip_id="trip-1",
+        category=ShortlistCategory.LODGING.value,
+        option_id="lodging-1",
+        source_name="Google Hotels (SerpAPI)",
+        source_url="https://serpapi.com/search.json?engine=google_hotels",
+        candidate_name="Family Hotel",
+        adapter_mode=SourceResearchMode.FIRECRAWL,
+    )
+
+    result = adapter.research(request, artifact_dir=Path("/tmp/firecrawl-test"))
+    fields = {ob.field: ob.value for ob in result.observations}
+
+    assert calls == ["/v1/scrape", "/v1/search", "/v1/scrape"]
+    assert "3 bedrooms" in str(fields["bed_layout_signal"])
+    assert fields["min_three_beds_satisfied"] is True
+
+
+def test_firecrawl_booking_shell_does_not_extract_bogus_bed_count() -> None:
+    service = FirecrawlService(api_key="test-key", enabled=True)
+
+    def fake_request(path: str, payload: dict[str, object]) -> dict[str, object]:
+        if "search" in path:
+            return {"data": []}
+        return {
+            "data": {
+                "markdown": (
+                    "[Skip to main content](https://www.booking.com/searchresults.html) "
+                    "2 adults · 0 children · 1 room 2026 Bed"
+                )
+            }
+        }
+
+    service._request = fake_request  # type: ignore[method-assign]
+    adapter = FirecrawlResearchAdapter(service=service)
+    request = SourceResearchRequest(
+        trip_id="trip-1",
+        category=ShortlistCategory.LODGING.value,
+        option_id="lodging-1",
+        source_name="Booking.com",
+        source_url="https://www.booking.com/searchresults.html?ss=Octant",
+        candidate_name="Octant Ponta Delgada",
+        adapter_mode=SourceResearchMode.FIRECRAWL,
+    )
+
+    result = adapter.research(request, artifact_dir=Path("/tmp/firecrawl-test"))
+    fields = {ob.field: ob.value for ob in result.observations}
+
+    assert "bed_layout_signal" not in fields
+    assert "min_three_beds_satisfied" in result.missing_fields
+
+
+def test_lodging_deep_research_preserves_existing_live_price_when_scrape_is_sparse(
+    tmp_path: Path,
+) -> None:
+    service = FirecrawlService(api_key="test-key", enabled=True)
+
+    def fake_request(path: str, payload: dict[str, object]) -> dict[str, object]:
+        if "search" in path:
+            return {"data": []}
+        return {"data": {"markdown": "Sparse hotel shell. Check availability."}}
+
+    service._request = fake_request  # type: ignore[method-assign]
+    option = LodgingOption(
+        option_id="serpapi-lodging-1",
+        rank=1,
+        source="Google Hotels (SerpAPI)",
+        name="Pedras do Mar Resort & SPA",
+        location_area="Sao Miguel",
+        island_or_region="Sao Miguel",
+        lodging_type="hotel",
+        bed_layout="26 Bed",
+        min_three_beds_satisfied=False,
+        king_bed_preference_satisfied=None,
+        family_of_five_fit=None,
+        parking_practicality="verify on listing",
+        driving_practicality="verify on listing",
+        walkability="verify on map",
+        cancellation_notes="check listing",
+        price_band="CAD 2547 total",
+        current_price_signal="CAD 364/night",
+        deep_link="https://example.com/hotel",
+        friction_score=18,
+        family_comfort_score=80,
+        recommendation_grade=RecommendationGrade.GOOD,
+        live_data_status=LiveDataStatus.LIVE_VERIFIED,
+        row_status=ShortlistRowStatus.VERIFIED_LIVE,
+        fit_category=LodgingFitCategory.TECHNICAL,
+        validation=SourceValidation(
+            source_name="Google Hotels (SerpAPI)",
+            source_type="live_search",
+            freshness_status=FreshnessStatus.CURRENT,
+            verification_status=VerificationStatus.LIVE_VERIFIED,
+            availability_status=AvailabilityStatus.AVAILABILITY_SIGNAL,
+            price_status=PriceStatus.LIVE_SIGNAL,
+            extracted_fields={
+                "bed_layout_signal": "26 Bed",
+                "min_three_beds_satisfied": False,
+                "total_rate": "CAD 2547 total",
+                "rate_per_night": "CAD 364/night",
+            },
+        ),
+    )
+    state = ResearchShortlistState(
+        trip_id="trip-1",
+        category=ShortlistCategory.LODGING,
+        lodging_options=[option],
+    )
+
+    researched = SourceResearchService(
+        adapters=[FirecrawlResearchAdapter(service=service)],
+        research_dir=tmp_path / "research",
+    ).research_state(state, adapter_mode="firecrawl")
+    researched_option = researched.lodging_options[0]
+
+    assert researched_option.validation.extracted_fields["price_signal"] == "CAD 2547 total"
+    assert "bed_layout_signal" not in researched_option.validation.extracted_fields
+    assert researched_option.bed_layout == "bed layout not confirmed yet"
+    assert "final_total_price" not in researched_option.validation.missing_fields
+    assert not any("final total price is not pinned" in flag for flag in researched_option.friction_flags)
 
 
 def test_firecrawl_merges_into_shortlist_pipeline(

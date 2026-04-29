@@ -13,6 +13,7 @@ import {
   X,
   Star,
   ExternalLink,
+  Map,
   type LucideIcon,
 } from "lucide-react";
 
@@ -71,6 +72,27 @@ const TYPE_META: Record<MapPinType, { label: string; icon: LucideIcon; color: st
 const TOKEN_KEY = "trippy.mapbox.token";
 const DEFAULT_MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN ?? "";
 
+function fitMapToPins(map: mapboxgl.Map, pins: MapPin[], variant: TripMapProps["variant"]) {
+  if (pins.length === 0) return;
+
+  if (pins.length === 1) {
+    const [pin] = pins;
+    map.easeTo({ center: [pin.lng, pin.lat], zoom: 11, duration: 0 });
+    return;
+  }
+
+  const bounds = new mapboxgl.LngLatBounds();
+  pins.forEach((pin) => bounds.extend([pin.lng, pin.lat]));
+  map.fitBounds(bounds, {
+    padding:
+      variant === "compact"
+        ? { top: 64, right: 64, bottom: 56, left: 64 }
+        : { top: 96, right: 72, bottom: 112, left: 72 },
+    duration: 0,
+    maxZoom: 12,
+  });
+}
+
 export const TripMap = ({
   pins,
   center,
@@ -118,18 +140,11 @@ export const TripMap = ({
       center: center ?? [pins[0]?.lng ?? 0, pins[0]?.lat ?? 20],
       zoom,
       pitch: variant === "full" ? 35 : 0,
+      projection: "mercator",
       attributionControl: false,
     });
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
     mapRef.current = map;
-
-    map.on("load", () => {
-      if (pins.length > 1) {
-        const b = new mapboxgl.LngLatBounds();
-        pins.forEach((p) => b.extend([p.lng, p.lat]));
-        map.fitBounds(b, { padding: 80, duration: 0, maxZoom: 11 });
-      }
-    });
 
     return () => {
       markersRef.current.forEach((m) => m.remove());
@@ -138,6 +153,16 @@ export const TripMap = ({
       mapRef.current = null;
     };
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep the viewport matched to pins that often arrive after async geocoding.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || center) return;
+
+    const fit = () => fitMapToPins(map, visiblePins, variant);
+    if (map.loaded()) fit();
+    else map.once("load", fit);
+  }, [center, visiblePins, variant]);
 
   // Render markers
   useEffect(() => {
@@ -242,7 +267,9 @@ export const TripMap = ({
         style={{ height }}
       >
         <div className="max-w-md p-8 bg-card/95 backdrop-blur rounded-3xl border-2 border-foreground/10 shadow-card text-center space-y-3">
-          <div className="text-2xl font-[Fredoka] font-bold">🗺️ Connect Mapbox</div>
+          <div className="text-2xl font-[Fredoka] font-bold inline-flex items-center justify-center gap-2">
+            <Map className="h-6 w-6" /> Connect Mapbox
+          </div>
           <p className="text-sm text-muted-foreground">
             Paste your Mapbox public token to light up the map. Free tier covers ~50k loads/month.
             Grab one at{" "}

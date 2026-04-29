@@ -172,13 +172,17 @@ class TrippyUIService:
         }
 
     def create_intake(self, payload: dict[str, Any]) -> dict[str, Any]:
+        destination_seeds = _split_list(
+            payload.get("destinations") or payload.get("destination")
+        )
+        mode = TripIntakeMode(_normalise_enum(payload.get("mode"), "selected_destination"))
+        if mode == TripIntakeMode.IDEA and destination_seeds:
+            mode = TripIntakeMode.SELECTED_DESTINATION
         intake = TripIntake(
             trip_id=str(payload.get("trip_id") or ""),
-            mode=TripIntakeMode(_normalise_enum(payload.get("mode"), "selected_destination")),
+            mode=mode,
             trip_name=str(payload.get("trip_name") or "Azores 2027"),
-            destination_seeds=_split_list(
-                payload.get("destinations") or payload.get("destination")
-            ),
+            destination_seeds=destination_seeds,
             travel_window=TravelWindow(
                 label=_optional_str(payload.get("travel_window")),
                 season=_optional_str(payload.get("season")),
@@ -373,15 +377,17 @@ class TrippyUIService:
     def select_flight(self, payload: dict[str, Any]) -> dict[str, Any]:
         trip_id = _trip_id(payload)
         option_id = str(payload.get("option_id") or "")
+        selection_kind = str(payload.get("selection_kind") or "outbound")
         state = FlightShortlistService(self._intakes, self._planner).select_flight(
             trip_id,
             option_id,
+            selection_kind=selection_kind,
         )
         workflow = self._record_workflow(
             workflow_name="ui-trip-plan-flight-select",
             skill_name="trippy-flight-friction-audit",
             trip_id=trip_id,
-            summary=f"Selected flight option {option_id} for planning",
+            summary=f"Selected {selection_kind} flight option {option_id} for planning",
             result=state.model_dump(mode="json"),
         )
         return {
@@ -408,6 +414,26 @@ class TrippyUIService:
             "workflow_id": workflow.id,
             "shortlist": state.model_dump(mode="json"),
             "next_step": "Review whether the trip should use one stay or split stays.",
+        }
+
+    def deselect_lodging(self, payload: dict[str, Any]) -> dict[str, Any]:
+        trip_id = _trip_id(payload)
+        option_id = str(payload.get("option_id") or "")
+        state = LodgingShortlistService(self._intakes, self._planner).deselect_lodging(
+            trip_id,
+            option_id,
+        )
+        workflow = self._record_workflow(
+            workflow_name="ui-trip-plan-lodging-deselect",
+            skill_name="trippy-family-itinerary-builder",
+            trip_id=trip_id,
+            summary=f"Removed lodging option {option_id} from planning",
+            result=state.model_dump(mode="json"),
+        )
+        return {
+            "workflow_id": workflow.id,
+            "shortlist": state.model_dump(mode="json"),
+            "next_step": "Pick another stay or adjust the stay structure before continuing.",
         }
 
     def update_lodging_structure(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -846,6 +872,9 @@ class TrippyUIHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/select-lodging":
                 self._send_json(self._ui.select_lodging(payload))
+                return
+            if path == "/api/deselect-lodging":
+                self._send_json(self._ui.deselect_lodging(payload))
                 return
             if path == "/api/lodging-structure":
                 self._send_json(self._ui.update_lodging_structure(payload))

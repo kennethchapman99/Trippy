@@ -14,12 +14,12 @@ from trippy.models.shortlists import (
     ShortlistCategory,
     ShortlistRowStatus,
 )
-from trippy.services import serpapi_client
-from trippy.services.serpapi_options import activity_options_from_serpapi
 from trippy.models.sources import TravelSourceCategory
 from trippy.models.trip_planning import TripIntake
+from trippy.services import serpapi_client
 from trippy.services.destination_profiles import profile_for_intake
 from trippy.services.live_validation import LiveValidationService
+from trippy.services.serpapi_options import activity_options_from_serpapi
 from trippy.services.shortlist_store import (
     ShortlistContext,
     ShortlistStore,
@@ -63,7 +63,7 @@ class ActivityShortlistService:
         plan = source_plan(TravelSourceCategory.TOURS)
         existing = self._store.load(trip_id, ShortlistCategory.ACTIVITIES)
         options = _options_from_profile(profile, ctx.intake, ctx.option.regions)
-        live_options, live_notes = _serpapi_live_activities(ctx)
+        live_options, live_notes = _serpapi_live_activities(ctx, profile)
         if live_options:
             options = live_options + options
             for index, option in enumerate(options, start=1):
@@ -475,7 +475,10 @@ def _normalize_location(value: str) -> str:
     return " ".join(ascii_value.lower().replace("-", " ").split())
 
 
-def _serpapi_live_activities(ctx: ShortlistContext) -> tuple[list[ActivityOption], list[str]]:
+def _serpapi_live_activities(
+    ctx: ShortlistContext,
+    profile: object,
+) -> tuple[list[ActivityOption], list[str]]:
     if not serpapi_client.is_configured():
         return [], ["SERPAPI_KEY is not configured, so activity rows are search handoffs."]
     region = (ctx.option.regions[0] if ctx.option.regions else "") or (
@@ -483,10 +486,42 @@ def _serpapi_live_activities(ctx: ShortlistContext) -> tuple[list[ActivityOption
     )
     if not region:
         return [], ["SerpAPI activity search skipped: no destination region on the trip plan yet."]
-    results, notes = serpapi_client.search_things_to_do(
-        query="things to do",
-        near=region,
-    )
+    raw_targets = list(getattr(profile, "activity_search_targets", []))
+    targets = [
+        target
+        for target in raw_targets
+        if target_matches_selected_regions(
+            target,
+            ctx.option.regions,
+            getattr(profile, "island_or_region_terms", []),
+        )
+    ] or raw_targets
+    queries = [
+        str(target.get("query") or target.get("name") or "").strip()
+        for target in targets[:4]
+        if isinstance(target, dict)
+    ]
+    if not queries:
+        queries = [f"family activities {region}"]
+    results: list[dict[str, Any]] = []
+    notes: list[str] = []
+    seen: set[str] = set()
+    for query in queries:
+        found, query_notes = serpapi_client.search_things_to_do(
+            query=query,
+            near="" if region.lower() in query.lower() else region,
+        )
+        notes.extend(query_notes)
+        for item in found:
+            key = _serpapi_activity_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(item)
+            if len(results) >= 8:
+                break
+        if len(results) >= 8:
+            break
     if not results:
         return [], notes
     deep_link = (
@@ -494,3 +529,10 @@ def _serpapi_live_activities(ctx: ShortlistContext) -> tuple[list[ActivityOption
     )
     options = activity_options_from_serpapi(results, region=region, deep_link=deep_link)
     return options, notes
+
+
+def _serpapi_activity_key(item: dict[str, Any]) -> str:
+    return "|".join(
+        str(item.get(key) or "").strip().lower()
+        for key in ("place_id", "data_id", "title", "address")
+    )

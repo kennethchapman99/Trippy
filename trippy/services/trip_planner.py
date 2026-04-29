@@ -83,6 +83,8 @@ class TripPlannerService:
     def _build_draft(self, intake: TripIntake) -> TripPlanDraft:
         if _is_azores(intake):
             return self._build_azores_draft(intake)
+        if intake.mode == TripIntakeMode.IDEA and intake.destination_seeds:
+            return self._build_generic_selected_destination_draft(intake)
         if intake.mode == TripIntakeMode.IDEA:
             return self._build_idea_draft(intake)
         return self._build_generic_selected_destination_draft(intake)
@@ -237,6 +239,45 @@ class TripPlannerService:
                 country_prior_signals=signals,
                 map_seed_queries=intake.destination_seeds,
                 required_research=_required_research(),
+            ),
+            TripPlanOption(
+                option_id="multi-spot-fuller-version",
+                title=f"{destination} Fuller Multi-Spot Version",
+                summary="Keep the destination fixed, but spend time across more distinct areas or activity clusters.",
+                duration_days=duration,
+                regions=_fuller_regions(intake.destination_seeds, single_base_region),
+                nights_by_region=_even_nights(
+                    _fuller_regions(intake.destination_seeds, single_base_region),
+                    duration,
+                ),
+                rationale=[
+                    "Useful comparison if the family wants more variety within the chosen destination.",
+                    "Only worth choosing if each extra stop materially improves beach, food, activity, or drive-time fit.",
+                ],
+                travel_burden="requires live transfer, drive-time, and lodging validation",
+                island_region_movement_friction=(
+                    "higher: more local movement and possible extra lodging handoffs"
+                ),
+                family_comfort_score=76 if duration >= 8 else 66,
+                food_fit="Best if the extra areas unlock clearly better meals or easier activity timing.",
+                driving_fit="Validate drive times, parking, and whether a single lodging base can cover the same activities.",
+                crowd_fit="Can spread busy sights across days, but short stays reduce flexibility.",
+                major_risks=[
+                    "Can turn a single chosen destination into too many hotel changes or car-transfer days.",
+                    "Short trips may be better served by day trips from one strong base.",
+                ],
+                recommendation_strength=74 if duration >= 8 else 58,
+                lodging_strategy=(
+                    "Treat as a stress test: use multiple stays only if each lodging move earns its friction cost."
+                ),
+                car_strategy="Compare rental-car coverage against private transfers and day-trip operators.",
+                country_prior_signals=signals,
+                map_seed_queries=intake.destination_seeds,
+                required_research=_required_research()
+                + [
+                    "Whether extra local bases improve the trip enough to justify packing and check-in friction.",
+                    "Candidate day-trip version of the same route from one lodging base.",
+                ],
             ),
         ]
         recommended = max(options, key=lambda option: option.recommendation_strength).option_id
@@ -425,6 +466,15 @@ def _even_nights(regions: list[str], duration_days: int) -> dict[str, int]:
     base = nights // len(regions)
     extra = nights % len(regions)
     return {region: base + (1 if idx < extra else 0) for idx, region in enumerate(regions)}
+
+
+def _fuller_regions(destination_seeds: list[str], fallback_region: str) -> list[str]:
+    regions = destination_seeds[:3]
+    if len(regions) >= 3:
+        return regions
+    if len(regions) == 2:
+        return [regions[0], regions[1], f"{regions[0]} day-trip cluster"]
+    return [regions[0] if regions else fallback_region]
 
 
 def _normalize_loaded_draft(draft: TripPlanDraft) -> TripPlanDraft:

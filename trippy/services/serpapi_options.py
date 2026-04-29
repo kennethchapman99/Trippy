@@ -10,8 +10,9 @@ pills.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any
+from urllib.parse import quote_plus
 
 from trippy.models.shortlists import (
     ActivityOption,
@@ -81,10 +82,13 @@ def flight_options_from_serpapi(
         arr_date, arr_time = _split_serpapi_timestamp(arr_iso)
         flight_numbers = [str(leg.get("flight_number") or "").replace(" ", "") for leg in legs if leg.get("flight_number")]
         carriers = []
+        airline_logo_url = ""
         for leg in legs:
             name = str(leg.get("airline") or "")
             if name and name not in carriers:
                 carriers.append(name)
+            if not airline_logo_url:
+                airline_logo_url = str(leg.get("airline_logo") or "")
         airline = " / ".join(carriers) or "Live offer"
         layovers = [item for item in (offer.get("layovers") or []) if isinstance(item, dict)]
         layover_codes = [str(lay.get("id") or "") for lay in layovers if lay.get("id")]
@@ -109,6 +113,7 @@ def flight_options_from_serpapi(
                 option_id=f"serpapi-flight-{rank}",
                 rank=rank,
                 airline=airline,
+                airline_logo_url=airline_logo_url,
                 flight_numbers=flight_numbers,
                 departure_date=dep_date,
                 arrival_date=arr_date,
@@ -144,6 +149,7 @@ def flight_options_from_serpapi(
                     adapter="serpapi/google_flights",
                     extracted={
                         "airline": airline,
+                        "airline_logo_url": airline_logo_url,
                         "flight_numbers": flight_numbers,
                         "stops": stops,
                         "total_duration": duration,
@@ -194,6 +200,7 @@ def lodging_options_from_serpapi(
             f"{rating}★ ({reviews} reviews)" if rating and reviews else (f"{rating}★" if rating else "")
         )
         link = str(prop.get("link") or prop.get("serpapi_property_details_link") or deep_link)
+        photo_urls = _lodging_photo_urls(prop)
         rank = rank_offset + index
         comfort = 75 + (5 if (rating or 0) >= 4.3 else 0)
         friction = 18 + (8 if not amenities else 0)
@@ -214,7 +221,7 @@ def lodging_options_from_serpapi(
                 location_area=location,
                 island_or_region=region,
                 lodging_type=prop_type,
-                bed_layout="bed layout not returned by SerpAPI; verify live",
+                bed_layout="Bed layout pending OpenClaw/FireCrawl verification",
                 min_three_beds_satisfied=bed_satisfied,
                 king_bed_preference_satisfied=None,
                 family_of_five_fit=None,
@@ -225,6 +232,7 @@ def lodging_options_from_serpapi(
                 price_band=total_str,
                 current_price_signal=nightly_str,
                 deep_link=link,
+                photo_urls=photo_urls,
                 validation_links={"Google Hotels": link},
                 friction_score=friction,
                 family_comfort_score=comfort,
@@ -249,12 +257,44 @@ def lodging_options_from_serpapi(
                         "total_rate": total_str,
                         "rating": rating,
                         "reviews": reviews,
+                        "photo_count": len(photo_urls),
                     },
-                    notes=["Live signal from Google Hotels via SerpAPI; rates can change."],
+                    notes=[
+                        "Live signal from Google Hotels via SerpAPI; rates can change.",
+                        "Bed layout should be verified with OpenClaw/FireCrawl source research.",
+                    ],
                 ),
             )
         )
     return options
+
+
+def _lodging_photo_urls(prop: dict[str, Any]) -> list[str]:
+    """Collect stable image URLs from known Google Hotels/SerpAPI payload shapes."""
+    urls: list[str] = []
+    for key in ("images", "photos"):
+        values = prop.get(key)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if isinstance(item, str):
+                candidate = item
+            elif isinstance(item, dict):
+                candidate = str(
+                    item.get("thumbnail")
+                    or item.get("original_image")
+                    or item.get("link")
+                    or item.get("url")
+                    or ""
+                )
+            else:
+                candidate = ""
+            if candidate.startswith("http") and candidate not in urls:
+                urls.append(candidate)
+    thumbnail = str(prop.get("thumbnail") or "")
+    if thumbnail.startswith("http") and thumbnail not in urls:
+        urls.insert(0, thumbnail)
+    return urls[:12]
 
 
 # ── Cars ─────────────────────────────────────────────────────────
@@ -289,6 +329,7 @@ def car_options_from_serpapi(
                 cancellation_notes="verify cancellation on listing",
                 fees_caution="verify deposit and one-way fees on listing",
                 deep_link=link,
+                photo_urls=_car_photo_urls(item),
                 comparison_links={"Google search": deep_link},
                 family_comfort_score=70,
                 luggage_practicality_score=65,
@@ -321,6 +362,35 @@ def car_options_from_serpapi(
     return options
 
 
+def _car_photo_urls(item: dict[str, Any]) -> list[str]:
+    """Collect source-provided car thumbnails from common SerpAPI result shapes."""
+    urls: list[str] = []
+    for key in ("thumbnail", "image", "image_url"):
+        value = str(item.get(key) or "")
+        if value.startswith("http") and value not in urls:
+            urls.append(value)
+    for key in ("images", "photos"):
+        values = item.get(key)
+        if not isinstance(values, list):
+            continue
+        for entry in values:
+            if isinstance(entry, str):
+                candidate = entry
+            elif isinstance(entry, dict):
+                candidate = str(
+                    entry.get("thumbnail")
+                    or entry.get("original_image")
+                    or entry.get("link")
+                    or entry.get("url")
+                    or ""
+                )
+            else:
+                candidate = ""
+            if candidate.startswith("http") and candidate not in urls:
+                urls.append(candidate)
+    return urls[:6]
+
+
 # ── Activities ───────────────────────────────────────────────────
 
 
@@ -339,11 +409,19 @@ def activity_options_from_serpapi(
         types = item.get("types") or []
         type_str = ", ".join(str(t) for t in types[:3])
         address = str(item.get("address") or region)
-        link = str(item.get("website") or item.get("link") or deep_link)
+        maps_link = _google_maps_link(item, title=title, address=address, fallback=deep_link)
+        website = str(item.get("website") or "")
+        link = website if website.startswith("http") else maps_link
+        photo_urls = _activity_photo_urls(item)
         review_signal = (
             f"{rating}★ ({reviews} reviews)" if rating and reviews else (f"{rating}★" if rating else "rating unknown")
         )
-        price = str(item.get("price") or "price not returned")
+        price = str(
+            item.get("price")
+            or item.get("price_level")
+            or item.get("price_description")
+            or "open listing for price"
+        )
         rank = rank_offset + index
         comfort_pace = 75 if (rating or 0) >= 4.4 else 65
         friction = 22 if (rating or 0) >= 4 else 35
@@ -360,7 +438,11 @@ def activity_options_from_serpapi(
                 price_band=price,
                 duration="verify on listing",
                 deep_link=link,
-                validation_links={"Google Maps": link},
+                photo_urls=photo_urls,
+                validation_links={
+                    **({"Operator website": website} if website.startswith("http") else {}),
+                    "Google Maps": maps_link,
+                },
                 family_pace_fit_score=comfort_pace,
                 safety_confidence_score=70 if (rating or 0) >= 4 else 55,
                 crowd_fit_score=70,
@@ -387,6 +469,9 @@ def activity_options_from_serpapi(
                         "reviews": reviews,
                         "types": types,
                         "address": address,
+                        "website": website,
+                        "google_maps_url": maps_link,
+                        "photo_count": len(photo_urls),
                     },
                     notes=["Live POI signal from Google Maps via SerpAPI."],
                     price_status=PriceStatus.ESTIMATED_BAND,
@@ -435,3 +520,50 @@ def _format_minutes(total_minutes: int) -> str:
 def _host(url: str) -> str:
     m = re.match(r"https?://([^/]+)", url or "")
     return m.group(1).replace("www.", "") if m else ""
+
+
+def _activity_photo_urls(item: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    for key in ("thumbnail", "image", "image_url"):
+        value = str(item.get(key) or "")
+        if value.startswith("http") and value not in urls:
+            urls.append(value)
+    for key in ("photos", "images"):
+        values = item.get(key)
+        if not isinstance(values, list):
+            continue
+        for photo in values:
+            if isinstance(photo, str):
+                candidate = photo
+            elif isinstance(photo, dict):
+                candidate = str(
+                    photo.get("thumbnail")
+                    or photo.get("image")
+                    or photo.get("url")
+                    or photo.get("link")
+                    or ""
+                )
+            else:
+                candidate = ""
+            if candidate.startswith("http") and candidate not in urls:
+                urls.append(candidate)
+    return urls[:8]
+
+
+def _google_maps_link(
+    item: dict[str, Any],
+    *,
+    title: str,
+    address: str,
+    fallback: str,
+) -> str:
+    link = str(item.get("link") or item.get("place_link") or "")
+    if link.startswith("http"):
+        return link
+    place_id = str(item.get("place_id") or "")
+    if place_id:
+        return f"https://www.google.com/maps/place/?q=place_id:{quote_plus(place_id)}"
+    query = " ".join(part for part in (title, address) if part).strip()
+    if query:
+        return f"https://www.google.com/maps/search/?api=1&query={quote_plus(query)}"
+    return fallback

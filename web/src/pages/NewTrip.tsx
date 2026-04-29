@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
@@ -9,6 +9,7 @@ import {
   TreePine, Snowflake, Check, Loader2, AlertCircle,
 } from "lucide-react";
 import { api, type TripConcept } from "@/lib/api";
+import { useDestinationImage } from "@/lib/destinationImages";
 
 const vibes = [
   { icon: Waves, label: "Beach + chill", color: "hsl(195 90% 65%)" },
@@ -26,13 +27,11 @@ const COVER_GRADIENTS = [
   "linear-gradient(135deg, hsl(205 88% 48%), hsl(215 75% 28%))",
 ];
 
-const EMOJIS = ["🌴", "🐚", "🌸", "🧊", "🗺️", "✈️"];
-
 function conceptToIdeaPayload(concept: TripConcept): Record<string, unknown> {
   return {
     trip_name: concept.title,
     destinations: concept.destinations,
-    mode: "destination_exploration",
+    mode: "selected_destination",
     goals: concept.rationale.slice(0, 3),
     avoidances: concept.why_it_may_not_fit.slice(0, 2),
     travelers: 5,
@@ -53,10 +52,26 @@ const NewTrip = () => {
   // Form fields
   const [tripName, setTripName] = useState("");
   const [dates, setDates] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const datePickerRef = useRef<HTMLDivElement | null>(null);
   const [who, setWho] = useState("");
   const [budget, setBudget] = useState("");
   const [origin, setOrigin] = useState("");
+  const [wishes, setWishes] = useState("");
   const [hardNos, setHardNos] = useState("");
+
+  useEffect(() => {
+    if (!showDatePicker) return;
+    const onClick = (e: MouseEvent) => {
+      if (datePickerRef.current && !datePickerRef.current.contains(e.target as Node)) {
+        setShowDatePicker(false);
+      }
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [showDatePicker]);
 
   const toggleVibe = (v: string) =>
     setPickedVibes((p) => (p.includes(v) ? p.filter((x) => x !== v) : [...p, v]));
@@ -88,10 +103,11 @@ const NewTrip = () => {
 
   const handleFormSubmit = () => {
     const budgetNum = parseFloat(budget.replace(/[^0-9.]/g, "")) || undefined;
+    const goals = [...pickedVibes, ...(wishes.trim() ? [wishes.trim()] : [])];
     const payload: Record<string, unknown> = {
       trip_name: tripName || "New trip",
-      mode: "destination_exploration",
-      goals: pickedVibes,
+      mode: "idea",
+      goals,
       avoidances: hardNos ? [hardNos] : [],
       travelers: 5,
       adults: 2,
@@ -99,13 +115,12 @@ const NewTrip = () => {
       party_type: "whole_family",
       budget_cad: budgetNum,
       departure_airports: origin ? [origin] : ["YYZ"],
+      notes: wishes.trim() || undefined,
+      travel_window: dates.trim() || undefined,
+      start_date: startDate || undefined,
+      end_date: endDate || undefined,
     };
-    // Generate ideas first, then switch to ideate mode
-    setMode("ideate");
-    ideaMutation.mutate(payload);
-    if (!intakeMutation.isPending) {
-      intakeMutation.mutate(payload);
-    }
+    intakeMutation.mutate(payload);
   };
 
   return (
@@ -125,7 +140,7 @@ const NewTrip = () => {
             Let's <span className="text-gradient-sunset">dream up</span> your next trip.
           </h1>
           <p className="text-muted-foreground mt-2 max-w-2xl">
-            Tell Hermes what you're craving — or fill the form if you already know. Either way, we'll come back with ranked, family-fit ideas.
+            Tell Trippy what you're craving, or fill the form if you already know. Either way, we'll come back with ranked, family-fit ideas.
           </p>
         </div>
 
@@ -155,7 +170,7 @@ const NewTrip = () => {
             <div className="relative rounded-[2rem] border-2 border-foreground bg-card shadow-sticker overflow-hidden">
               <div className="bg-gradient-hero px-6 py-3 border-b-2 border-foreground/15 flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-primary" />
-                <span className="font-bold text-sm">Tell Hermes everything</span>
+                <span className="font-bold text-sm">Tell Trippy everything</span>
               </div>
               <textarea
                 value={prompt}
@@ -221,7 +236,7 @@ const NewTrip = () => {
                 <div className="text-sm">
                   <div className="font-bold text-destructive">Couldn't get ideas</div>
                   <div className="text-muted-foreground mt-1">
-                    {(ideaMutation.error as Error)?.message ?? "Check that the Hermes backend is running."}
+                    {(ideaMutation.error as Error)?.message ?? "Check that the Trippy backend is running."}
                   </div>
                 </div>
               </div>
@@ -232,7 +247,7 @@ const NewTrip = () => {
               <div className="animate-fade-up">
                 <div className="flex items-center justify-between mb-4 mt-4">
                   <h3 className="font-[Fredoka] text-2xl font-bold">
-                    Hermes picked <span className="text-gradient-sunset">{concepts.length} fits</span>
+                    Trippy picked <span className="text-gradient-sunset">{concepts.length} fits</span>
                   </h3>
                   <button
                     onClick={handleGetIdeas}
@@ -244,45 +259,13 @@ const NewTrip = () => {
                 </div>
                 <div className="grid md:grid-cols-3 gap-5">
                   {concepts.map((concept, i) => (
-                    <div
+                    <IdeaCard
                       key={concept.concept_id}
-                      className="group relative rounded-3xl overflow-hidden border-2 border-foreground/10 bg-card shadow-card hover:-translate-y-1 hover:shadow-glow transition-bounce animate-fade-up"
-                      style={{ animationDelay: `${i * 0.08}s` }}
-                    >
-                      <div className="relative h-32 flex items-center justify-center" style={{ background: COVER_GRADIENTS[i % COVER_GRADIENTS.length] }}>
-                        <span className="text-6xl drop-shadow-lg">{EMOJIS[i % EMOJIS.length]}</span>
-                        <div className="absolute top-3 right-3 bg-background rounded-full px-2.5 py-1 border-2 border-foreground/20 text-xs font-bold flex items-center gap-1">
-                          <Sparkles className="h-3 w-3 text-primary" /> {concept.family_fit_score}% fit
-                        </div>
-                      </div>
-                      <div className="p-5">
-                        <h4 className="font-[Fredoka] text-xl font-bold">{concept.title}</h4>
-                        <div className="flex items-center gap-1 text-xs text-muted-foreground font-semibold mt-0.5">
-                          <MapPin className="h-3 w-3" /> {concept.destinations.join(" · ")}
-                        </div>
-                        <p className="text-sm text-foreground/75 mt-3 leading-relaxed">
-                          {concept.rationale[0] ?? concept.estimated_travel_burden}
-                        </p>
-                        <div className="flex flex-wrap gap-1.5 mt-4">
-                          {[concept.estimated_cost_band_cad, concept.best_season, `${concept.recommended_duration_days}d`].filter(Boolean).map((tag) => (
-                            <span key={tag} className="px-2 py-0.5 rounded-full bg-muted border border-foreground/10 text-xs font-bold">
-                              {tag}
-                            </span>
-                          ))}
-                        </div>
-                        <Button
-                          onClick={() => handlePickConcept(concept)}
-                          disabled={intakeMutation.isPending}
-                          className="w-full mt-4 h-10 rounded-xl bg-foreground text-background font-bold hover:bg-foreground/90"
-                        >
-                          {intakeMutation.isPending ? (
-                            <><Loader2 className="h-4 w-4 animate-spin" /> Saving…</>
-                          ) : (
-                            "Pick this idea"
-                          )}
-                        </Button>
-                      </div>
-                    </div>
+                      concept={concept}
+                      index={i}
+                      onPick={() => handlePickConcept(concept)}
+                      isSaving={intakeMutation.isPending}
+                    />
                   ))}
                 </div>
               </div>
@@ -301,15 +284,77 @@ const NewTrip = () => {
             </FormRow>
 
             <div className="grid md:grid-cols-2 gap-5">
-              <FormRow label="Dates">
-                <div className="relative">
-                  <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <FormRow label="Dates" hint="Fuzzy ok, or pick exact dates">
+                <div className="relative" ref={datePickerRef}>
+                  <button
+                    type="button"
+                    onClick={() => setShowDatePicker((v) => !v)}
+                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    aria-label="Pick dates"
+                  >
+                    <Calendar className="h-4 w-4" />
+                  </button>
                   <input
                     value={dates}
-                    onChange={(e) => setDates(e.target.value)}
-                    placeholder="Mar 14 – Mar 23"
+                    onChange={(e) => {
+                      setDates(e.target.value);
+                      setStartDate("");
+                      setEndDate("");
+                    }}
+                    placeholder="Late August, or Mar 14 – Mar 23"
                     className="h-12 w-full rounded-xl border-2 border-foreground/10 bg-background pl-10 pr-4 font-medium focus:outline-none focus:border-primary"
                   />
+                  {showDatePicker && (
+                    <div className="absolute left-0 top-full mt-2 z-20 w-full max-w-sm rounded-2xl border-2 border-foreground/15 bg-card shadow-card p-4 space-y-3">
+                      <div>
+                        <label className="block text-xs font-bold text-muted-foreground mb-1">Start</label>
+                        <input
+                          type="date"
+                          value={startDate}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setStartDate(v);
+                            if (v && endDate) setDates(`${v} – ${endDate}`);
+                            else if (v) setDates(v);
+                          }}
+                          className="h-10 w-full rounded-lg border-2 border-foreground/10 bg-background px-3 font-medium focus:outline-none focus:border-primary"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-muted-foreground mb-1">End</label>
+                        <input
+                          type="date"
+                          value={endDate}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setEndDate(v);
+                            if (startDate && v) setDates(`${startDate} – ${v}`);
+                            else if (v) setDates(v);
+                          }}
+                          className="h-10 w-full rounded-lg border-2 border-foreground/10 bg-background px-3 font-medium focus:outline-none focus:border-primary"
+                        />
+                      </div>
+                      <div className="flex justify-between pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStartDate("");
+                            setEndDate("");
+                          }}
+                          className="text-xs font-bold text-muted-foreground hover:text-foreground"
+                        >
+                          Clear
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowDatePicker(false)}
+                          className="text-xs font-bold text-primary"
+                        >
+                          Done
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </FormRow>
               <FormRow label="Who's going">
@@ -366,7 +411,17 @@ const NewTrip = () => {
               </div>
             </FormRow>
 
-            <FormRow label="Hard nos" hint="Hermes will avoid these">
+            <FormRow label="Things we want in this trip" hint="Trippy will steer toward these">
+              <textarea
+                value={wishes}
+                onChange={(e) => setWishes(e.target.value)}
+                placeholder="Ocean view, easy hikes, walkable old towns, no rental car needed"
+                rows={3}
+                className="w-full rounded-xl border-2 border-foreground/10 bg-background px-4 py-3 font-medium resize-none focus:outline-none focus:border-primary"
+              />
+            </FormRow>
+
+            <FormRow label="Hard nos" hint="Trippy will avoid these">
               <input
                 value={hardNos}
                 onChange={(e) => setHardNos(e.target.value)}
@@ -416,5 +471,73 @@ const FormRow = ({ label, hint, children }: { label: string; hint?: string; chil
     {children}
   </div>
 );
+
+function IdeaCard({
+  concept,
+  index,
+  onPick,
+  isSaving,
+}: {
+  concept: TripConcept;
+  index: number;
+  onPick: () => void;
+  isSaving: boolean;
+}) {
+  const imageUrl = useDestinationImage({
+    title: concept.title,
+    destinations: concept.destinations,
+  });
+  const [imgFailed, setImgFailed] = useState(false);
+
+  return (
+    <div
+      className="group relative rounded-3xl overflow-hidden border-2 border-foreground/10 bg-card shadow-card hover:-translate-y-1 hover:shadow-glow transition-bounce animate-fade-up"
+      style={{ animationDelay: `${index * 0.08}s` }}
+    >
+      <div className="relative h-36 overflow-hidden" style={{ background: COVER_GRADIENTS[index % COVER_GRADIENTS.length] }}>
+        {imageUrl && !imgFailed && (
+          <img
+            src={imageUrl}
+            alt={concept.destinations.join(", ") || concept.title}
+            loading="lazy"
+            onError={() => setImgFailed(true)}
+            className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+          />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/45 via-black/5 to-transparent" />
+        <div className="absolute top-3 right-3 bg-background/95 backdrop-blur rounded-full px-2.5 py-1 border-2 border-foreground/20 text-xs font-bold flex items-center gap-1">
+          <Sparkles className="h-3 w-3 text-primary" /> {concept.family_fit_score}% fit
+        </div>
+      </div>
+      <div className="p-5">
+        <h4 className="font-[Fredoka] text-xl font-bold">{concept.title}</h4>
+        <div className="flex items-center gap-1 text-xs text-muted-foreground font-semibold mt-0.5">
+          <MapPin className="h-3 w-3" /> {concept.destinations.join(" · ")}
+        </div>
+        <p className="text-sm text-foreground/75 mt-3 leading-relaxed">
+          {concept.rationale[0] ?? concept.estimated_travel_burden}
+        </p>
+        <div className="flex flex-wrap gap-1.5 mt-4">
+          {[concept.estimated_cost_band_cad, concept.best_season, `${concept.recommended_duration_days}d`].filter(Boolean).map((tag) => (
+            <span key={tag} className="px-2 py-0.5 rounded-full bg-muted border border-foreground/10 text-xs font-bold">
+              {tag}
+            </span>
+          ))}
+        </div>
+        <Button
+          onClick={onPick}
+          disabled={isSaving}
+          className="w-full mt-4 h-10 rounded-xl bg-foreground text-background font-bold hover:bg-foreground/90"
+        >
+          {isSaving ? (
+            <><Loader2 className="h-4 w-4 animate-spin" /> Saving…</>
+          ) : (
+            "Pick this idea"
+          )}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 export default NewTrip;

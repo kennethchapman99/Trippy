@@ -114,6 +114,7 @@ class FlightOption(BaseModel):
     option_id: str
     rank: int
     airline: str
+    airline_logo_url: str = ""
     flight_numbers: list[str] = Field(default_factory=list)
     departure_date: str = ""
     arrival_date: str = ""
@@ -184,6 +185,7 @@ class LodgingOption(BaseModel):
     cancellation_notes: str
     price_band: str
     deep_link: str
+    photo_urls: list[str] = Field(default_factory=list)
     validation_links: dict[str, str] = Field(default_factory=dict)
     friction_score: int
     family_comfort_score: int
@@ -221,6 +223,7 @@ class CarOption(BaseModel):
     cancellation_notes: str
     fees_caution: str
     deep_link: str
+    photo_urls: list[str] = Field(default_factory=list)
     comparison_links: dict[str, str] = Field(default_factory=dict)
     family_comfort_score: int
     luggage_practicality_score: int
@@ -270,6 +273,7 @@ class ActivityOption(BaseModel):
     scheduled_flexibility: str = "flexible"
     scheduling_notes: str = ""
     deep_link: str
+    photo_urls: list[str] = Field(default_factory=list)
     validation_links: dict[str, str] = Field(default_factory=dict)
     family_pace_fit_score: int
     safety_confidence_score: int

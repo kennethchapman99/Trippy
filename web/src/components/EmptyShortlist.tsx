@@ -38,7 +38,7 @@ export function EmptyShortlist({
       >
         {isLoading ? (
           <>
-            <Loader2 className="h-4 w-4 animate-spin" /> Hermes is researching…
+            <Loader2 className="h-4 w-4 animate-spin" /> Trippy is researching…
           </>
         ) : (
           ctaLabel

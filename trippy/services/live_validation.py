@@ -92,12 +92,15 @@ class LiveValidationService:
         validation.notes.append(message)
         if ok:
             validation.freshness_status = FreshnessStatus.CURRENT
-            if validation.verification_status != VerificationStatus.LIVE_VERIFIED:
+            provider_verified = validation.verification_status == VerificationStatus.LIVE_VERIFIED
+            if not provider_verified:
                 validation.verification_status = VerificationStatus.LINK_VALIDATED
             validation.availability_status = AvailabilityStatus.SEARCH_AVAILABLE
             validation.confidence = min(0.82, max(validation.confidence, 0.62))
             option.row_status = ShortlistRowStatus.VERIFIED_LIVE
-            option.live_data_status = LiveDataStatus.PARTIAL
+            option.live_data_status = (
+                LiveDataStatus.LIVE_VERIFIED if provider_verified else LiveDataStatus.PARTIAL
+            )
             validation.notes.append(
                 "Live source page was reachable; exact inventory, final price, and terms still require in-page human verification."
             )

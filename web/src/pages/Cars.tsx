@@ -8,9 +8,9 @@ import { EmptyShortlist } from "@/components/EmptyShortlist";
 import { Button } from "@/components/ui/button";
 import {
   Loader2, Car, Check, ExternalLink, ArrowRight, RefreshCcw,
-  AlertCircle, AlertTriangle, Users, Luggage,
+  AlertCircle, AlertTriangle, Users, Luggage, Camera,
 } from "lucide-react";
-import { api, type CarOption, type TripIntake } from "@/lib/api";
+import { api, mergeShortlistIntoTrip, type CarOption, type TripIntake, type TripState } from "@/lib/api";
 import { buildStages, shortlistOptions } from "@/lib/stages";
 import {
   Chip,
@@ -39,12 +39,22 @@ const Cars = () => {
 
   const buildMutation = useMutation({
     mutationFn: () => api.buildShortlist(tripId!, "cars", { validate_live: true, deep_research: true }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["trip", tripId] }),
+    onSuccess: (response) => {
+      queryClient.setQueryData<TripState>(["trip", tripId], (current) =>
+        mergeShortlistIntoTrip(current, response.shortlist),
+      );
+      queryClient.invalidateQueries({ queryKey: ["trip", tripId] });
+    },
   });
 
   const selectMutation = useMutation({
     mutationFn: (id: string) => api.selectCar(tripId!, id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["trip", tripId] }),
+    onSuccess: (response) => {
+      queryClient.setQueryData<TripState>(["trip", tripId], (current) =>
+        mergeShortlistIntoTrip(current, response.shortlist),
+      );
+      queryClient.invalidateQueries({ queryKey: ["trip", tripId] });
+    },
   });
 
   const trip = tripQuery.data;
@@ -54,6 +64,7 @@ const Cars = () => {
   const recommendedId = shortlist?.recommended_option_id;
   const flagCount = options.reduce((s, o) => s + o.friction_flags.length, 0);
   const hasSelection = options.some((o) => o.row_status === "approved");
+  const hasShortlist = Boolean(shortlist);
 
   const sorted = useMemo(() => sortCars(options, sortKey), [options, sortKey]);
   const banner = useMemo(
@@ -63,7 +74,13 @@ const Cars = () => {
 
   return (
     <AppShell>
-      <ShortlistHero intake={trip?.intake} stageLabel="Cars" stageNumber={5} flagCount={flagCount} />
+      <ShortlistHero
+        intake={trip?.intake}
+        shortlists={trip?.shortlists}
+        stageLabel="Cars"
+        stageNumber={5}
+        flagCount={flagCount}
+      />
       <div className="px-6 md:px-10 py-5 border-b-2 border-foreground/10 bg-card/60 backdrop-blur sticky top-0 z-30">
         <StageNav stages={stages} />
       </div>
@@ -76,7 +93,7 @@ const Cars = () => {
             </div>
             <h2 className="font-[Fredoka] text-3xl md:text-4xl font-bold mt-1">Pick your wheels.</h2>
           </div>
-          {options.length > 0 && (
+          {hasShortlist && (
             <button
               onClick={() => buildMutation.mutate()}
               disabled={buildMutation.isPending}
@@ -107,8 +124,20 @@ const Cars = () => {
         {!tripQuery.isLoading && !shortlist && (
           <EmptyShortlist
             title="No car options yet"
-            description="Hermes will research rentals at your pickup location, score for passenger/luggage fit, parking practicality, and pickup simplicity."
+            description="Trippy will research rentals at your pickup location, score for passenger/luggage fit, parking practicality, and pickup simplicity."
             ctaLabel="Build car shortlist"
+            onBuild={() => buildMutation.mutate()}
+            isLoading={buildMutation.isPending}
+            isError={buildMutation.isError}
+            errorMessage={(buildMutation.error as Error)?.message}
+          />
+        )}
+
+        {!tripQuery.isLoading && shortlist && options.length === 0 && (
+          <EmptyShortlist
+            title="No car rows returned"
+            description="The shortlist exists, but it did not produce any car rows. Re-run car research after connecting live providers."
+            ctaLabel="Re-research cars"
             onBuild={() => buildMutation.mutate()}
             isLoading={buildMutation.isPending}
             isError={buildMutation.isError}
@@ -139,7 +168,7 @@ const Cars = () => {
         )}
 
         {sorted.length > 0 && (
-          <div className="flex flex-col gap-4">
+          <div id="friction-review" className="flex scroll-mt-32 flex-col gap-4">
             {sorted.map((o) => (
               <CarRow
                 key={o.option_id}
@@ -237,7 +266,8 @@ function CarRow({
         }
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_minmax(180px,_auto)] gap-5 px-5 py-5">
+      <div className="grid grid-cols-1 md:grid-cols-[168px_1fr_1fr_minmax(180px,_auto)] gap-5 px-5 py-5">
+        <CarImage option={option} />
         <div className="flex items-start gap-2">
           <Users className="h-5 w-5 text-foreground/50 mt-0.5" />
           <div>
@@ -294,11 +324,12 @@ function CarRow({
             <ArrowRight className="h-4 w-4" /> Open listing
           </a>
         )}
-        {option.deep_link && (
-          <a href={option.deep_link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground">
-            <ExternalLink className="h-3.5 w-3.5" /> Book / confirm
+        <SourcePill option={option} />
+        {Object.entries(option.comparison_links ?? {}).slice(0, 2).map(([source, link]) => (
+          <a key={source} href={link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground">
+            <ExternalLink className="h-3.5 w-3.5" /> {source}
           </a>
-        )}
+        ))}
         <button type="button" onClick={onToggleWhy} className="ml-auto text-sm font-medium text-muted-foreground hover:text-foreground">
           {whyOpen ? "Hide details" : "Why not this?"}
         </button>
@@ -318,6 +349,40 @@ function CarRow({
         </div>
       )}
     </article>
+  );
+}
+
+function CarImage({ option }: { option: CarOption }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const imageUrl = option.photo_urls?.find((url) => url.startsWith("http"));
+  if (!imageUrl || imgFailed) {
+    return (
+      <div className="h-32 md:h-full min-h-32 rounded-2xl border-2 border-foreground/10 bg-muted/60 flex items-center justify-center text-muted-foreground">
+        <Camera className="h-7 w-7" />
+      </div>
+    );
+  }
+  return (
+    <div className="h-32 md:h-full min-h-32 rounded-2xl overflow-hidden border-2 border-foreground/10 bg-muted">
+      <img
+        src={imageUrl}
+        alt={option.vehicle_class}
+        loading="lazy"
+        className="h-full w-full object-cover"
+        onError={() => setImgFailed(true)}
+      />
+    </div>
+  );
+}
+
+function SourcePill({ option }: { option: CarOption }) {
+  const source = option.validation?.source_name || option.booking_source;
+  const adapter = option.validation?.adapter_used;
+  const label = adapter ? `${source} · ${adapter}` : source;
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-foreground/15 bg-muted/50 px-2.5 py-1 text-xs font-bold text-foreground/70">
+      From {label}
+    </span>
   );
 }
 

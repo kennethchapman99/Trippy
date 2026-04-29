@@ -41,6 +41,20 @@ function shortlistExists(state: TripState | undefined, category: ShortlistCatego
   return !!state.shortlists?.find((s) => s.category === category);
 }
 
+function stagePath(tripId: string | undefined, key: StageKey): string | undefined {
+  if (!tripId) return undefined;
+  switch (key) {
+    case "intake":
+      return undefined;
+    case "packet":
+      return `/trip/${tripId}/timeline`;
+    case "do":
+      return `/trip/${tripId}/do`;
+    default:
+      return `/trip/${tripId}/${key}`;
+  }
+}
+
 function isDone(state: TripState | undefined, key: StageKey): boolean {
   if (!state) return false;
   switch (key) {
@@ -62,15 +76,19 @@ function isDone(state: TripState | undefined, key: StageKey): boolean {
 
 export function buildStages(state: TripState | undefined, current: StageKey): Stage[] {
   let foundCurrent = false;
+  const tripId = state?.trip_id;
   return STAGE_DEFS.map((def): Stage => {
+    const href = stagePath(tripId, def.key);
+    const canNavigate = !!href && (!foundCurrent || def.key === current || isDone(state, def.key));
+
     if (def.key === current) {
       foundCurrent = true;
-      return { id: def.id, label: def.label, status: "current" };
+      return { id: def.id, label: def.label, status: "current", href, canNavigate };
     }
     if (!foundCurrent && isDone(state, def.key)) {
-      return { id: def.id, label: def.label, status: "done" };
+      return { id: def.id, label: def.label, status: "done", href, canNavigate };
     }
-    return { id: def.id, label: def.label, status: "todo" };
+    return { id: def.id, label: def.label, status: "todo", href, canNavigate };
   });
 }
 

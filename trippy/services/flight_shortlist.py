@@ -26,10 +26,10 @@ from trippy.models.shortlists import (
     VerificationStatus,
 )
 from trippy.models.sources import TravelSourceCategory
-from trippy.services.destination_profiles import profile_for_intake
 from trippy.services import serpapi_client
-from trippy.services.serpapi_options import flight_options_from_serpapi
+from trippy.services.destination_profiles import profile_for_intake
 from trippy.services.live_validation import LiveValidationService
+from trippy.services.serpapi_options import flight_options_from_serpapi
 from trippy.services.shortlist_store import (
     ShortlistContext,
     ShortlistStore,
@@ -69,14 +69,14 @@ class FlightShortlistService:
         )
         plan = source_plan(TravelSourceCategory.FLIGHTS)
         profile = profile_for_intake(ctx.intake)
-        gateway = profile.gateway_airports[0] if profile.gateway_airports else "destination"
+        gateway = profile.gateway_airports[0] if profile.gateway_airports else _destination_gateway(ctx, "")
         live_options, live_notes = _duffel_live_options(ctx, gateway)
         if not live_options:
             serp_options, serp_notes = _serpapi_live_flights(ctx, gateway)
             live_notes = [*live_notes, *serp_notes]
             if serp_options:
                 live_options = serp_options
-        options = live_options or _azores_options(ctx, gateway)
+        options = live_options or _fallback_flight_options(ctx, gateway)
         state = ResearchShortlistState(
             trip_id=trip_id,
             category=ShortlistCategory.FLIGHTS,
@@ -162,8 +162,14 @@ class FlightShortlistService:
         _refresh_flight_recommendations(state, ctx)
         return self._store.save(state)
 
-    def select_flight(self, trip_id: str, option_id: str) -> ResearchShortlistState:
-        """Promote a flight option as the current human-preferred planning choice."""
+    def select_flight(
+        self,
+        trip_id: str,
+        option_id: str,
+        *,
+        selection_kind: str = "outbound",
+    ) -> ResearchShortlistState:
+        """Promote a flight option as a human-preferred outbound or return choice."""
         ctx = ShortlistContext(
             trip_id,
             intake_service=self._intakes,
@@ -175,51 +181,69 @@ class FlightShortlistService:
         option_ids = {option.option_id for option in state.flight_options}
         if option_id not in option_ids:
             raise ValueError(f"Flight option {option_id!r} was not found for trip {trip_id!r}")
-        state.recommended_option_id = option_id
+        kind = _normalize_selection_kind(selection_kind)
+        selection = dict(state.artifacts.get("flight_selection") or {})
+        selection[f"selected_{kind}_option_id"] = option_id
+        state.artifacts["flight_selection"] = selection
+        if kind == "outbound":
+            state.recommended_option_id = option_id
         for option in state.flight_options:
-            option.row_status = (
-                ShortlistRowStatus.APPROVED if option.option_id == option_id else option.row_status
-            )
             if option.option_id == option_id:
-                option.recommendation_label = "Selected"
-                option.planning_next_step = "Use this flight timing to verify lodging check-in, car pickup, and first/last day pacing."
+                option.row_status = ShortlistRowStatus.APPROVED
+                option.recommendation_label = (
+                    "Departure selected" if kind == "outbound" else "Return selected"
+                )
+                option.planning_next_step = (
+                    "Use this departure timing to verify lodging check-in, car pickup, and first-day pacing."
+                    if kind == "outbound"
+                    else "Use this return timing to constrain final-night lodging, checkout, car dropoff, and last-day pacing."
+                )
         _refresh_flight_recommendations(state, ctx, preserve_selection=True)
+        _write_flight_selection_artifact(state)
         state.next_actions.insert(
             0,
-            "Selected flight now drives lodging check-in, car pickup, Master Timeline, and date-fit review.",
+            (
+                "Selected departure flight now drives lodging check-in, car pickup, Master Timeline, and date-fit review."
+                if kind == "outbound"
+                else "Selected return flight now constrains final-night lodging, car dropoff, Master Timeline, and last-day pacing."
+            ),
         )
         return self._store.save(state)
 
 
-def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
+def _fallback_flight_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
     origin = ctx.intake.departure_airports[0] if ctx.intake.departure_airports else "YYZ"
+    destination = _iata_or_text(gateway)
+    destination_label = profile_for_intake(ctx.intake).title or ", ".join(ctx.intake.destination_seeds) or destination
     traveler_count = ctx.intake.party.total_travelers
     party_note = ctx.intake.party.summary()
     date_hint = _flight_date_hint(ctx)
-    comparison = _flight_comparison_links(origin, gateway, ctx)
+    departure_date, return_date = _flight_dates(ctx)
+    comparison = _flight_comparison_links(origin, destination, ctx)
     return [
         FlightOption(
-            option_id="flight-direct-yyz-pdl",
+            option_id="flight-direct-route",
             rank=1,
-            airline="Azores Airlines / SATA candidate",
+            airline=f"{origin}-{destination} nonstop candidate",
             flight_numbers=[],
+            departure_date=departure_date.isoformat(),
+            arrival_date=departure_date.isoformat(),
             departure_airport=origin,
-            arrival_airport=gateway,
-            departure_time="target evening departure if nonstop operates",
-            arrival_time="target next-morning or same-day arrival; verify check-in gap",
+            arrival_airport=destination,
+            departure_time="Open search",
+            arrival_time="Verify time",
             stops=0,
             layover_airports=[],
             layover_duration=None,
-            total_travel_duration="about 5.5-6.5h if seasonal nonstop is operating",
+            total_travel_duration="duration live-verify",
             timing_fit=(
-                "Best timing shape if arrival is not stranded before lodging check-in; "
-                "consider prior-night lodging if arrival is very early."
+                "Best shape if nonstop service operates on the trip dates and arrival aligns with check-in."
             ),
             fare_estimate_cad="live verify; often worth a premium for family smoothness",
-            price_band="CAD 900-1,600 pp live-verify band",
+            price_band="live-verify band",
             baggage_cabin_notes="Validate included bags, seat selection, and family seating before booking.",
             booking_source="Google Flights",
-            deep_link=_flight_source_url("Google Flights", origin, gateway, ctx),
+            deep_link=_flight_source_url("Google Flights", origin, destination, ctx),
             traveler_count=traveler_count,
             traveler_fit=f"Best fit for {party_note}: one plane, no layover, simplest baggage/seat path.",
             comparison_links=comparison,
@@ -228,11 +252,11 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
             family_comfort_score=94,
             recommendation_grade=RecommendationGrade.STRONG,
             tradeoffs=[
-                "Likely highest comfort if available because it avoids layover failure and travel-day loss.",
-                "May cost more or operate seasonally; price premium can still be rational for a short family trip.",
+                f"Likely highest comfort for {destination_label} if nonstop service is available.",
+                "May cost more or operate only on certain days; verify the source before relying on it.",
             ],
             friction_flags=[
-                "seasonal availability must be verified",
+                "nonstop availability must be verified",
                 "baggage and seat terms unknown",
             ],
             confidence_notes=[
@@ -242,38 +266,40 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
             live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
         ),
         FlightOption(
-            option_id="flight-star-alliance-lis-pdl",
+            option_id="flight-one-stop-same-ticket",
             rank=2,
-            airline="Air Canada / TAP Portugal same-ticket candidate",
+            airline=f"{origin}-{destination} one-stop same-ticket candidate",
             flight_numbers=[],
+            departure_date=departure_date.isoformat(),
+            arrival_date=departure_date.isoformat(),
             departure_airport=origin,
-            arrival_airport=gateway,
-            departure_time="target overnight YYZ departure or clean daytime connection",
-            arrival_time="target afternoon/evening PDL arrival for check-in alignment",
+            arrival_airport=destination,
+            departure_time="Open search",
+            arrival_time="Verify time",
             stops=1,
-            layover_airports=["LIS"],
-            layover_duration="target 2-4h, avoid tight Schengen transfer",
-            total_travel_duration="about 10-13h depending on Lisbon connection",
-            timing_fit="Acceptable only if Lisbon buffer preserves a sane PDL arrival and first-night check-in.",
-            fare_estimate_cad="live verify; compare against direct premium",
-            price_band="CAD 850-1,500 pp live-verify band",
+            layover_airports=[],
+            layover_duration="verify connection buffer",
+            total_travel_duration="duration live-verify",
+            timing_fit="Acceptable only if the connection is protected and the arrival still works for lodging check-in.",
+            fare_estimate_cad="live verify; compare against nonstop premium",
+            price_band="live-verify band",
             baggage_cabin_notes="Prefer same-ticket baggage through-check and long-haul seat selection clarity.",
             booking_source="Google Flights",
-            deep_link=_flight_source_url("Google Flights", origin, gateway, ctx),
+            deep_link=_flight_source_url("Google Flights", origin, destination, ctx),
             traveler_count=traveler_count,
-            traveler_fit=f"Acceptable for {party_note} only with same-ticket baggage and sane Lisbon buffer.",
+            traveler_fit=f"Acceptable for {party_note} only with same-ticket baggage and a sane connection buffer.",
             comparison_links=comparison,
-            aeroplan_relevance="High if booked on eligible Air Canada/TAP Star Alliance fare; verify booking class.",
+            aeroplan_relevance="Potentially relevant if booked on eligible Air Canada or partner fare; verify booking class.",
             friction_score=24,
             family_comfort_score=82,
             recommendation_grade=RecommendationGrade.GOOD,
             tradeoffs=[
-                "Aeroplan relevance may offset some friction if the fare is same-ticket and well timed.",
-                "Lisbon transfer adds Schengen connection risk and can burn a larger travel day.",
+                "Can be the practical backup if nonstop is unavailable or irrationally priced.",
+                "Connection adds delay and baggage risk, especially with checked bags.",
             ],
             friction_flags=[
                 "layover timing needs validation",
-                "avoid overnight or very tight Lisbon transfer",
+                "avoid overnight or very tight connection",
             ],
             confidence_notes=[
                 "Use as the best backup if nonstop is unavailable or irrationally expensive.",
@@ -281,28 +307,30 @@ def _azores_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
             ],
         ),
         FlightOption(
-            option_id="flight-boston-positioning-pdl",
+            option_id="flight-price-sanity-check",
             rank=3,
-            airline="Toronto-Boston positioning + Azores gateway candidate",
+            airline=f"{origin}-{destination} price sanity-check candidate",
             flight_numbers=[],
+            departure_date=departure_date.isoformat(),
+            arrival_date=return_date.isoformat(),
             departure_airport=origin,
-            arrival_airport=gateway,
-            departure_time="variable; avoid early positioning unless buffer is generous",
-            arrival_time="variable; high check-in and fatigue risk if split across tickets",
+            arrival_airport=destination,
+            departure_time="Open search",
+            arrival_time="Verify time",
             stops=1,
-            layover_airports=["BOS"],
-            layover_duration="requires generous protected buffer or overnight",
-            total_travel_duration="variable; often high friction if multi-ticket",
+            layover_airports=[],
+            layover_duration="requires generous protected buffer",
+            total_travel_duration="duration live-verify",
             timing_fit="Weak unless protected routing and lodging timing are both unusually clean.",
             fare_estimate_cad="live verify; only consider with a meaningful upside",
-            price_band="CAD 700-1,400 pp live-verify band",
+            price_band="live-verify band",
             baggage_cabin_notes="Do not accept unprotected baggage recheck with a tight family connection.",
             booking_source="Kayak.ca",
-            deep_link=_flight_source_url("Kayak.ca", origin, gateway, ctx),
+            deep_link=_flight_source_url("Kayak.ca", origin, destination, ctx),
             traveler_count=traveler_count,
             traveler_fit=f"Weak fit for {party_note} unless protected, because luggage/recheck risk scales with party size.",
-            comparison_links=_flight_comparison_links(origin, gateway, ctx),
-            aeroplan_relevance="Possible on the Toronto-Boston leg only; weak overall unless same-ticket.",
+            comparison_links=_flight_comparison_links(origin, destination, ctx),
+            aeroplan_relevance="Weak unless a same-ticket eligible carrier routing is found.",
             friction_score=48,
             family_comfort_score=62,
             recommendation_grade=RecommendationGrade.CONDITIONAL,
@@ -356,18 +384,49 @@ def _duffel_live_options(
     if not offers:
         return [], ["Duffel returned no live offers for this route/date search."]
     comparison = _flight_comparison_links(origin, destination, ctx)
+    skipped_sandbox = sum(1 for offer in offers[:8] if _is_duffel_sandbox_offer(offer))
+    usable_offers = [offer for offer in offers[:8] if not _is_duffel_sandbox_offer(offer)]
+    timing_valid_offers: list[dict[str, object]] = []
+    rejected_timing: list[str] = []
+    for offer in usable_offers:
+        reason = _duffel_offer_timing_rejection_reason(offer)
+        if reason:
+            rejected_timing.append(reason)
+        else:
+            timing_valid_offers.append(offer)
+    usable_offers = timing_valid_offers
     options = [
         option
         for option in (
             _duffel_offer_to_option(offer, index, ctx, origin, destination, comparison)
-            for index, offer in enumerate(offers[:8], start=1)
+            for index, offer in enumerate(usable_offers, start=1)
         )
         if option is not None
     ]
-    return options, [
+    if not options:
+        notes = ["Duffel returned no usable real-carrier offers for this route/date search."]
+        if skipped_sandbox:
+            notes.append(
+                f"Ignored {skipped_sandbox} Duffel sandbox/test offer row(s), including Duffel Airways."
+            )
+        if rejected_timing:
+            notes.append(
+                f"Ignored {len(rejected_timing)} Duffel offer row(s) with impossible timing/date spans."
+            )
+        return [], notes
+    notes = [
         f"Duffel returned {len(options)} exact offer row(s) for {origin}-{destination}.",
         "Duffel prices are live offer signals but can expire; verify before booking.",
     ]
+    if skipped_sandbox:
+        notes.append(
+            f"Ignored {skipped_sandbox} Duffel sandbox/test offer row(s), including Duffel Airways."
+        )
+    if rejected_timing:
+        notes.append(
+            f"Ignored {len(rejected_timing)} Duffel offer row(s) with impossible timing/date spans."
+        )
+    return options, notes
 
 
 def _duffel_offer_request_payload(
@@ -455,6 +514,7 @@ def _duffel_offer_to_option(
     flight_numbers = [_segment_flight_number(segment) for segment in segments]
     flight_numbers = [number for number in flight_numbers if number]
     carriers = _segment_carriers(segments)
+    airline_logo_url = _segment_airline_logo_url(segments)
     owner = offer.get("owner")
     owner_name = str(owner.get("name") or "") if isinstance(owner, dict) else ""
     airline = " / ".join(carriers) if carriers else owner_name or "Live flight offer"
@@ -487,6 +547,7 @@ def _duffel_offer_to_option(
         adapter_used="duffel",
         extracted_fields={
             "airline": airline,
+            "airline_logo_url": airline_logo_url,
             "flight_numbers": flight_numbers,
             "departure_date": departure_date,
             "arrival_date": arrival_date,
@@ -515,6 +576,7 @@ def _duffel_offer_to_option(
         option_id=f"duffel-flight-{rank}",
         rank=rank,
         airline=airline,
+        airline_logo_url=airline_logo_url,
         flight_numbers=flight_numbers,
         departure_date=departure_date,
         arrival_date=arrival_date,
@@ -735,6 +797,80 @@ def _segment_carriers(segments: list[dict[str, object]]) -> list[str]:
     return carriers
 
 
+def _segment_airline_logo_url(segments: list[dict[str, object]]) -> str:
+    for segment in segments:
+        for key in ("marketing_carrier", "operating_carrier"):
+            carrier = segment.get(key)
+            if not isinstance(carrier, dict):
+                continue
+            for logo_key in ("logo_symbol_url", "logo_lockup_url", "logo_url"):
+                logo = str(carrier.get(logo_key) or "")
+                if logo:
+                    return logo
+    return ""
+
+
+def _is_duffel_sandbox_offer(offer: dict[str, object]) -> bool:
+    owner = offer.get("owner")
+    owner_name = str(owner.get("name") or "") if isinstance(owner, dict) else ""
+    if _is_synthetic_duffel_carrier(owner_name):
+        return True
+    slices = offer.get("slices")
+    raw_segments: list[object] = []
+    if isinstance(slices, list):
+        for item in slices:
+            if isinstance(item, dict):
+                segments = item.get("segments")
+                if isinstance(segments, list):
+                    raw_segments.extend(segments)
+    for segment in raw_segments:
+        if not isinstance(segment, dict):
+            continue
+        for carrier_key in ("marketing_carrier", "operating_carrier"):
+            carrier = segment.get(carrier_key)
+            if not isinstance(carrier, dict):
+                continue
+            name = str(carrier.get("name") or "")
+            iata_code = str(carrier.get("iata_code") or "")
+            if _is_synthetic_duffel_carrier(name) or iata_code.upper() == "ZZ":
+                return True
+    return False
+
+
+def _duffel_offer_timing_rejection_reason(offer: dict[str, object]) -> str:
+    slices = offer.get("slices")
+    if not isinstance(slices, list) or not slices:
+        return ""
+    outbound = slices[0]
+    if not isinstance(outbound, dict):
+        return ""
+    segments = outbound.get("segments")
+    if not isinstance(segments, list) or not segments:
+        return ""
+    typed_segments = [segment for segment in segments if isinstance(segment, dict)]
+    if not typed_segments:
+        return ""
+    first = typed_segments[0]
+    last = typed_segments[-1]
+    start = _parse_duffel_datetime(str(first.get("departing_at") or ""))
+    end = _parse_duffel_datetime(str(last.get("arriving_at") or ""))
+    if not start or not end:
+        return ""
+    elapsed_minutes = int((end - start).total_seconds() // 60)
+    if elapsed_minutes <= 0:
+        return "arrival timestamp is not after departure timestamp"
+    advertised_minutes = _iso_duration_minutes(str(outbound.get("duration") or ""))
+    if advertised_minutes and elapsed_minutes - advertised_minutes > 12 * 60:
+        return "segment timestamps are inconsistent with slice duration"
+    if elapsed_minutes > 72 * 60:
+        return "outbound elapsed time exceeds three days"
+    return ""
+
+
+def _is_synthetic_duffel_carrier(value: str) -> bool:
+    return "duffel airways" in value.strip().lower()
+
+
 def _segment_airport(segment: dict[str, object], key: str) -> str:
     airport = segment.get(key)
     if isinstance(airport, dict):
@@ -795,12 +931,20 @@ def _parse_duffel_datetime(value: str) -> datetime | None:
 
 
 def _format_iso_duration(value: str) -> str:
-    match = re.fullmatch(r"P(?:\d+D)?T(?:(\d+)H)?(?:(\d+)M)?", value)
-    if not match:
+    total_minutes = _iso_duration_minutes(value)
+    if not total_minutes:
         return value
-    hours = int(match.group(1) or 0)
-    minutes = int(match.group(2) or 0)
-    return _format_minutes(hours * 60 + minutes)
+    return _format_minutes(total_minutes)
+
+
+def _iso_duration_minutes(value: str) -> int:
+    match = re.fullmatch(r"P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?", value)
+    if not match:
+        return 0
+    days = int(match.group(1) or 0)
+    hours = int(match.group(2) or 0)
+    minutes = int(match.group(3) or 0)
+    return days * 24 * 60 + hours * 60 + minutes
 
 
 def _format_minutes(total_minutes: int) -> str:
@@ -923,7 +1067,12 @@ def _protobuf_varint(value: int) -> bytes:
 
 def _flight_dates(ctx: ShortlistContext) -> tuple[date, date]:
     window = ctx.intake.travel_window
+    has_exact_start = window.start_date is not None
     departure_date = window.start_date or _representative_departure_date(window.display())
+    if not has_exact_start:
+        minimum_search_date = date.today() + timedelta(days=30)
+        while departure_date < minimum_search_date:
+            departure_date = date(departure_date.year + 1, departure_date.month, departure_date.day)
     duration_days = (
         ctx.intake.duration_days or ctx.intake.duration_min_days or ctx.option.duration_days or 7
     )
@@ -1095,6 +1244,67 @@ def _refresh_flight_recommendations(
         "budget_best_option_id": budget_best.option_id if budget_best else "",
         "shortest_option_id": shortest.option_id if shortest else "",
         "lowest_friction_option_id": lowest_friction.option_id,
+    }
+    _write_flight_selection_artifact(state)
+
+
+def _normalize_selection_kind(value: str) -> str:
+    normalized = (value or "outbound").strip().lower()
+    if normalized in {"return", "inbound", "homebound"}:
+        return "return"
+    return "outbound"
+
+
+def _write_flight_selection_artifact(state: ResearchShortlistState) -> None:
+    selection = dict(state.artifacts.get("flight_selection") or {})
+    outbound_id = selection.get("selected_outbound_option_id") or ""
+    return_id = selection.get("selected_return_option_id") or ""
+    outbound = _flight_option_by_id(state, str(outbound_id)) if outbound_id else None
+    return_flight = _flight_option_by_id(state, str(return_id)) if return_id else None
+
+    if outbound:
+        outbound.row_status = ShortlistRowStatus.APPROVED
+        outbound.recommendation_label = _selection_label(outbound.recommendation_label, "Departure")
+    if return_flight:
+        return_flight.row_status = ShortlistRowStatus.APPROVED
+        return_flight.recommendation_label = _selection_label(return_flight.recommendation_label, "Return")
+
+    selection.update(
+        {
+            "selected_outbound_option_id": outbound.option_id if outbound else "",
+            "selected_return_option_id": return_flight.option_id if return_flight else "",
+            "outbound_summary": _selection_summary(outbound),
+            "return_summary": _selection_summary(return_flight),
+            "constraint_status": "complete" if outbound and return_flight else "return_needed",
+        }
+    )
+    state.artifacts["flight_selection"] = selection
+
+
+def _flight_option_by_id(state: ResearchShortlistState, option_id: str) -> FlightOption | None:
+    return next((option for option in state.flight_options if option.option_id == option_id), None)
+
+
+def _selection_label(current: str, prefix: str) -> str:
+    parts = [part.strip() for part in (current or "").split("·") if part.strip()]
+    parts = [part for part in parts if part not in {"Selected", "Departure selected", "Return selected"}]
+    return " · ".join([f"{prefix} selected", *parts])
+
+
+def _selection_summary(option: FlightOption | None) -> dict[str, str]:
+    if option is None:
+        return {}
+    return {
+        "option_id": option.option_id,
+        "airline": option.airline,
+        "flight_numbers": " + ".join(option.flight_numbers),
+        "departure_date": option.departure_date,
+        "departure_time": option.departure_time,
+        "arrival_date": option.arrival_date,
+        "arrival_time": option.arrival_time,
+        "route": f"{option.departure_airport} to {option.arrival_airport}",
+        "duration": option.total_travel_duration,
+        "source": option.booking_source,
     }
 
 

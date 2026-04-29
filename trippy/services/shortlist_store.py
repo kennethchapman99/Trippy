@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 import unicodedata
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote_plus
+from zoneinfo import ZoneInfo
 
 from trippy.models.shortlists import ResearchShortlistState, ShortlistCategory
 from trippy.models.sources import SourcePlan, TravelSourceCategory
@@ -30,6 +33,8 @@ class ShortlistStore:
         return self._dir / f"{trip_id}-{category.value}.json"
 
     def save(self, state: ResearchShortlistState) -> ResearchShortlistState:
+        if state.category == ShortlistCategory.FLIGHTS:
+            _sanitize_flight_rows(state)
         self._ensure_dir()
         self.path_for(state.trip_id, state.category).write_text(
             state.model_dump_json(indent=2),
@@ -42,7 +47,10 @@ class ShortlistStore:
         if not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
-        return ResearchShortlistState.model_validate(data)
+        state = ResearchShortlistState.model_validate(data)
+        if category == ShortlistCategory.FLIGHTS:
+            _sanitize_flight_rows(state)
+        return state
 
     def load_all(self, trip_id: str) -> list[ResearchShortlistState]:
         states = []
@@ -175,3 +183,213 @@ def _selected_region_terms(selected: list[str]) -> list[str]:
             if normalized:
                 terms.append(normalized)
     return terms
+
+
+USD_TO_CAD_RATE = 1.37
+
+
+def _sanitize_flight_rows(state: ResearchShortlistState) -> None:
+    _remove_synthetic_flight_rows(state)
+    for option in state.flight_options:
+        _repair_flight_duration(option)
+        _normalize_flight_price_to_cad(option)
+
+
+def _remove_synthetic_flight_rows(state: ResearchShortlistState) -> None:
+    original_count = len(state.flight_options)
+    state.flight_options = [
+        option for option in state.flight_options if not _is_synthetic_flight_option(option)
+    ]
+    removed_count = original_count - len(state.flight_options)
+    _remove_synthetic_flight_summary_text(state)
+    if not removed_count:
+        return
+    if state.recommended_option_id and not any(
+        option.option_id == state.recommended_option_id for option in state.flight_options
+    ):
+        state.recommended_option_id = state.flight_options[0].option_id if state.flight_options else None
+    warning = f"Ignored {removed_count} Duffel sandbox/test flight row(s), including Duffel Airways."
+    if warning not in state.warnings:
+        state.warnings.append(warning)
+
+
+def _remove_synthetic_flight_summary_text(state: ResearchShortlistState) -> None:
+    state.recommendation_summary = re.sub(
+        r"\s*Runner-up:\s*Duffel Airways if the tradeoff is worth it\.\s*",
+        " ",
+        state.recommendation_summary,
+    ).strip()
+    if state.recommendation_summary.startswith("Best current flight: Duffel Airways."):
+        replacement = state.flight_options[0].airline if state.flight_options else "Verify live flight options"
+        state.recommendation_summary = state.recommendation_summary.replace(
+            "Best current flight: Duffel Airways.",
+            f"Best current flight: {replacement}.",
+            1,
+        )
+
+
+def _is_synthetic_flight_option(option: object) -> bool:
+    airline = str(getattr(option, "airline", "") or "").lower()
+    if "duffel airways" in airline:
+        return True
+    flight_numbers = getattr(option, "flight_numbers", []) or []
+    return any(str(number).upper().startswith("ZZ") for number in flight_numbers)
+
+
+def _repair_flight_duration(option: object) -> None:
+    computed = _duration_from_option_times(option)
+    if computed is None:
+        return
+    current = _duration_minutes(str(getattr(option, "total_travel_duration", "") or ""))
+    should_repair = current is None or current >= 18 * 60 or (computed < current and current - computed > 30)
+    if should_repair:
+        option.total_travel_duration = _format_minutes(computed)
+        validation = getattr(option, "validation", None)
+        if validation is not None:
+            validation.extracted_fields["total_duration"] = _format_minutes(computed)
+            validation.notes = _dedupe(
+                [
+                    *validation.notes,
+                    "Corrected flight duration from departure/arrival timestamps; ignored conflicting scraped duration text.",
+                ]
+            )
+
+
+def _duration_from_option_times(option: object) -> int | None:
+    departure = _parse_flight_datetime(
+        str(getattr(option, "departure_date", "") or ""),
+        str(getattr(option, "departure_time", "") or ""),
+        str(getattr(option, "departure_airport", "") or ""),
+    )
+    arrival = _parse_flight_datetime(
+        str(getattr(option, "arrival_date", "") or ""),
+        str(getattr(option, "arrival_time", "") or ""),
+        str(getattr(option, "arrival_airport", "") or ""),
+    )
+    if departure is None or arrival is None:
+        return None
+    if (departure.tzinfo is None) != (arrival.tzinfo is None):
+        return None
+    if arrival <= departure:
+        return None
+    total = int((arrival - departure).total_seconds() // 60)
+    if total <= 0 or total > 48 * 60:
+        return None
+    return total
+
+
+AIRPORT_TIME_ZONES: dict[str, str] = {
+    "BOS": "America/New_York",
+    "GCM": "America/Cayman",
+    "LIS": "Europe/Lisbon",
+    "PDL": "Atlantic/Azores",
+    "YYZ": "America/Toronto",
+}
+
+
+def _parse_flight_datetime(date_text: str, time_text: str, airport: str) -> datetime | None:
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_text.strip()):
+        return None
+    cleaned_time = time_text.strip().upper().replace(".", "")
+    match = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*(AM|PM)", cleaned_time)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    meridiem = match.group(3)
+    if hour == 12:
+        hour = 0
+    if meridiem == "PM":
+        hour += 12
+    try:
+        parsed = datetime.fromisoformat(date_text).replace(hour=hour, minute=minute)
+    except ValueError:
+        return None
+    timezone_name = AIRPORT_TIME_ZONES.get(airport.strip().upper())
+    if not timezone_name:
+        return parsed
+    return parsed.replace(tzinfo=ZoneInfo(timezone_name))
+
+
+def _duration_minutes(value: str) -> int | None:
+    match = re.search(
+        r"(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours)\s*(?:(\d+)\s*(?:m|min|mins|minute|minutes))?",
+        value,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return int(round(float(match.group(1)) * 60 + float(match.group(2) or 0)))
+
+
+def _format_minutes(total_minutes: int) -> str:
+    hours, minutes = divmod(total_minutes, 60)
+    if hours and minutes:
+        return f"{hours}h {minutes}m"
+    if hours:
+        return f"{hours}h"
+    return f"{minutes}m"
+
+
+def _normalize_flight_price_to_cad(option: object) -> None:
+    raw = str(getattr(option, "fare_estimate_cad", "") or getattr(option, "price_band", "") or "")
+    parsed = _parse_price_signal(raw)
+    if parsed is None:
+        return
+    amount, currency, basis = parsed
+    traveler_count = int(getattr(option, "traveler_count", 0) or 0) or 1
+    cad_amount = amount * (USD_TO_CAD_RATE if currency == "USD" else 1)
+    if basis == "per_person":
+        per_person = cad_amount
+        total = cad_amount * traveler_count
+    else:
+        total = cad_amount
+        per_person = cad_amount / traveler_count
+    normalized = f"CAD {_money(total)} total; CAD {_money(per_person)} per person"
+    option.fare_estimate_cad = normalized
+    option.price_band = normalized
+    validation = getattr(option, "validation", None)
+    if validation is not None:
+        validation.extracted_fields["price_signal"] = normalized
+        if currency == "USD":
+            validation.notes = _dedupe(
+                [
+                    *validation.notes,
+                    f"Converted USD fare signal to CAD using USD/CAD {USD_TO_CAD_RATE:.2f}; verify final charged currency before booking.",
+                ]
+            )
+
+
+def _parse_price_signal(value: str) -> tuple[float, str, str] | None:
+    if not value or "live verify" in value.lower() or "unavailable" in value.lower():
+        return None
+    cad_amounts = [
+        float(match.replace(",", ""))
+        for match in re.findall(r"CAD\s*\$?\s*(\d[\d,]*(?:\.\d{1,2})?)", value, flags=re.IGNORECASE)
+    ]
+    if len(cad_amounts) >= 2:
+        return cad_amounts[0], "CAD", "total"
+    currency = "CAD"
+    if re.search(r"\bUSD\b|US\$", value, flags=re.IGNORECASE):
+        currency = "USD"
+    elif not re.search(r"\bCAD\b|CA\$|C\$", value, flags=re.IGNORECASE):
+        return None
+    match = re.search(r"(\d[\d,]*(?:\.\d{1,2})?)", value)
+    if not match:
+        return None
+    amount = float(match.group(1).replace(",", ""))
+    basis = "per_person" if re.search(r"per\s*(?:person|traveler|passenger|pp)", value, flags=re.IGNORECASE) else "total"
+    return amount, currency, basis
+
+
+def _money(value: float) -> str:
+    rounded = int(round(value))
+    return f"{rounded:,}"
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if value and value not in result:
+            result.append(value)
+    return result

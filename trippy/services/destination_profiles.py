@@ -21,8 +21,11 @@ class DestinationProfile(BaseModel):
 
 def profile_for_intake(intake: TripIntake) -> DestinationProfile:
     text = " ".join([intake.trip_name, *intake.destination_seeds, intake.freeform_notes or ""])
-    if "azores" in text.lower():
+    lower_text = text.lower()
+    if "azores" in lower_text:
         return _AZORES
+    if _looks_like_grand_cayman(lower_text):
+        return _GRAND_CAYMAN
     destination = ", ".join(intake.destination_seeds) or intake.trip_name
     return DestinationProfile(
         key="generic",
@@ -52,6 +55,20 @@ def profile_for_intake(intake: TripIntake) -> DestinationProfile:
             }
         ],
         activity_search_targets=_generic_activity_search_targets(intake, destination),
+    )
+
+
+def _looks_like_grand_cayman(text: str) -> bool:
+    return any(
+        term in text
+        for term in [
+            "cayman",
+            "seven mile beach",
+            "west bay",
+            "stingray city",
+            "rum point",
+            "grand cayman",
+        ]
     )
 
 
@@ -185,6 +202,87 @@ _AZORES = DestinationProfile(
             "name": "Pico wine landscape or Faial volcano outing",
             "location": "Pico or Faial",
             "query": "Pico wine landscape Faial Capelinhos volcano small group tour",
+        },
+    ],
+)
+
+
+_GRAND_CAYMAN = DestinationProfile(
+    key="grand-cayman",
+    title="Grand Cayman, Cayman Islands",
+    country="Cayman Islands",
+    gateway_airports=["GCM"],
+    island_or_region_terms=[
+        "Seven Mile Beach",
+        "West Bay",
+        "Rum Point",
+        "George Town",
+        "Grand Cayman",
+    ],
+    flight_notes=[
+        "GCM is the main gateway for Grand Cayman trips.",
+        "Toronto nonstop service can be seasonal or day-specific; compare nonstop against one-stop same-ticket options.",
+        "For a 7-day family trip, avoid routings that add avoidable connection or baggage friction.",
+    ],
+    lodging_search_targets=[
+        {
+            "name": "Seven Mile Beach family condo or resort",
+            "location_area": "Seven Mile Beach",
+            "island_or_region": "Grand Cayman",
+            "lodging_type": "family condo or resort",
+            "query": "Seven Mile Beach Grand Cayman family condo 3 beds parking",
+        },
+        {
+            "name": "West Bay family rental",
+            "location_area": "West Bay",
+            "island_or_region": "Grand Cayman",
+            "lodging_type": "family rental",
+            "query": "West Bay Grand Cayman family rental 3 bedrooms parking",
+        },
+        {
+            "name": "Rum Point quiet family rental",
+            "location_area": "Rum Point",
+            "island_or_region": "Grand Cayman",
+            "lodging_type": "quiet family rental",
+            "query": "Rum Point Grand Cayman family rental 3 bedrooms",
+        },
+    ],
+    car_search_targets=[
+        {
+            "name": "GCM airport family SUV or minivan",
+            "pickup": "GCM airport",
+            "dropoff": "GCM airport",
+            "vehicle_class": "SUV or minivan",
+            "query": "GCM airport Grand Cayman SUV minivan rental family luggage",
+        },
+        {
+            "name": "Seven Mile Beach car rental",
+            "pickup": "Seven Mile Beach or GCM airport",
+            "dropoff": "Seven Mile Beach or GCM airport",
+            "vehicle_class": "comfortable SUV",
+            "query": "Seven Mile Beach Grand Cayman car rental SUV family",
+        },
+    ],
+    activity_search_targets=[
+        {
+            "name": "Stingray City small-group family tour",
+            "location": "Grand Cayman",
+            "query": "Grand Cayman Stingray City small group family tour",
+        },
+        {
+            "name": "Seven Mile Beach snorkeling family outing",
+            "location": "Seven Mile Beach",
+            "query": "Seven Mile Beach Grand Cayman family snorkeling tour",
+        },
+        {
+            "name": "West Bay turtle and reef day",
+            "location": "West Bay",
+            "query": "West Bay Grand Cayman family turtle reef tour",
+        },
+        {
+            "name": "Rum Point private boat or beach day",
+            "location": "Rum Point",
+            "query": "Rum Point Grand Cayman private boat family beach day",
         },
     ],
 )

@@ -5,11 +5,12 @@ import { AppShell } from "@/components/AppShell";
 import { StageNav } from "@/components/StageNav";
 import { Button } from "@/components/ui/button";
 import {
-  AlertTriangle, ArrowLeft, Check, Loader2, RefreshCcw, Sparkles,
+  AlertTriangle, ArrowLeft, Check, ChevronDown, Loader2, RefreshCcw, Sparkles,
   ThumbsUp, AlertCircle,
 } from "lucide-react";
 import { api, type TripPlanOption } from "@/lib/api";
 import { buildStages } from "@/lib/stages";
+import { useDestinationImage } from "@/lib/destinationImages";
 
 const SEGMENT_COLORS = [
   "hsl(178 70% 60%)",
@@ -122,13 +123,18 @@ const TripShape = () => {
             </span>
           )}
           {flags > 0 && (
-            <div className="ml-auto flex items-center gap-2 px-3 py-2 rounded-2xl bg-foreground text-background border-2 border-foreground shadow-sticker">
+            <a
+              href="#friction-review"
+              className="ml-auto flex items-center gap-2 px-3 py-2 rounded-2xl bg-foreground text-background border-2 border-foreground shadow-sticker hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background transition-bounce"
+              aria-label={`Review ${flags} friction flag${flags !== 1 ? "s" : ""}`}
+            >
               <AlertTriangle className="h-4 w-4 text-sunshine" />
               <div className="text-xs leading-tight">
                 <div className="font-bold">{flags} friction flag{flags !== 1 ? "s" : ""}</div>
-                <div className="opacity-70">Trippy is watching</div>
+                <div className="opacity-70">Review friction</div>
               </div>
-            </div>
+              <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+            </a>
           )}
         </div>
         <h1 className="font-[Fredoka] text-4xl md:text-5xl font-bold leading-[1.05] max-w-3xl">
@@ -155,7 +161,7 @@ const TripShape = () => {
               Pick the rhythm of the trip.
             </h2>
             <p className="text-muted-foreground mt-1 max-w-2xl">
-              Hermes built these shapes from your intake. Pick the one that feels right — you can adjust later.
+              Trippy built these shapes from your intake. Pick the one that feels right. You can adjust later.
             </p>
           </div>
           <button
@@ -177,7 +183,7 @@ const TripShape = () => {
           <div className="flex flex-col items-center justify-center py-24 text-muted-foreground gap-4">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
             <div className="font-bold text-lg">
-              {!tripId ? "No trip ID in URL" : "Hermes is building your options…"}
+              {!tripId ? "No trip ID in URL" : "Trippy is building your options…"}
             </div>
             <div className="text-sm">This usually takes 15–30 seconds.</div>
           </div>
@@ -190,7 +196,7 @@ const TripShape = () => {
             <div>
               <div className="font-bold text-destructive">Couldn't load trip</div>
               <div className="text-sm text-muted-foreground mt-1">
-                {((tripQuery.error || draftMutation.error) as Error)?.message ?? "Check that the Hermes backend is running."}
+                {((tripQuery.error || draftMutation.error) as Error)?.message ?? "Check that the Trippy backend is running."}
               </div>
             </div>
           </div>
@@ -199,7 +205,7 @@ const TripShape = () => {
         {/* Options grid */}
         {!isGenerating && options.length > 0 && (
           <>
-            <div className="grid lg:grid-cols-3 gap-5">
+            <div id="friction-review" className="grid scroll-mt-32 lg:grid-cols-3 gap-5">
               {options.map((o) => {
                 const isSelected = selected === o.option_id;
                 const isRecommended = draft?.recommended_option_id === o.option_id;
@@ -213,136 +219,17 @@ const TripShape = () => {
                 const totalNights = segments.reduce((a, b) => a + b.nights, 0);
 
                 return (
-                  <article
+                  <TripShapeCard
                     key={o.option_id}
-                    className={`rounded-3xl border-2 bg-card overflow-hidden transition-bounce flex flex-col ${
-                      isSelected
-                        ? "border-foreground shadow-sticker -translate-y-1"
-                        : "border-foreground/10 shadow-card hover:-translate-y-0.5"
-                    }`}
-                  >
-                    {/* Segment ribbon */}
-                    <div className="relative px-5 pt-5">
-                      <div className="flex flex-wrap items-center gap-1.5 mb-3">
-                        {segments.map((s) => (
-                          <span
-                            key={s.label}
-                            className="px-2.5 py-1 rounded-full text-xs font-bold border-2 border-foreground/20"
-                            style={{ background: s.color }}
-                          >
-                            {s.label}
-                          </span>
-                        ))}
-                        {isRecommended && (
-                          <span className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-foreground text-background text-[10px] font-bold uppercase tracking-wider">
-                            <Sparkles className="h-3 w-3" /> Hermes' pick
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Visual nights bar */}
-                      {segments.length > 0 && (
-                        <>
-                          <div className="relative h-2.5 rounded-full bg-muted border-2 border-foreground/10 overflow-hidden flex">
-                            {segments.map((s, idx) => (
-                              <div
-                                key={idx}
-                                style={{
-                                  width: `${(s.nights / totalNights) * 100}%`,
-                                  background: s.color,
-                                }}
-                                className={idx > 0 ? "border-l-2 border-foreground/30" : ""}
-                              />
-                            ))}
-                          </div>
-                          <div className="flex justify-between text-[10px] font-bold text-muted-foreground mt-1.5 px-0.5">
-                            {segments.map((s, idx) => (
-                              <span key={idx}>{s.nights}n</span>
-                            ))}
-                          </div>
-                        </>
-                      )}
-                    </div>
-
-                    <div className="p-5 pt-4 flex-1 flex flex-col">
-                      <h3 className="font-[Fredoka] text-xl font-bold leading-tight">{o.title}</h3>
-
-                      <div className="flex flex-wrap items-center gap-2 mt-2">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-xs font-bold border-2 border-foreground/20 ${
-                            pill.tone === "easy"
-                              ? "bg-palm/30"
-                              : pill.tone === "balanced"
-                                ? "bg-sunshine/40"
-                                : "bg-coral/40"
-                          }`}
-                        >
-                          {pill.label}
-                        </span>
-                        <span
-                          className={`inline-flex items-center gap-1 text-xs font-semibold ${
-                            risk.tone === "ok"
-                              ? "text-palm"
-                              : risk.tone === "warn"
-                                ? "text-primary"
-                                : "text-destructive"
-                          }`}
-                        >
-                          {risk.tone === "ok" ? (
-                            <ThumbsUp className="h-3 w-3" />
-                          ) : (
-                            <AlertTriangle className="h-3 w-3" />
-                          )}
-                          {risk.label}
-                        </span>
-                      </div>
-
-                      {/* Meters */}
-                      <div className="grid grid-cols-2 gap-3 mt-4">
-                        <Meter label="Strength" value={o.recommendation_strength} color="hsl(145 55% 38%)" />
-                        <Meter label="Comfort" value={o.family_comfort_score} color="hsl(18 95% 55%)" />
-                      </div>
-
-                      {/* Rationale */}
-                      <ul className="mt-4 space-y-1.5">
-                        {o.rationale.slice(0, 3).map((p) => (
-                          <li key={p} className="flex items-start gap-2 text-sm">
-                            <Check className="h-4 w-4 text-palm shrink-0 mt-0.5" />
-                            <span className="text-foreground/85 leading-snug">{p}</span>
-                          </li>
-                        ))}
-                      </ul>
-
-                      {/* Risks */}
-                      {o.major_risks.length > 0 && (
-                        <div className="mt-3 rounded-xl border-2 border-coral/40 bg-coral/10 p-3 space-y-1">
-                          {o.major_risks.slice(0, 2).map((w) => (
-                            <div key={w} className="flex items-start gap-2 text-xs">
-                              <AlertTriangle className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
-                              <span className="font-medium text-foreground/85 leading-snug">{w}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      <div className="flex items-center gap-2 mt-5 pt-4 border-t-2 border-foreground/10">
-                        <Button
-                          onClick={() => setSelected(o.option_id)}
-                          className={`flex-1 h-10 rounded-xl font-bold border-2 ${
-                            isSelected
-                              ? "bg-palm text-primary-foreground border-foreground shadow-card hover:bg-palm/90"
-                              : "bg-card text-foreground border-foreground/20 hover:border-foreground/50"
-                          }`}
-                        >
-                          {isSelected ? (
-                            <><Check className="h-4 w-4" /> Selected</>
-                          ) : (
-                            "Select"
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </article>
+                    option={o}
+                    isSelected={isSelected}
+                    isRecommended={isRecommended}
+                    pill={pill}
+                    risk={risk}
+                    segments={segments}
+                    totalNights={totalNights}
+                    onChoose={() => setSelected(o.option_id)}
+                  />
                 );
               })}
             </div>
@@ -409,6 +296,174 @@ const TripShape = () => {
     </AppShell>
   );
 };
+
+function TripShapeCard({
+  option,
+  isSelected,
+  isRecommended,
+  pill,
+  risk,
+  segments,
+  totalNights,
+  onChoose,
+}: {
+  option: TripPlanOption;
+  isSelected: boolean;
+  isRecommended: boolean;
+  pill: { label: string; tone: "easy" | "balanced" | "ambitious" };
+  risk: { label: string; tone: "ok" | "warn" | "bad" };
+  segments: Array<{ label: string; nights: number; color: string }>;
+  totalNights: number;
+  onChoose: () => void;
+}) {
+  const imageUrl = useDestinationImage({
+    title: option.title,
+    destinations: option.regions,
+    location: Object.keys(option.nights_by_region).join(", "),
+  });
+  const [imgFailed, setImgFailed] = useState(false);
+
+  return (
+    <article
+      className={`rounded-3xl border-2 bg-card overflow-hidden transition-bounce flex flex-col ${
+        isSelected
+          ? "border-foreground shadow-sticker -translate-y-1"
+          : "border-foreground/10 shadow-card hover:-translate-y-0.5"
+      }`}
+    >
+      <div className="relative h-32 overflow-hidden bg-muted">
+        {imageUrl && !imgFailed && (
+          <img
+            src={imageUrl}
+            alt={option.regions.join(", ") || option.title}
+            loading="lazy"
+            onError={() => setImgFailed(true)}
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/10 to-transparent" />
+        {isRecommended && (
+          <span className="absolute top-3 right-3 inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-background/95 text-foreground text-[10px] font-bold uppercase tracking-wider border-2 border-foreground/20">
+            <Sparkles className="h-3 w-3 text-primary" /> Trippy pick
+          </span>
+        )}
+      </div>
+
+      {/* Segment ribbon */}
+      <div className="relative px-5 pt-5">
+        <div className="flex flex-wrap items-center gap-1.5 mb-3">
+          {segments.map((s) => (
+            <span
+              key={s.label}
+              className="px-2.5 py-1 rounded-full text-xs font-bold border-2 border-foreground/20"
+              style={{ background: s.color }}
+            >
+              {s.label}
+            </span>
+          ))}
+        </div>
+
+        {segments.length > 0 && (
+          <>
+            <div className="relative h-2.5 rounded-full bg-muted border-2 border-foreground/10 overflow-hidden flex">
+              {segments.map((s, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    width: `${totalNights ? (s.nights / totalNights) * 100 : 0}%`,
+                    background: s.color,
+                  }}
+                  className={idx > 0 ? "border-l-2 border-foreground/30" : ""}
+                />
+              ))}
+            </div>
+            <div className="flex justify-between text-[10px] font-bold text-muted-foreground mt-1.5 px-0.5">
+              {segments.map((s, idx) => (
+                <span key={idx}>{s.nights}n</span>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="p-5 pt-4 flex-1 flex flex-col">
+        <h3 className="font-[Fredoka] text-xl font-bold leading-tight">{option.title}</h3>
+
+        <div className="flex flex-wrap items-center gap-2 mt-2">
+          <span
+            className={`px-2 py-0.5 rounded-full text-xs font-bold border-2 border-foreground/20 ${
+              pill.tone === "easy"
+                ? "bg-palm/30"
+                : pill.tone === "balanced"
+                  ? "bg-sunshine/40"
+                  : "bg-coral/40"
+            }`}
+          >
+            {pill.label}
+          </span>
+          <span
+            className={`inline-flex items-center gap-1 text-xs font-semibold ${
+              risk.tone === "ok"
+                ? "text-palm"
+                : risk.tone === "warn"
+                  ? "text-primary"
+                  : "text-destructive"
+            }`}
+          >
+            {risk.tone === "ok" ? (
+              <ThumbsUp className="h-3 w-3" />
+            ) : (
+              <AlertTriangle className="h-3 w-3" />
+            )}
+            {risk.label}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mt-4">
+          <Meter label="Strength" value={option.recommendation_strength} color="hsl(145 55% 38%)" />
+          <Meter label="Comfort" value={option.family_comfort_score} color="hsl(18 95% 55%)" />
+        </div>
+
+        <ul className="mt-4 space-y-1.5">
+          {option.rationale.slice(0, 3).map((p) => (
+            <li key={p} className="flex items-start gap-2 text-sm">
+              <Check className="h-4 w-4 text-palm shrink-0 mt-0.5" />
+              <span className="text-foreground/85 leading-snug">{p}</span>
+            </li>
+          ))}
+        </ul>
+
+        {option.major_risks.length > 0 && (
+          <div className="mt-3 rounded-xl border-2 border-coral/40 bg-coral/10 p-3 space-y-1">
+            {option.major_risks.slice(0, 2).map((w) => (
+              <div key={w} className="flex items-start gap-2 text-xs">
+                <AlertTriangle className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
+                <span className="font-medium text-foreground/85 leading-snug">{w}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 mt-5 pt-4 border-t-2 border-foreground/10">
+          <Button
+            onClick={onChoose}
+            className={`flex-1 h-10 rounded-xl font-bold border-2 ${
+              isSelected
+                ? "bg-palm text-primary-foreground border-foreground shadow-card hover:bg-palm/90"
+                : "bg-card text-foreground border-foreground/20 hover:border-foreground/50"
+            }`}
+          >
+            {isSelected ? (
+              <><Check className="h-4 w-4" /> Selected</>
+            ) : (
+              "Select"
+            )}
+          </Button>
+        </div>
+      </div>
+    </article>
+  );
+}
 
 const Meter = ({ label, value, color }: { label: string; value: number; color: string }) => (
   <div>

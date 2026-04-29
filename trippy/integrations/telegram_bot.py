@@ -56,7 +56,7 @@ class TelegramBotSettings:
     reply_chunk_size: int = 3500
 
     @classmethod
-    def from_env(cls) -> "TelegramBotSettings":
+    def from_env(cls) -> TelegramBotSettings:
         token = os.environ.get(TRIPPY_TELEGRAM_BOT_TOKEN_ENV, "").strip()
         if not token:
             raise ValueError(f"{TRIPPY_TELEGRAM_BOT_TOKEN_ENV} is required")

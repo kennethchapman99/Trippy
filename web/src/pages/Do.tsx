@@ -8,10 +8,11 @@ import { EmptyShortlist } from "@/components/EmptyShortlist";
 import { Button } from "@/components/ui/button";
 import {
   Loader2, Sparkles, Check, ExternalLink, ArrowRight, RefreshCcw,
-  AlertCircle, AlertTriangle, MapPin, Calendar, Clock,
+  AlertCircle, AlertTriangle, MapPin, Calendar, Clock, ChevronLeft, ChevronRight,
 } from "lucide-react";
-import { api, type ActivityOption, type TripIntake } from "@/lib/api";
+import { api, mergeShortlistIntoTrip, type ActivityOption, type TripIntake, type TripState } from "@/lib/api";
 import { buildStages, shortlistOptions } from "@/lib/stages";
+import { useDestinationImage } from "@/lib/destinationImages";
 import {
   Chip,
   LiveProvidersBanner,
@@ -40,21 +41,35 @@ const Do = () => {
 
   const buildMutation = useMutation({
     mutationFn: () => api.buildShortlist(tripId!, "activities", { validate_live: true, deep_research: true }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["trip", tripId] }),
+    onSuccess: (response) => {
+      queryClient.setQueryData<TripState>(["trip", tripId], (current) =>
+        mergeShortlistIntoTrip(current, response.shortlist),
+      );
+      queryClient.invalidateQueries({ queryKey: ["trip", tripId] });
+    },
   });
 
   const selectMutation = useMutation({
     mutationFn: (id: string) => api.selectActivity(tripId!, id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["trip", tripId] }),
+    onSuccess: (response) => {
+      queryClient.setQueryData<TripState>(["trip", tripId], (current) =>
+        mergeShortlistIntoTrip(current, response.shortlist),
+      );
+      queryClient.invalidateQueries({ queryKey: ["trip", tripId] });
+    },
   });
 
   const trip = tripQuery.data;
   const shortlist = shortlistOptions(trip, "activities");
-  const options: ActivityOption[] = shortlist?.activity_options ?? [];
+  const options: ActivityOption[] = useMemo(
+    () => shortlist?.activity_options ?? [],
+    [shortlist?.activity_options],
+  );
   const stages = buildStages(trip, "do");
   const recommendedId = shortlist?.recommended_option_id;
   const flagCount = options.reduce((s, o) => s + o.friction_flags.length, 0);
   const hasSelection = options.some((o) => o.row_status === "approved");
+  const hasShortlist = Boolean(shortlist);
 
   const banner = useMemo(
     () => deriveLiveBanner(shortlist?.warnings ?? [], options, "activities"),
@@ -77,7 +92,13 @@ const Do = () => {
 
   return (
     <AppShell>
-      <ShortlistHero intake={trip?.intake} stageLabel="Do" stageNumber={6} flagCount={flagCount} />
+      <ShortlistHero
+        intake={trip?.intake}
+        shortlists={trip?.shortlists}
+        stageLabel="Do"
+        stageNumber={6}
+        flagCount={flagCount}
+      />
       <div className="px-6 md:px-10 py-5 border-b-2 border-foreground/10 bg-card/60 backdrop-blur sticky top-0 z-30">
         <StageNav stages={stages} />
       </div>
@@ -90,7 +111,7 @@ const Do = () => {
             </div>
             <h2 className="font-[Fredoka] text-3xl md:text-4xl font-bold mt-1">Pick what you'll do.</h2>
           </div>
-          {options.length > 0 && (
+          {hasShortlist && (
             <button
               onClick={() => buildMutation.mutate()}
               disabled={buildMutation.isPending}
@@ -121,8 +142,20 @@ const Do = () => {
         {!tripQuery.isLoading && !shortlist && (
           <EmptyShortlist
             title="No activities yet"
-            description="Hermes will research age-appropriate activities and tours, score for family fit and crowd risk, and propose a per-day schedule."
+            description="Trippy will research age-appropriate activities and tours, score for family fit and crowd risk, and propose a per-day schedule."
             ctaLabel="Build activity shortlist"
+            onBuild={() => buildMutation.mutate()}
+            isLoading={buildMutation.isPending}
+            isError={buildMutation.isError}
+            errorMessage={(buildMutation.error as Error)?.message}
+          />
+        )}
+
+        {!tripQuery.isLoading && shortlist && options.length === 0 && (
+          <EmptyShortlist
+            title="No activity rows returned"
+            description="The shortlist exists, but it did not produce any activity rows. Re-run activity research after connecting live providers."
+            ctaLabel="Re-research activities"
             onBuild={() => buildMutation.mutate()}
             isLoading={buildMutation.isPending}
             isError={buildMutation.isError}
@@ -160,8 +193,8 @@ const Do = () => {
         {options.length > 0 && (
           groupByDay ? (
             <div className="space-y-8">
-              {dayKeys.map((dayKey) => (
-                <div key={dayKey}>
+              {dayKeys.map((dayKey, idx) => (
+                <div key={dayKey} id={idx === 0 ? "friction-review" : undefined} className="scroll-mt-32">
                   <h3 className="font-[Fredoka] text-xl font-bold mb-3 flex items-center gap-2">
                     <Calendar className="h-5 w-5 text-primary" /> {dayKey}
                   </h3>
@@ -185,7 +218,7 @@ const Do = () => {
               ))}
             </div>
           ) : (
-            <div className="flex flex-col gap-4">
+            <div id="friction-review" className="flex scroll-mt-32 flex-col gap-4">
               {sorted.map((o) => (
                 <ActivityRow
                   key={o.option_id}
@@ -314,7 +347,8 @@ function ActivityRow({
         }
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_minmax(220px,_auto)] gap-5 px-5 py-5">
+      <div className="grid grid-cols-1 md:grid-cols-[180px_1fr_minmax(220px,_auto)] gap-5 px-5 py-5">
+        <ActivityImage option={option} />
         <div className="space-y-2">
           <div className="flex items-center gap-1.5 text-sm font-medium text-foreground/85">
             <MapPin className="h-4 w-4 text-foreground/50" />
@@ -405,16 +439,22 @@ function ActivityRow({
         >
           {isSelecting ? <Loader2 className="h-4 w-4 animate-spin" /> : isSelected ? <><Check className="h-4 w-4" /> Selected</> : "Select"}
         </Button>
-        {option.deep_link && (
-          <a href={option.deep_link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-bold text-foreground/80 hover:text-foreground">
-            <ArrowRight className="h-4 w-4" /> Open listing
+        {externalLinks(option).map((link, index) => (
+          <a
+            key={`${link.label}-${link.href}`}
+            href={link.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`inline-flex items-center gap-1 text-sm ${
+              index === 0
+                ? "font-bold text-foreground/80 hover:text-foreground"
+                : "font-medium text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {index === 0 ? <ArrowRight className="h-4 w-4" /> : <ExternalLink className="h-3.5 w-3.5" />}
+            {link.label}
           </a>
-        )}
-        {option.deep_link && (
-          <a href={option.deep_link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground">
-            <ExternalLink className="h-3.5 w-3.5" /> Book / confirm
-          </a>
-        )}
+        ))}
         <button type="button" onClick={onToggleWhy} className="ml-auto text-sm font-medium text-muted-foreground hover:text-foreground">
           {whyOpen ? "Hide details" : "Why not this?"}
         </button>
@@ -433,6 +473,77 @@ function ActivityRow({
         </div>
       )}
     </article>
+  );
+}
+
+function externalLinks(option: ActivityOption): Array<{ label: string; href: string }> {
+  const links: Array<{ label: string; href: string }> = [];
+  const add = (label: string, href: string | undefined) => {
+    const clean = href?.trim();
+    if (!clean || !/^https?:\/\//i.test(clean)) return;
+    if (links.some((link) => link.href === clean)) return;
+    links.push({ label, href: clean });
+  };
+  add("Open listing", option.deep_link);
+  const validation = option.validation_links ?? {};
+  add("Book / confirm", validation["Operator website"]);
+  add("Google Maps", validation["Google Maps"]);
+  return links.slice(0, 3);
+}
+
+function ActivityImage({ option }: { option: ActivityOption }) {
+  const fallback = useDestinationImage({
+    title: option.activity_name,
+    location: option.island_location,
+    destinations: [option.island_location],
+  });
+  const [imgFailed, setImgFailed] = useState(false);
+  const [index, setIndex] = useState(0);
+  const photos = [...(option.photo_urls || []), fallback].filter(Boolean) as string[];
+  const active = photos[index % Math.max(photos.length, 1)];
+
+  const move = (delta: number) => {
+    if (photos.length <= 1) return;
+    setImgFailed(false);
+    setIndex((current) => (current + delta + photos.length) % photos.length);
+  };
+
+  return (
+    <div className="group relative h-32 md:h-full min-h-28 rounded-2xl overflow-hidden bg-muted border-2 border-foreground/10">
+      {active && !imgFailed && (
+        <img
+          src={active}
+          alt={[option.activity_name, option.island_location].filter(Boolean).join(", ")}
+          loading="lazy"
+          onError={() => setImgFailed(true)}
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+      )}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-transparent" />
+      {photos.length > 1 && (
+        <>
+          <button
+            type="button"
+            onClick={() => move(-1)}
+            className="absolute left-2 top-1/2 -translate-y-1/2 h-8 w-8 rounded-full bg-background/90 border border-foreground/15 opacity-0 group-hover:opacity-100 transition-opacity grid place-items-center"
+            aria-label="Previous activity photo"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => move(1)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 h-8 w-8 rounded-full bg-background/90 border border-foreground/15 opacity-0 group-hover:opacity-100 transition-opacity grid place-items-center"
+            aria-label="Next activity photo"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </>
+      )}
+      <span className="absolute left-2.5 bottom-2.5 rounded-full bg-background/90 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border border-foreground/15">
+        {photos.length > 1 ? `${index + 1}/${photos.length}` : "Activity"}
+      </span>
+    </div>
   );
 }
 

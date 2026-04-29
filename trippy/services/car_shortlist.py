@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from urllib.parse import quote, urlencode
 
 from trippy.models.shortlists import (
     CarOption,
@@ -12,12 +13,12 @@ from trippy.models.shortlists import (
     ShortlistCategory,
     ShortlistRowStatus,
 )
-from trippy.services import serpapi_client
-from trippy.services.serpapi_options import car_options_from_serpapi
 from trippy.models.sources import TravelSourceCategory
 from trippy.models.trip_planning import TripIntake
+from trippy.services import serpapi_client
 from trippy.services.destination_profiles import profile_for_intake
 from trippy.services.live_validation import LiveValidationService
+from trippy.services.serpapi_options import car_options_from_serpapi
 from trippy.services.shortlist_store import (
     ShortlistContext,
     ShortlistStore,
@@ -88,7 +89,12 @@ class CarShortlistService:
             ],
         )
         LiveValidationService().validate_state(state, attempt_network=validate_live)
-        if deep_research:
+        fallback_research = bool(validate_live and not live_options)
+        if deep_research or fallback_research:
+            if fallback_research and not deep_research:
+                state.warnings.append(
+                    "No live car inventory rows returned, so Trippy ran Firecrawl/OpenClaw-capable source research against date-aware car source links."
+                )
             SourceResearchService().research_state(state, adapter_mode=adapter_mode)
         return self._store.save(state)
 
@@ -140,6 +146,9 @@ def _options_from_profile(
     options: list[CarOption] = []
     for idx, target in enumerate(targets[:5], start=1):
         source = sources[min(idx - 1, len(sources) - 1)]
+        deep_link = _car_source_url(source, str(target["query"]), intake)
+        expedia_link = _car_source_url("Expedia", str(target["query"]), intake)
+        kayak_link = _car_source_url("Kayak.ca", str(target["query"]), intake)
         vehicle_class = str(target["vehicle_class"])
         is_7_seat = "7" in vehicle_class or "van" in vehicle_class.lower()
         seating_capacity = 7 if is_7_seat else 5
@@ -172,22 +181,10 @@ def _options_from_profile(
                 ),
                 cancellation_notes="prefer free cancellation and clear provider terms",
                 fees_caution="verify insurance, deposit, airport fees, fuel, mileage, and automatic transmission",
-                deep_link=source_search_url(
-                    source,
-                    str(target["query"]),
-                    category=TravelSourceCategory.CAR_RENTALS,
-                ),
+                deep_link=deep_link,
                 comparison_links={
-                    "Expedia": source_search_url(
-                        "Expedia",
-                        str(target["query"]),
-                        category=TravelSourceCategory.CAR_RENTALS,
-                    ),
-                    "Kayak.ca": source_search_url(
-                        "Kayak.ca",
-                        str(target["query"]),
-                        category=TravelSourceCategory.CAR_RENTALS,
-                    ),
+                    "Expedia": expedia_link,
+                    "Kayak.ca": kayak_link,
                 },
                 family_comfort_score=88 if is_7_seat else 78,
                 luggage_practicality_score=88 if is_7_seat else 70,
@@ -239,12 +236,53 @@ def _serpapi_live_cars(ctx: ShortlistContext) -> tuple[list[CarOption], list[str
     return options, notes
 
 
-def _serpapi_car_dates(ctx: ShortlistContext) -> tuple[date, date]:
-    window = ctx.intake.travel_window
+def _car_source_url(source: str, query: str, intake: TripIntake) -> str:
+    pickup, dropoff = _car_dates_for_intake(intake)
+    travelers = max(1, intake.party.total_travelers or intake.travelers or 1)
+    if source == "Kayak.ca":
+        return (
+            "https://www.ca.kayak.com/cars/"
+            f"{quote(query.strip() or 'rental car', safe='')}/"
+            f"{pickup.isoformat()}/{dropoff.isoformat()}?"
+            + urlencode({"sort": "rank_a"})
+        )
+    if source == "Expedia":
+        return "https://www.expedia.ca/Cars-Search?" + urlencode(
+            {
+                "searchProduct": "cars",
+                "query": query,
+                "pickUpDate": pickup.isoformat(),
+                "dropOffDate": dropoff.isoformat(),
+                "adults": travelers,
+            }
+        )
+    if source == "Booking.com":
+        return "https://www.booking.com/cars/index.html?" + urlencode(
+            {
+                "ss": query,
+                "checkin": pickup.isoformat(),
+                "checkout": dropoff.isoformat(),
+                "group_adults": travelers,
+                "selected_currency": "CAD",
+            }
+        )
+    return source_search_url(
+        source,
+        f"{query} car rental {pickup.isoformat()} to {dropoff.isoformat()} {travelers} travelers",
+        category=TravelSourceCategory.CAR_RENTALS,
+    )
+
+
+def _car_dates_for_intake(intake: TripIntake) -> tuple[date, date]:
+    window = intake.travel_window
     if window.start_date and window.end_date:
         return window.start_date, window.end_date
-    nights = ctx.intake.duration_days or ctx.intake.duration_min_days or ctx.option.duration_days or 7
+    nights = intake.duration_days or intake.duration_min_days or 7
     if window.start_date:
         return window.start_date, window.start_date + timedelta(days=max(1, nights))
     fallback = date.today() + timedelta(days=60)
     return fallback, fallback + timedelta(days=max(1, nights))
+
+
+def _serpapi_car_dates(ctx: ShortlistContext) -> tuple[date, date]:
+    return _car_dates_for_intake(ctx.intake)

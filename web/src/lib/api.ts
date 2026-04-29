@@ -139,6 +139,7 @@ export interface FlightOption {
   option_id: string;
   rank: number;
   airline: string;
+  airline_logo_url?: string;
   flight_numbers: string[];
   departure_date: string;
   arrival_date: string;
@@ -158,6 +159,7 @@ export interface FlightOption {
   baggage_cabin_notes: string;
   booking_source: string;
   deep_link: string;
+  comparison_links?: Record<string, string>;
   friction_score: number;
   family_comfort_score: number;
   recommendation_grade: RecommendationGrade;
@@ -193,6 +195,7 @@ export interface LodgingOption {
   price_band: string;
   current_price_signal: string;
   deep_link: string;
+  photo_urls?: string[];
   friction_score: number;
   family_comfort_score: number;
   recommendation_grade: RecommendationGrade;
@@ -224,6 +227,8 @@ export interface CarOption {
   cancellation_notes: string;
   fees_caution: string;
   deep_link: string;
+  photo_urls?: string[];
+  comparison_links?: Record<string, string>;
   family_comfort_score: number;
   luggage_practicality_score: number;
   pickup_dropoff_simplicity_score: number;
@@ -240,6 +245,7 @@ export interface CarOption {
     confidence?: number;
     evidence_url?: string;
     adapter_used?: string;
+    extracted_fields?: Record<string, unknown>;
   };
 }
 
@@ -263,6 +269,8 @@ export interface ActivityOption {
   scheduled_start_time: string;
   scheduled_end_time: string;
   deep_link: string;
+  photo_urls?: string[];
+  validation_links?: Record<string, string>;
   family_pace_fit_score: number;
   safety_confidence_score: number;
   crowd_fit_score: number;
@@ -293,6 +301,17 @@ export interface ShortlistState {
   partial_failures: string[];
   warnings: string[];
   next_actions: string[];
+  artifacts?: Record<string, unknown> & {
+    flight_selection?: FlightSelectionArtifact;
+  };
+}
+
+export interface FlightSelectionArtifact {
+  selected_outbound_option_id?: string;
+  selected_return_option_id?: string;
+  outbound_summary?: Record<string, string>;
+  return_summary?: Record<string, string>;
+  constraint_status?: "complete" | "return_needed" | string;
 }
 
 export interface ShortlistResponse {
@@ -310,6 +329,21 @@ export interface TripState {
   shortlists: ShortlistState[];
   run_log: RunLogEvent[];
   next_step: string;
+}
+
+export function mergeShortlistIntoTrip(
+  trip: TripState | undefined,
+  shortlist: ShortlistState,
+): TripState | undefined {
+  if (!trip) return trip;
+  const shortlists = [...(trip.shortlists ?? [])];
+  const index = shortlists.findIndex((item) => item.category === shortlist.category);
+  if (index >= 0) {
+    shortlists[index] = shortlist;
+  } else {
+    shortlists.push(shortlist);
+  }
+  return { ...trip, shortlists };
 }
 
 async function get<T>(path: string): Promise<T> {
@@ -369,16 +403,33 @@ export const api = {
       validate_live: opts?.validate_live ?? false,
       deep_research: opts?.deep_research ?? false,
     }),
-  selectFlight: (tripId: string, optionId: string) =>
+  selectFlight: (tripId: string, optionId: string, selectionKind: "outbound" | "return" = "outbound") =>
     post<ShortlistResponse>("/api/select-flight", {
       trip_id: tripId,
       option_id: optionId,
+      selection_kind: selectionKind,
     }),
   selectLodging: (tripId: string, optionId: string) =>
     post<ShortlistResponse>("/api/select-lodging", {
       trip_id: tripId,
       option_id: optionId,
     }),
+  deselectLodging: (tripId: string, optionId: string) =>
+    post<ShortlistResponse>("/api/deselect-lodging", {
+      trip_id: tripId,
+      option_id: optionId,
+    }),
+  updateLodgingStructure: (payload: {
+    trip_id: string;
+    strategy: string;
+    night_plan: Array<{
+      region: string;
+      nights: number;
+      lodging_option_id?: string;
+      notes?: string;
+    }>;
+    notes?: string;
+  }) => post<ShortlistResponse>("/api/lodging-structure", payload),
   selectCar: (tripId: string, optionId: string) =>
     post<ShortlistResponse>("/api/select-car", {
       trip_id: tripId,

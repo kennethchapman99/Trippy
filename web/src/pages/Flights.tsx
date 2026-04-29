@@ -10,7 +10,13 @@ import {
   Loader2, Check, ExternalLink, ArrowRight, Plus, RefreshCcw,
   AlertCircle, AlertTriangle, Plane,
 } from "lucide-react";
-import { api, type FlightOption, type TripIntake } from "@/lib/api";
+import {
+  api,
+  mergeShortlistIntoTrip,
+  type FlightOption,
+  type TripIntake,
+  type TripState,
+} from "@/lib/api";
 import { buildStages, shortlistOptions } from "@/lib/stages";
 import {
   Chip,
@@ -22,6 +28,7 @@ import {
 } from "@/components/ShortlistRow";
 
 type SortKey = "best" | "price" | "duration";
+type FlightSelectionKind = "outbound" | "return";
 
 const Flights = () => {
   const { tripId } = useParams<{ tripId: string }>();
@@ -46,12 +53,23 @@ const Flights = () => {
         validate_live: true,
         deep_research: true,
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["trip", tripId] }),
+    onSuccess: (response) => {
+      queryClient.setQueryData<TripState>(["trip", tripId], (current) =>
+        mergeShortlistIntoTrip(current, response.shortlist),
+      );
+      queryClient.invalidateQueries({ queryKey: ["trip", tripId] });
+    },
   });
 
   const selectMutation = useMutation({
-    mutationFn: (optionId: string) => api.selectFlight(tripId!, optionId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["trip", tripId] }),
+    mutationFn: ({ optionId, kind }: { optionId: string; kind: FlightSelectionKind }) =>
+      api.selectFlight(tripId!, optionId, kind),
+    onSuccess: (response) => {
+      queryClient.setQueryData<TripState>(["trip", tripId], (current) =>
+        mergeShortlistIntoTrip(current, response.shortlist),
+      );
+      queryClient.invalidateQueries({ queryKey: ["trip", tripId] });
+    },
   });
 
   const candidateMutation = useMutation({
@@ -61,7 +79,10 @@ const Flights = () => {
         link: candidateLink,
         name: candidateName,
       }),
-    onSuccess: () => {
+    onSuccess: (response) => {
+      queryClient.setQueryData<TripState>(["trip", tripId], (current) =>
+        mergeShortlistIntoTrip(current, response.shortlist),
+      );
       queryClient.invalidateQueries({ queryKey: ["trip", tripId] });
       setCandidateLink("");
       setCandidateName("");
@@ -71,16 +92,28 @@ const Flights = () => {
 
   const trip = tripQuery.data;
   const shortlist = shortlistOptions(trip, "flights");
-  const options: FlightOption[] = shortlist?.flight_options ?? [];
+  const options: FlightOption[] = (shortlist?.flight_options ?? []).filter(
+    (option) => !isSyntheticDuffelFlight(option) && !hasImpossibleFlightDateSpan(option),
+  );
   const stages = buildStages(trip, "flights");
   const recommendedId = shortlist?.recommended_option_id;
+  const flightSelection = shortlist?.artifacts?.flight_selection;
+  const legacySelectedOutboundId =
+    options.find((o) => o.option_id === recommendedId && o.row_status === "approved")?.option_id ||
+    options.find((o) => o.row_status === "approved")?.option_id ||
+    "";
+  const selectedOutboundId = flightSelection?.selected_outbound_option_id || legacySelectedOutboundId;
+  const selectedReturnId = flightSelection?.selected_return_option_id || "";
   const flagCount = options.reduce((sum, o) => sum + o.friction_flags.length, 0);
-  const hasSelection = options.some((o) => o.row_status === "approved");
+  const hasDepartureSelection = Boolean(selectedOutboundId && options.some((o) => o.option_id === selectedOutboundId));
+  const hasReturnSelection = Boolean(selectedReturnId && options.some((o) => o.option_id === selectedReturnId));
+  const hasSelection = hasDepartureSelection && hasReturnSelection;
+  const hasShortlist = Boolean(shortlist);
 
   const sorted = useMemo(() => sortOptions(options, sortKey), [options, sortKey]);
 
   const liveBanner = useMemo(
-    () => deriveLiveBanner(shortlist?.warnings ?? [], options, "flights"),
+    () => (shortlist ? deriveLiveBanner(shortlist.warnings ?? [], options, "flights") : null),
     [shortlist?.warnings, options],
   );
 
@@ -88,6 +121,7 @@ const Flights = () => {
     <AppShell>
       <ShortlistHero
         intake={trip?.intake}
+        shortlists={trip?.shortlists}
         stageLabel="Flights"
         stageNumber={3}
         flagCount={flagCount}
@@ -106,7 +140,7 @@ const Flights = () => {
               Pick your flights.
             </h2>
           </div>
-          {options.length > 0 && (
+          {hasShortlist && (
             <div className="flex gap-2">
               <button
                 onClick={() => setShowAddCandidate((v) => !v)}
@@ -154,8 +188,20 @@ const Flights = () => {
         {!tripQuery.isLoading && !shortlist && (
           <EmptyShortlist
             title="No flight options yet"
-            description="Hermes will research direct and one-stop options from your departure airports, score each on friction, and propose a recommendation."
+            description="Trippy will research direct and one-stop options from your departure airports, score each on friction, and propose a recommendation."
             ctaLabel="Build flight shortlist"
+            onBuild={() => buildMutation.mutate()}
+            isLoading={buildMutation.isPending}
+            isError={buildMutation.isError}
+            errorMessage={(buildMutation.error as Error)?.message}
+          />
+        )}
+
+        {!tripQuery.isLoading && shortlist && options.length === 0 && (
+          <EmptyShortlist
+            title="No flight rows returned"
+            description="The shortlist exists, but it did not produce any flight rows. Re-run flight research after connecting live providers, or paste a specific flight link to compare."
+            ctaLabel="Re-research flights"
             onBuild={() => buildMutation.mutate()}
             isLoading={buildMutation.isPending}
             isError={buildMutation.isError}
@@ -204,6 +250,8 @@ const Flights = () => {
               <Chip>✦ Preference applied: comfort &gt; schedule &gt; price</Chip>
               <Chip>{partyChip(trip?.intake)}</Chip>
               <Chip>{originChip(options)}</Chip>
+              <Chip>{hasDepartureSelection ? "Departure picked" : "Pick departure"}</Chip>
+              <Chip>{hasReturnSelection ? "Return picked" : "Pick return"}</Chip>
             </div>
             <div className="flex items-center gap-2 text-sm">
               <span className="text-muted-foreground">Sort:</span>
@@ -222,14 +270,15 @@ const Flights = () => {
 
         {/* Rows */}
         {sorted.length > 0 && (
-          <div className="flex flex-col gap-4">
+          <div id="friction-review" className="flex scroll-mt-32 flex-col gap-4">
             {sorted.map((o) => (
               <FlightRow
                 key={o.option_id}
                 option={o}
                 isRecommended={o.option_id === recommendedId}
-                isSelected={o.row_status === "approved"}
-                onSelect={() => selectMutation.mutate(o.option_id)}
+                isSelectedOutbound={o.option_id === selectedOutboundId}
+                isSelectedReturn={o.option_id === selectedReturnId}
+                onSelect={(kind) => selectMutation.mutate({ optionId: o.option_id, kind })}
                 isSelecting={selectMutation.isPending}
                 whyOpen={openWhyId === o.option_id}
                 onToggleWhy={() => setOpenWhyId(openWhyId === o.option_id ? null : o.option_id)}
@@ -247,6 +296,11 @@ const Flights = () => {
             >
               Continue to Stays <ArrowRight className="h-4 w-4" />
             </Button>
+          </div>
+        )}
+        {!hasSelection && sorted.length > 0 && (
+          <div className="mt-6 rounded-2xl border-2 border-foreground/10 bg-card p-4 text-sm font-bold text-muted-foreground">
+            Pick both a departure flight and a return flight before continuing. Trippy will use that pair as timing context for stays, cars, activities, and the Master Timeline.
           </div>
         )}
       </div>
@@ -277,9 +331,65 @@ function sortOptions(options: FlightOption[], key: SortKey): FlightOption[] {
   return arr;
 }
 
+function isSyntheticDuffelFlight(option: FlightOption): boolean {
+  if (/duffel airways/i.test(option.airline || "")) return true;
+  return (option.flight_numbers || []).some((number) => /^ZZ/i.test(number));
+}
+
+function hasImpossibleFlightDateSpan(option: FlightOption): boolean {
+  const offset = dayOffset(option.departure_date, option.arrival_date);
+  if (offset <= 2) return false;
+  const hours = durationHours(option.total_travel_duration);
+  if (!Number.isFinite(hours)) return false;
+  return hours + 12 < offset * 24;
+}
+
 function priceAmount(o: FlightOption): number {
-  const m = (o.fare_estimate_cad || o.price_band || "").match(/([\d][\d,]*(?:\.\d{2})?)/);
-  return m ? parseFloat(m[1].replace(/,/g, "")) : Number.POSITIVE_INFINITY;
+  return parseFlightPrice(o.fare_estimate_cad || o.price_band, o.traveler_count || 1)?.total ?? Number.POSITIVE_INFINITY;
+}
+
+function FlightPrice({ option }: { option: FlightOption }) {
+  const price = parseFlightPrice(option.fare_estimate_cad || option.price_band, option.traveler_count || 1);
+  if (!price) {
+    return <div className="font-[Fredoka] text-3xl font-bold leading-none text-muted-foreground">—</div>;
+  }
+  return (
+    <div className="leading-none">
+      <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1.5">
+        Total
+      </div>
+      <div className="font-[Fredoka] text-3xl md:text-4xl font-bold">
+        <span className="text-palm">{formatCad(price.total)}</span>
+        <span className="text-base md:text-lg font-bold text-muted-foreground"> (</span>
+        <span className="text-palm text-2xl md:text-3xl">{formatCad(price.perPerson)}</span>
+        <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+          {" "}per person)
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function parseFlightPrice(value: string, travelerCount: number): { total: number; perPerson: number } | null {
+  const text = value || "";
+  const cadAmounts = [...text.matchAll(/CAD\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/gi)].map((match) =>
+    Number(match[1].replace(/,/g, "")),
+  );
+  if (cadAmounts.length >= 2) {
+    return { total: cadAmounts[0], perPerson: cadAmounts[1] };
+  }
+  const loose = text.match(/(?:CA\$|C\$|\$)\s*([\d,]+(?:\.\d{1,2})?)/i);
+  if (!loose) return null;
+  const amount = Number(loose[1].replace(/,/g, ""));
+  const count = Math.max(1, travelerCount || 1);
+  if (/per\s*(?:person|traveler|passenger|pp)/i.test(text)) {
+    return { total: amount * count, perPerson: amount };
+  }
+  return { total: amount, perPerson: amount / count };
+}
+
+function formatCad(value: number): string {
+  return `$${Math.round(value).toLocaleString()}`;
 }
 
 function durationHours(value: string): number {
@@ -291,7 +401,8 @@ function durationHours(value: string): number {
 function FlightRow({
   option,
   isRecommended,
-  isSelected,
+  isSelectedOutbound,
+  isSelectedReturn,
   onSelect,
   isSelecting,
   whyOpen,
@@ -299,8 +410,9 @@ function FlightRow({
 }: {
   option: FlightOption;
   isRecommended: boolean;
-  isSelected: boolean;
-  onSelect: () => void;
+  isSelectedOutbound: boolean;
+  isSelectedReturn: boolean;
+  onSelect: (kind: FlightSelectionKind) => void;
   isSelecting: boolean;
   whyOpen: boolean;
   onToggleWhy: () => void;
@@ -311,15 +423,14 @@ function FlightRow({
     option.stops === 0
       ? "Nonstop"
       : `${option.stops} stop${option.stops > 1 ? "s" : ""}${option.layover_airports.length ? ` (${option.layover_airports.join(", ")})` : ""}`;
-  const fare = option.fare_estimate_cad || option.price_band;
-  const band = option.price_band && option.price_band !== fare ? option.price_band : null;
   const pros = derivePros(option);
   const cons = option.friction_flags;
+  const arrivalDayOffset = dayOffset(option.departure_date, option.arrival_date);
 
   return (
     <article
       className={`rounded-3xl border-2 bg-card overflow-hidden transition-bounce ${
-        isSelected
+        isSelectedOutbound || isSelectedReturn
           ? "border-foreground shadow-sticker"
           : "border-foreground/10 shadow-card hover:-translate-y-0.5"
       }`}
@@ -329,7 +440,7 @@ function FlightRow({
         pill={pill}
         left={
           <>
-            <Plane className="h-4 w-4 text-foreground/60" />
+            <AirlineLogo option={option} />
             <span className="font-bold truncate">{option.airline}</span>
             {option.flight_numbers.length > 0 && (
               <span className="text-xs text-muted-foreground font-mono ml-1 truncate">
@@ -352,21 +463,12 @@ function FlightRow({
           <TimeBlock
             time={option.arrival_time}
             subline={`${option.arrival_date || ""} · ${option.arrival_airport}`.trim()}
+            dayOffset={arrivalDayOffset}
           />
         </div>
         {/* Price */}
         <div className="md:text-right">
-          <div className="font-[Fredoka] text-3xl font-bold leading-none">
-            {fare || "—"}{" "}
-            <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
-              per person
-            </span>
-          </div>
-          {band && (
-            <div className="text-xs text-muted-foreground mt-1.5 font-mono uppercase tracking-wider">
-              Band {band}
-            </div>
-          )}
+          <FlightPrice option={option} />
         </div>
       </div>
 
@@ -377,8 +479,11 @@ function FlightRow({
           destination={option.arrival_airport}
           layovers={option.layover_airports}
         />
-        <div className="text-xs font-bold text-muted-foreground mt-2">
-          {option.total_travel_duration || "duration unknown"} · {stopText}
+        <div className="mt-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="font-[Fredoka] text-2xl md:text-3xl font-bold text-foreground">
+            {option.total_travel_duration || "duration unknown"}
+          </span>
+          <span className="text-sm font-bold text-muted-foreground">· {stopText}</span>
         </div>
       </div>
 
@@ -407,20 +512,37 @@ function FlightRow({
       {/* Action bar */}
       <div className="px-5 py-3 border-t-2 border-foreground/10 flex items-center gap-3 flex-wrap">
         <Button
-          onClick={onSelect}
+          onClick={() => onSelect("outbound")}
           disabled={isSelecting}
           className={`h-10 rounded-xl font-bold border-2 px-5 ${
-            isSelected
+            isSelectedOutbound
               ? "bg-primary text-primary-foreground border-foreground shadow-card"
               : "bg-card text-foreground border-foreground/20 hover:border-foreground/50"
           }`}
         >
           {isSelecting ? (
             <Loader2 className="h-4 w-4 animate-spin" />
-          ) : isSelected ? (
-            <><Check className="h-4 w-4" /> Using this flight</>
+          ) : isSelectedOutbound ? (
+            <><Check className="h-4 w-4" /> Departure</>
           ) : (
-            "Use this flight"
+            "Use as departure"
+          )}
+        </Button>
+        <Button
+          onClick={() => onSelect("return")}
+          disabled={isSelecting}
+          className={`h-10 rounded-xl font-bold border-2 px-5 ${
+            isSelectedReturn
+              ? "bg-primary text-primary-foreground border-foreground shadow-card"
+              : "bg-card text-foreground border-foreground/20 hover:border-foreground/50"
+          }`}
+        >
+          {isSelecting ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : isSelectedReturn ? (
+            <><Check className="h-4 w-4" /> Return</>
+          ) : (
+            "Use as return"
           )}
         </Button>
         {option.deep_link && (
@@ -480,17 +602,111 @@ function FlightRow({
   );
 }
 
-function TimeBlock({ time, subline }: { time: string; subline: string }) {
+function TimeBlock({
+  time,
+  subline,
+  dayOffset = 0,
+}: {
+  time: string;
+  subline: string;
+  dayOffset?: number;
+}) {
+  const display = shortFlightText(time);
+  const isLong = display.length > 12;
   return (
-    <div>
-      <div className="font-[Fredoka] text-3xl md:text-4xl font-bold leading-none tabular-nums">
-        {time || "—"}
+    <div className="min-w-0">
+      <div className="flex items-baseline gap-2 min-w-0">
+        <div
+          className={`font-bold leading-tight tabular-nums break-words ${
+            isLong
+              ? "text-xl md:text-2xl text-foreground/90"
+              : "font-[Fredoka] text-3xl md:text-4xl"
+          }`}
+        >
+          {display}
+        </div>
+        {dayOffset > 0 && (
+          <span className="font-[Fredoka] text-2xl md:text-3xl font-bold leading-none text-red-600">
+            +{dayOffset}
+          </span>
+        )}
       </div>
       <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mt-1.5">
-        {subline}
+        {formatFlightSubline(subline)}
       </div>
     </div>
   );
+}
+
+function AirlineLogo({ option }: { option: FlightOption }) {
+  const logoUrl = option.airline_logo_url || airlineLogoFromFlightNumbers(option.flight_numbers);
+  if (!logoUrl) return <Plane className="h-4 w-4 text-foreground/60 shrink-0" />;
+  return (
+    <img
+      src={logoUrl}
+      alt={`${option.airline} logo`}
+      className="h-7 w-7 rounded-full border border-foreground/10 bg-white object-contain p-0.5 shrink-0"
+      onError={(event) => {
+        event.currentTarget.style.display = "none";
+      }}
+    />
+  );
+}
+
+function airlineLogoFromFlightNumbers(flightNumbers: string[]): string {
+  const first = flightNumbers.find(Boolean) || "";
+  const match = first.match(/^([A-Z0-9]{2})\d/i);
+  if (!match) return "";
+  const domain = AIRLINE_DOMAINS[match[1].toUpperCase()];
+  return domain ? `https://www.google.com/s2/favicons?sz=64&domain=${domain}` : "";
+}
+
+const AIRLINE_DOMAINS: Record<string, string> = {
+  AA: "aa.com",
+  AC: "aircanada.com",
+  AF: "airfrance.com",
+  BA: "britishairways.com",
+  DL: "delta.com",
+  IB: "iberia.com",
+  LH: "lufthansa.com",
+  S4: "azoresairlines.pt",
+  TP: "flytap.com",
+  UA: "united.com",
+  WS: "westjet.com",
+};
+
+function dayOffset(departureDate: string, arrivalDate: string): number {
+  const departure = parseDateOnly(departureDate);
+  const arrival = parseDateOnly(arrivalDate);
+  if (!departure || !arrival) return 0;
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.max(0, Math.round((arrival.getTime() - departure.getTime()) / msPerDay));
+}
+
+function parseDateOnly(value: string): Date | null {
+  const match = (value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+}
+
+function shortFlightText(value: string): string {
+  const cleaned = (value || "").trim();
+  if (!cleaned) return "—";
+  if (/^open search$/i.test(cleaned)) return "Open search";
+  if (/^verify time$/i.test(cleaned)) return "Verify time";
+  if (/target|verify|variable|not supplied|unavailable/i.test(cleaned)) return "Verify time";
+  return cleaned;
+}
+
+function formatFlightSubline(value: string): string {
+  return value.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (_, y, m, d) => {
+    const date = new Date(Number(y), Number(m) - 1, Number(d));
+    return date.toLocaleDateString(undefined, {
+      month: "short",
+      day: "2-digit",
+      year: "numeric",
+    });
+  });
 }
 
 function RouteTimeline({
