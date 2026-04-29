@@ -7,8 +7,8 @@ import { Button } from "@/components/ui/button";
 import {
   AlertTriangle, ArrowLeft, ChevronDown, Loader2, RefreshCcw, AlertCircle,
   ExternalLink, CheckCircle2, Clock, Sparkles, FileSpreadsheet,
-  Plane, MapPinned, Utensils, Sun, Waves, Coffee, Home, Car, Ticket,
-  Info, Navigation, Phone, Hash, CalendarDays, ShoppingCart, ShieldCheck,
+  Plane, MapPinned, Utensils, Sun, Home, Car, Ticket,
+  Info, Navigation, Phone, Hash, ShoppingCart,
 } from "lucide-react";
 import { api, type ActivityOption, type FlightOption, type LodgingOption, type WorkspaceTab } from "@/lib/api";
 import { buildStages, shortlistOptions } from "@/lib/stages";
@@ -488,9 +488,18 @@ const Timeline = () => {
   const lodgingShortlist = shortlistOptions(tripQuery.data, "lodging");
   const activityShortlist = shortlistOptions(tripQuery.data, "activities");
   const flightShortlist = shortlistOptions(tripQuery.data, "flights");
-  const lodgingOpts = lodgingShortlist?.lodging_options ?? [];
-  const activityOpts = activityShortlist?.activity_options ?? [];
-  const flightOpts = flightShortlist?.flight_options ?? [];
+  const lodgingOpts = useMemo(
+    () => lodgingShortlist?.lodging_options ?? [],
+    [lodgingShortlist]
+  );
+  const activityOpts = useMemo(
+    () => activityShortlist?.activity_options ?? [],
+    [activityShortlist]
+  );
+  const flightOpts = useMemo(
+    () => flightShortlist?.flight_options ?? [],
+    [flightShortlist]
+  );
 
   const allQueries = [
     ...lodgingOpts.map((o) =>
@@ -748,7 +757,7 @@ const Timeline = () => {
                   <CheckCircle2 className="h-4 w-4 text-palm shrink-0 mt-0.5" />
                   <span>{action}</span>
                 </li>
-              )}
+              ))}
             </ul>
           </div>
         )}
@@ -898,5 +907,124 @@ const ScorePill = ({ label, value }: { label: string; value: number }) => (
     <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</div>
   </div>
 );
+
+const CompleteTimeline = ({ days }: { days: TimelineDay[] }) => (
+  <div className="overflow-hidden rounded-[2rem] border-2 border-foreground/10 bg-card shadow-card mb-6">
+    {days.map((day, dayIndex) => (
+      <section
+        key={`${day.day}-${day.dateLabel}`}
+        className={`grid gap-0 md:grid-cols-[240px_1fr] ${dayIndex > 0 ? "border-t-2 border-foreground/10" : ""}`}
+      >
+        <aside className="bg-background/55 px-6 py-6 md:px-8 md:py-8 md:border-r-2 md:border-dashed md:border-foreground/15">
+          <div className="text-xs font-bold uppercase tracking-[0.22em] text-muted-foreground">
+            Day {day.day}
+          </div>
+          <div className="mt-3 font-[Fredoka] text-5xl font-bold leading-none">
+            {day.weekday || `Day ${day.day}`}
+          </div>
+          <div className="mt-3 text-lg font-bold text-muted-foreground">{day.dateLabel}</div>
+          <div className="mt-5 inline-flex rounded-full border-2 border-foreground bg-foreground px-4 py-2 text-sm font-bold text-background">
+            {day.mood}
+          </div>
+          <p className="mt-4 text-sm italic text-muted-foreground">{day.note}</p>
+        </aside>
+
+        <div className="px-5 py-5 md:px-8 md:py-7">
+          <div className="space-y-7">
+            {day.events.map((event) => (
+              <TimelineEventCard key={event.id} event={event} />
+            ))}
+          </div>
+        </div>
+      </section>
+    ))}
+  </div>
+);
+
+const TimelineEventCard = ({ event }: { event: TimelineEvent }) => {
+  const style = EVENT_STYLES[event.type];
+  const Icon = style.Icon;
+
+  return (
+    <article className="grid gap-4 md:grid-cols-[96px_48px_1fr_auto] md:items-start">
+      <div className="font-mono text-lg font-bold leading-tight text-muted-foreground md:text-right">
+        {event.start ? (
+          <>
+            <div>{event.start}</div>
+            {event.end && <div>- {event.end}</div>}
+          </>
+        ) : (
+          <div className="text-sm font-sans uppercase tracking-wider">Flexible</div>
+        )}
+      </div>
+
+      <div className={`flex h-12 w-12 items-center justify-center rounded-full border-2 ${style.ring}`}>
+        <Icon className="h-5 w-5" />
+      </div>
+
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h3 className="font-[Fredoka] text-2xl font-bold leading-tight tracking-normal">
+            {event.title}
+          </h3>
+          <div className="flex flex-wrap gap-2">
+            {event.tags.filter(Boolean).slice(0, 3).map((tag) => (
+              <span
+                key={`${event.id}-${tag}`}
+                className="rounded-full border border-foreground/15 bg-muted/70 px-3 py-1 text-xs font-bold"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {event.subtitle && (
+          <p className="mt-1 text-lg font-semibold text-muted-foreground">{event.subtitle}</p>
+        )}
+        {event.detail && (
+          <p className="mt-3 flex items-start gap-2 text-sm font-semibold text-muted-foreground">
+            <Hash className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{event.detail}</span>
+          </p>
+        )}
+
+        {event.links.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
+            {event.links.map((link) => {
+              const LinkIcon = LINK_ICONS[link.kind ?? "external"];
+              return (
+                <a
+                  key={`${event.id}-${link.label}-${link.href}`}
+                  href={link.href}
+                  target={link.href.startsWith("http") ? "_blank" : undefined}
+                  rel={link.href.startsWith("http") ? "noopener noreferrer" : undefined}
+                  className="inline-flex items-center gap-1.5 text-sm font-bold text-muted-foreground hover:text-foreground"
+                >
+                  <LinkIcon className="h-4 w-4" />
+                  {link.label}
+                </a>
+              );
+            })}
+          </div>
+        )}
+
+        {event.alert && (
+          <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl border-2 border-coral/35 bg-coral/10 px-4 py-3 text-sm font-semibold text-muted-foreground">
+            <span className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-primary" />
+              {event.alert}
+            </span>
+            <Clock className="h-4 w-4 shrink-0" />
+          </div>
+        )}
+      </div>
+
+      <div className={`hidden rounded-full border px-3 py-1 text-xs font-bold md:block ${style.chip}`}>
+        {event.type}
+      </div>
+    </article>
+  );
+};
 
 export default Timeline;
