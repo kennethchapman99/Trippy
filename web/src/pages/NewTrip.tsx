@@ -27,6 +27,17 @@ const COVER_GRADIENTS = [
   "linear-gradient(135deg, hsl(205 88% 48%), hsl(215 75% 28%))",
 ];
 
+const TRIP_NAME_DESTINATION_BLOCKLIST = /\b(trip|vacation|holiday|break|getaway|family|spring|summer|winter|fall|autumn|march|april|may|june|july|august|september|october|november|december|christmas|birthday|anniversary|new year)\b/i;
+
+function inferDestinationFromTripName(value: string): string {
+  const text = value.trim();
+  if (!text) return "";
+  if (/\d/.test(text)) return "";
+  if (TRIP_NAME_DESTINATION_BLOCKLIST.test(text)) return "";
+  if (text.split(/\s+/).length > 3) return "";
+  return text;
+}
+
 function conceptToIdeaPayload(concept: TripConcept): Record<string, unknown> {
   return {
     trip_name: concept.title,
@@ -51,6 +62,7 @@ const NewTrip = () => {
 
   // Form fields
   const [tripName, setTripName] = useState("");
+  const [destination, setDestination] = useState("");
   const [dates, setDates] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -104,9 +116,12 @@ const NewTrip = () => {
   const handleFormSubmit = () => {
     const budgetNum = parseFloat(budget.replace(/[^0-9.]/g, "")) || undefined;
     const goals = [...pickedVibes, ...(wishes.trim() ? [wishes.trim()] : [])];
+    const destinationText = destination.trim() || inferDestinationFromTripName(tripName);
+    const cleanTripName = tripName.trim();
     const payload: Record<string, unknown> = {
-      trip_name: tripName || "New trip",
-      mode: "idea",
+      trip_name: cleanTripName || (destinationText ? `${destinationText} trip` : "New trip"),
+      mode: destinationText ? "selected_destination" : "idea",
+      destinations: destinationText || undefined,
       goals,
       avoidances: hardNos ? [hardNos] : [],
       travelers: 5,
@@ -281,6 +296,21 @@ const NewTrip = () => {
                 placeholder="Spring break 2026"
                 className="h-12 w-full rounded-xl border-2 border-foreground/10 bg-background px-4 font-medium focus:outline-none focus:border-primary"
               />
+            </FormRow>
+
+            <FormRow label="Destination(s)" hint="Required when you already know where you want to go">
+              <div className="relative">
+                <MapPin className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <input
+                  value={destination}
+                  onChange={(e) => setDestination(e.target.value)}
+                  placeholder="Chile, Patagonia, Santiago, Atacama"
+                  className="h-12 w-full rounded-xl border-2 border-foreground/10 bg-background pl-10 pr-4 font-medium focus:outline-none focus:border-primary"
+                />
+              </div>
+              <div className="mt-1.5 text-xs text-muted-foreground font-medium">
+                When this is filled, Trippy drafts shapes around this destination instead of falling back to generic idea templates.
+              </div>
             </FormRow>
 
             <div className="grid md:grid-cols-2 gap-5">
