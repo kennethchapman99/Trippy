@@ -286,7 +286,11 @@ def _build_state_with_openclaw(
         return _completed(stdout=json.dumps(openclaw_payload), returncode=runner_returncode)
 
     if category == ShortlistCategory.FLIGHTS:
-        state = FlightShortlistService(intake_service, planner).build("azores-family-2027")
+        state = FlightShortlistService(intake_service, planner).add_candidate(
+            "azores-family-2027",
+            link="https://www.google.com/travel/flights/search",
+            notes="YYZ to PDL flight candidate; OpenClaw evidence pending.",
+        )
     elif category == ShortlistCategory.LODGING:
         state = LodgingShortlistService(intake_service, planner).build("azores-family-2027")
     elif category == ShortlistCategory.CARS:

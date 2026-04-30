@@ -341,8 +341,12 @@ def test_firecrawl_merges_into_shortlist_pipeline(
     planner = TripPlannerService(intake_service)
     planner.draft(created.trip_id)
     planner.select_option(created.trip_id, "two-region-balanced")
-    state: ResearchShortlistState = FlightShortlistService(intake_service, planner).build(
-        created.trip_id
+    state: ResearchShortlistState = FlightShortlistService(
+        intake_service, planner
+    ).add_candidate(
+        created.trip_id,
+        link="https://www.google.com/travel/flights/search",
+        notes="YYZ to PDL flight candidate; source policy evidence pending.",
     )
 
     firecrawl = FirecrawlService(api_key="test-key", enabled=True)

@@ -45,7 +45,8 @@ def test_ui_service_runs_planning_and_feedback_loop(
 
     assert snapshot["intake"]["party"]["total_travelers"] == 5
     assert snapshot["draft"]["selected_option_id"] == option_id
-    assert flights["shortlist"]["recommended_option_id"]
+    assert flights["shortlist"]["recommended_option_id"] is None
+    assert flights["shortlist"]["flight_options"] == []
     assert workspace["workspace"]["status"] == "prepared_local"
     assert snapshot["shortlists"]
 
@@ -574,7 +575,7 @@ def test_ui_select_flight_updates_canonical_shortlist(
     _patch_ui_paths(tmp_path, monkeypatch)
     service = TrippyUIService()
     trip_id = _create_selected_trip(service)
-    flights = service.build_shortlist(trip_id, "flights")
+    flights = _add_ui_flight_candidates(service, trip_id)
     option_id = flights["shortlist"]["flight_options"][1]["option_id"]
 
     result = service.select_flight({"trip_id": trip_id, "option_id": option_id})
@@ -608,7 +609,7 @@ def test_ui_can_confirm_core_bookings_and_hydrate_trip_packet(
     _patch_ui_paths(tmp_path, monkeypatch)
     service = TrippyUIService()
     trip_id = _create_selected_trip(service)
-    flights = service.build_shortlist(trip_id, "flights")
+    flights = _add_ui_flight_candidates(service, trip_id)
     lodging = service.build_shortlist(trip_id, "lodging")
     flight_id = flights["shortlist"]["flight_options"][0]["option_id"]
     lodging_id = lodging["shortlist"]["lodging_options"][0]["option_id"]
@@ -799,6 +800,24 @@ def _create_selected_trip(service: TrippyUIService) -> str:
     draft_result = service.draft_plan(trip_id)
     service.select_plan(trip_id, draft_result["draft"]["recommended_option_id"])
     return str(trip_id)
+
+
+def _add_ui_flight_candidates(service: TrippyUIService, trip_id: str) -> dict[str, object]:
+    service.build_shortlist(trip_id, "flights")
+    state: dict[str, object] = {}
+    for notes in [
+        "YYZ to PDL nonstop candidate; provider evidence pending.",
+        "YYZ to PDL one stop candidate; provider evidence pending.",
+        "PDL to YYZ return candidate; provider evidence pending.",
+    ]:
+        state = service.add_flight_candidate(
+            {
+                "trip_id": trip_id,
+                "link": "https://www.google.com/travel/flights/search",
+                "notes": notes,
+            }
+        )
+    return state
 
 
 def _patch_ui_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
