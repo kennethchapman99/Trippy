@@ -467,6 +467,90 @@ def test_live_validation_marks_reachable_rows_without_claiming_inventory(
     assert any("exact inventory" in note for note in first.validation.notes)
 
 
+def test_live_validation_defaults_to_provenance_only_when_env_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr("trippy.config.LIVE_VALIDATION_ENABLED", False)
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "two-region-balanced")
+    service = FlightShortlistService(intake_service, planner)
+    flights = service.add_candidate(
+        intake.trip_id,
+        link="https://www.google.com/travel/flights/search",
+        notes="YYZ to PDL candidate; provider evidence pending.",
+    )
+
+    def forbidden_fetch(_url: str, _timeout: float) -> tuple[bool, int | None, str]:
+        raise AssertionError("live validation should not fetch unless explicitly enabled")
+
+    validator = LiveValidationService(fetcher=forbidden_fetch)
+    validated = validator.validate_state(flights)
+    first = validated.flight_options[0]
+
+    assert validated.artifacts["validation_mode"] == "provenance_only"
+    assert first.row_status == ShortlistRowStatus.RESEARCHED
+    assert first.validation.verification_status == VerificationStatus.MANUAL_REQUIRED
+    assert first.validation.freshness_status == FreshnessStatus.UNKNOWN
+
+
+def test_api_failures_run_configured_scanner_fallback_without_manual_flags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_planning_paths(tmp_path, monkeypatch)
+    calls: list[tuple[str, str]] = []
+
+    def fake_fallback_available() -> bool:
+        return True
+
+    def fake_run_scanner_fallback(state, *, adapter_mode: str = "auto", reason: str):
+        calls.append((state.category.value, reason))
+        state.artifacts["scanner_fallback"] = {
+            "status": "fake",
+            "adapter_mode": adapter_mode,
+            "reason": reason,
+        }
+        return state
+
+    for module in (
+        "trippy.services.flight_shortlist",
+        "trippy.services.lodging_shortlist",
+        "trippy.services.car_shortlist",
+        "trippy.services.activity_shortlist",
+    ):
+        monkeypatch.setattr(f"{module}.scanner_fallback_available", fake_fallback_available)
+        monkeypatch.setattr(f"{module}.run_scanner_fallback", fake_run_scanner_fallback)
+
+    intake_service = TripIntakeService()
+    intake = intake_service.create(_azores_intake())
+    planner = TripPlannerService(intake_service)
+    planner.draft(intake.trip_id)
+    planner.select_option(intake.trip_id, "two-region-balanced")
+
+    flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
+    lodging = LodgingShortlistService(intake_service, planner).build(intake.trip_id)
+    cars = CarShortlistService(intake_service, planner).build(intake.trip_id)
+    activities = ActivityShortlistService(intake_service, planner).build(intake.trip_id)
+
+    assert [category for category, _reason in calls] == [
+        "flights",
+        "lodging",
+        "cars",
+        "activities",
+    ]
+    assert flights.flight_options[0].option_id == "scanner-flight-search-1"
+    assert flights.artifacts["scanner_fallback"]["status"] == "fake"
+    assert lodging.artifacts["scanner_fallback"]["status"] == "fake"
+    assert cars.artifacts["scanner_fallback"]["status"] == "fake"
+    assert activities.artifacts["scanner_fallback"]["status"] == "fake"
+    assert all("Firecrawl/OpenClaw" in reason for _category, reason in calls)
+
+
 def test_lodging_deep_research_enriches_existing_shortlist_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

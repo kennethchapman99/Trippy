@@ -229,6 +229,15 @@ context (baggage rules, cancellation windows, check-in/out, child-seat policies,
 hours/restrictions, weather dependency, amenities), while official APIs stay the
 source of truth for transactional inventory and booking-ready details.
 
+Shortlists use the same provider ladder across categories:
+
+1. Use the strongest configured live API/provider signal first.
+2. If the API/provider returns no usable rows and Firecrawl or OpenClaw is actually
+   configured, automatically run read-only scanner fallback against the source/search
+   links. This does not require adding `--validate-live` or `--deep-research`.
+3. If neither live APIs nor scanner fallback can produce evidence, keep the row as a
+   human handoff instead of inventing prices, inventory, or booking terms.
+
 ```bash
 uv run trippy trip-plan flights    --trip-id <id> --deep-research --adapter firecrawl
 uv run trippy trip-plan lodging    --trip-id <id> --deep-research --adapter firecrawl

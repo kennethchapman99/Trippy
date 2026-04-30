@@ -19,6 +19,7 @@ from trippy.models.trip_planning import TripIntake
 from trippy.services import serpapi_client
 from trippy.services.destination_profiles import profile_for_intake
 from trippy.services.live_validation import LiveValidationService
+from trippy.services.scanner_fallback import run_scanner_fallback, scanner_fallback_available
 from trippy.services.serpapi_options import activity_options_from_serpapi
 from trippy.services.shortlist_store import (
     ShortlistContext,
@@ -98,8 +99,18 @@ class ActivityShortlistService:
         )
         _merge_existing_activity_state(state, existing)
         LiveValidationService().validate_state(state, attempt_network=validate_live)
+        fallback_research = bool(not live_options and scanner_fallback_available())
         if deep_research:
             SourceResearchService().research_state(state, adapter_mode=adapter_mode)
+        elif fallback_research:
+            state = run_scanner_fallback(
+                state,
+                adapter_mode=adapter_mode,
+                reason=(
+                    "SerpAPI did not return usable activity rows, so Trippy ran "
+                    "Firecrawl/OpenClaw scanner fallback against activity source links."
+                ),
+            )
         _write_activity_schedule_artifact(state)
         return self._store.save(state)
 
