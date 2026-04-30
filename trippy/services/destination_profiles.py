@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from trippy.models.trip_planning import TripIntake
+from trippy.services.geography_resolver import resolve_trip_geography
 
 
 class DestinationProfile(BaseModel):
@@ -49,6 +50,15 @@ def _generic_profile(intake: TripIntake) -> DestinationProfile:
     ]
     if geography and geography.warnings:
         notes.extend(geography.warnings)
+    geography = resolve_trip_geography(intake)
+    destination = geography.primary_destination_name or ", ".join(intake.destination_seeds) or intake.trip_name
+    gateway_airports = [airport.iata_code for airport in geography.destination_airports]
+    regions = geography.planning_regions or geography.map_locations or list(intake.destination_seeds)
+    notes = [
+        "Generic profile: validate gateway airport, seasonal service, and same-ticket routing.",
+        *geography.warnings,
+        *geography.evidence,
+    ]
     lodging_targets = [
         {
             "name": f"{location} family lodging search",
@@ -58,6 +68,7 @@ def _generic_profile(intake: TripIntake) -> DestinationProfile:
             "query": f"{location} family lodging 3 beds parking",
         }
         for location in lodging_locations[:6]
+        for location in (geography.lodging_search_locations or [destination])[:6]
     ]
     car_targets = [
         {
@@ -68,6 +79,7 @@ def _generic_profile(intake: TripIntake) -> DestinationProfile:
             "query": f"{location} car rental SUV minivan family luggage",
         }
         for location in car_locations[:6]
+        for location in (geography.car_search_locations or [destination])[:6]
     ]
     return DestinationProfile(
         key="generic",
@@ -79,6 +91,19 @@ def _generic_profile(intake: TripIntake) -> DestinationProfile:
         lodging_search_targets=lodging_targets,
         car_search_targets=car_targets,
         activity_search_targets=_generic_activity_search_targets(intake, destination, activity_locations),
+        country=geography.destination_airports[0].country if geography.destination_airports else "",
+        gateway_airports=gateway_airports,
+        # Keep known terms empty for generic resolved profiles so specific neighborhood,
+        # region, and search targets are not filtered out by a selected raw destination blob.
+        island_or_region_terms=[],
+        flight_notes=notes,
+        lodging_search_targets=lodging_targets,
+        car_search_targets=car_targets,
+        activity_search_targets=_generic_activity_search_targets(
+            intake,
+            destination,
+            geography.activity_search_locations or regions or [destination],
+        ),
     )
 
 
