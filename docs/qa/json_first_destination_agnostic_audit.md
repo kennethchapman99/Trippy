@@ -63,11 +63,14 @@ uv run ruff check .
 - `trippy/services/trip_planner.py`: selected-destination drafts used country priors by matching raw seeds/destination text. Restricted country-prior lookup to explicit `geography.country`.
 - `tests/unit/test_trip_planning_pipeline.py`: tests expected canned flight fallback rows. Updated to assert fail-closed behavior and to use user-supplied candidates where candidate workflow behavior is under test.
 
-### P1 Remaining
+### P1 Fixed In Follow-Up
 
-- `trippy/services/trip_ideation.py`: idea-stage trip generation is still based on destination-specific templates such as Cayman, Lisbon/Portugal, Japan, Costa Rica, and Italy. This is acceptable only for explicit idea inspiration, not selected-destination planning. Recommended next PR: replace templates with provider/scanner-backed idea sources or clearly mark the module as inspiration-only and keep it out of downstream trip execution.
-- `trippy/services/country_priors.py`: country prior data contains destination facts. Selected-destination planning no longer scans raw seeds for these priors, but idea ranking still uses them. Recommended next PR: require explicit user-approved country field or past-trip evidence scope before applying priors.
-- `trippy/skills/runners/itinerary_builder.py`: skill runner can synthesize itinerary city rows from destination summaries. It appears skill-scoped rather than connector/bookable output, but should be hardened to require canonical trip state and mark unresolved rows.
+- `trippy/services/trip_ideation.py`: replaced destination-specific idea templates with destination-agnostic scanner briefs. Idea output no longer names cities, countries, airports, neighborhoods, or known destinations.
+- `trippy/services/trip_planner.py`, `trippy/services/planning_advisor.py`, and `trippy/services/friction_detector.py`: removed raw destination-text country-prior matching. Country priors now require explicit enriched country fields, such as canonical lodging country or `TripGeography.country`.
+- `trippy/skills/runners/itinerary_builder.py`: removed fallback splitting of `destination_summary`; the runner now requires explicit destinations from canonical JSON or user-approved resolver output and marks generated rows as requiring confirmation.
+- `trippy/skills/runners/trip_sheet_creator.py` and its skill definition: removed destination-specific checklist flags and destination examples.
+- `trippy/services/phase_planner.py`, `trippy/integrations/telegram_bot.py`, and `trippy/models/trip.py`: replaced named destination examples in runtime-facing copy/docstrings with destination-neutral examples.
+- `trippy/ui/server.py`: added `/api/trip-json` export/import for enriched `TripIntake` JSON plus resolver evidence.
 
 ### P2 Accepted
 
@@ -83,7 +86,7 @@ uv run ruff check .
 - Lodging/activity/car targets can still use unresolved user-entered place text for scanner/search handoff.
 - Flight live providers require IATA route codes; no raw destination string is used as a flight route after this patch.
 - Workspace reads selected plan, canonical geography, and shortlist state. Remaining placeholders are marked unconfirmed/seeded, not live/bookable.
-- UI/API exposes `/api/state`, `/api/trip`, intake creation, shortlist, workspace, and map endpoints. A dedicated JSON import/export editing path and resolver evidence editor are not yet first-class UI flows.
+- UI/API exposes `/api/state`, `/api/trip`, `/api/trip-json`, intake creation, shortlist, workspace, and map endpoints. `/api/trip-json` returns enriched `TripIntake` JSON plus resolver evidence and accepts edited/enriched JSON back into canonical intake state.
 
 ## Tests Added or Changed
 
@@ -103,24 +106,25 @@ uv run ruff check .
 - Blocked raw destination text from becoming user-candidate arrival airport/routes.
 - Removed Portugal/Schengen/euro workspace defaults.
 - Restricted selected-destination country-prior lookup to explicit enriched geography.
+- Replaced hardcoded idea-stage destination templates with generic scanner briefs.
+- Added enriched TripIntake JSON import/export and resolver-evidence payloads.
+- Hardened itinerary and trip-sheet skills to avoid destination-specific examples, flags, and summary-splitting.
+- Removed remaining runtime-facing named-destination example strings outside explicit priors/demos.
 
 ## Remaining Risks
 
-- Idea generation still uses hardcoded concept templates and can return named destinations as suggestions.
-- UI does not yet provide a dedicated enriched JSON import/export editor or resolver evidence confirmation workflow.
-- Some skill definitions and runners still contain example destination itinerary structures and should be reviewed before being used as production planning paths.
+- `trippy/services/country_priors.py` still stores historical country priors for explicit country use. This is acceptable only when the country is present in enriched JSON or canonical stay data, not when inferred from raw destination text.
+- Named destinations remain in fixtures, tests, docs, and `trippy/thin_slice.py` demo data.
 
 ## Check Results
 
 - `uv run pytest tests/unit/test_trip_geography.py`: 6 passed.
 - `uv run pytest tests/unit/test_trip_planning_pipeline.py`: 28 passed.
-- `uv run pytest`: 345 passed, 5 skipped.
+- `uv run pytest`: 346 passed, 5 skipped.
 - `uv run mypy trippy/`: success, no issues in 91 source files.
 - `uv run ruff check .`: all checks passed.
 
 ## Recommended Next PRs
 
-1. Replace or quarantine `trip_ideation.py` templates behind an explicit "inspiration examples" mode.
-2. Add a UI/API path for importing, viewing, editing, and exporting enriched `TripIntake` JSON, including resolver evidence and user confirmation status.
-3. Harden itinerary-builder skill runner so it can only create itinerary rows from canonical trip JSON or explicit user-supplied rows.
-4. Add CI grep checks for destination-specific production code and generated fallback flight/lodging/car/activity rows.
+1. Add CI grep checks for destination-specific production code and generated fallback flight/lodging/car/activity rows.
+2. Build a richer browser editor around `/api/trip-json` for field-by-field resolver confirmation.

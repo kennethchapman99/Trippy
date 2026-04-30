@@ -292,7 +292,7 @@ class SyncMetadata(BaseModel):
 
 
 def _make_trip_id(name: str) -> str:
-    """Derive a slug trip ID from a human name like 'Japan 2026'."""
+    """Derive a slug trip ID from a human trip name."""
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return slug
 

@@ -156,12 +156,12 @@ class TripPlannerService:
         map_seed_queries = geography.map_seed_queries() if geography else list(intake.destination_seeds)
         single_base_region = planning_regions[0] if planning_regions else destination
         balanced_regions = planning_regions[:2] or [single_base_region]
-        signal_sources = [geography.country] if geography and geography.country else []
-        signals = [
-            signal.rationale
-            for seed in signal_sources
-            for signal in self._country_priors.fit_for_text(seed)
-        ]
+        signal = (
+            self._country_priors.fit_for_country(geography.country)
+            if geography and geography.country
+            else None
+        )
+        signals = [signal.rationale] if signal else []
         if not signals:
             signals = [
                 "No direct country prior matched; require live evidence and family-fit validation."

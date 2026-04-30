@@ -91,7 +91,7 @@ class PhasePlannerService:
                 title="New trip sheet generation",
                 complete=has_sheeted_trip,
                 blockers=[] if has_sheeted_trip else ["No trip linked to a Google Sheet yet"],
-                next_step='Run: trippy phase-run 4 --trip-idea "Japan March 2027"',
+                next_step='Run: trippy phase-run 4 --trip-idea "Family trip 2027"',
             )
         )
         phases.append(

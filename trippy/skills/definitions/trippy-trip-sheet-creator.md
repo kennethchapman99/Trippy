@@ -1,7 +1,7 @@
 # Skill: trippy-trip-sheet-creator
 
 ## Purpose
-Given a rough trip idea ("Japan next March", "Costa Rica in January for 10 days"),
+Given a rough trip idea ("family trip next March", "winter trip for 10 days"),
 create a new canonical trip record and a Google Sheet using the Trippy template.
 Pre-fill the sheet with known family info, suggested structure, and preference-aware
 recommendations.
@@ -14,7 +14,7 @@ recommendations.
 ## Inputs
 ```json
 {
-  "trip_idea": "Japan, March 2027, roughly 2 weeks",
+  "trip_idea": "Family trip, March 2027, roughly 2 weeks",
   "folder_id": "Drive folder ID to create the sheet in (optional)",
   "template_sheet_id": "Override the default template (optional)"
 }
@@ -24,15 +24,15 @@ recommendations.
 1. Parse the trip idea: destination(s), dates, duration, party (assume all 5 travelers)
 2. Create a canonical Trip record with trip_id, name, status=planned
 3. Pre-populate travelers from the family profile in memory
-4. Suggest itinerary structure: key cities, recommended nights per city, logical order
+4. Suggest only unresolved structure placeholders until locations are confirmed in JSON
 5. Suggest departure time targets based on preference memory
-6. Flag known requirements (JR Pass for Japan, ETA for Canada→Japan, etc.)
+6. Flag that entry, visa, transport pass, health, and local rules require official/current evidence
 7. Call `sheets_from_template(title, template_sheet_id)` to create the Google Sheet
 8. Write the canonical data to the sheet:
    - Trip overview tab: name, dates, travelers, status
-   - Flights tab: placeholder rows for outbound + return
-   - Hotels tab: placeholder rows per city
-   - Checklist tab: pre-populated with standard + destination-specific items
+   - Flights tab: unresolved rows that require explicit IATA origin/destination before search
+   - Hotels tab: unresolved rows per user-confirmed location
+   - Checklist tab: pre-populated with standard non-destination-specific items
 9. Write canonical Trip JSON to `~/.trippy/trips/{trip_id}.json`
 10. Write trip to SQLite DB
 11. Return trip_id, sheet_id, and sheet URL
@@ -40,11 +40,11 @@ recommendations.
 ## Outputs
 ```json
 {
-  "trip_id": "japan-2027",
+  "trip_id": "family-trip-2027",
   "sheet_id": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
   "sheet_url": "https://docs.google.com/spreadsheets/d/...",
-  "suggestion_summary": "Suggest: Tokyo 4n → Kyoto 3n → Osaka 2n → Tokyo 2n",
-  "flags": ["Add JR Pass to checklist", "Check ETA requirement for Canadian passports"]
+  "suggestion_summary": "Confirmed Base A 4n pending evidence → Confirmed Base B 4n pending evidence",
+  "flags": ["Confirm entry, visa, transport pass, health, and local rules from official/current sources"]
 }
 ```
 
