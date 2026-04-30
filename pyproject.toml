@@ -54,7 +54,7 @@ ignore = ["E501", "B008"]
 python_version = "3.11"
 strict = true
 plugins = ["sqlalchemy.ext.mypy.plugin"]
-exclude = ["trippy/db/migrations/", "hermes_trip/"]
+exclude = ["trippy/db/migrations/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
