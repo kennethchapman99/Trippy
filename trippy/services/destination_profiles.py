@@ -154,7 +154,9 @@ def _chile_profile(intake: TripIntake) -> DestinationProfile:
         title="Santiago, Chile",
         country="Chile",
         gateway_airports=[gateway or "SCL"],
-        island_or_region_terms=regions,
+        # Empty by design: Santiago neighborhoods and side-trip areas should not be filtered
+        # out just because the planner selected one concatenated raw destination string.
+        island_or_region_terms=[],
         flight_notes=[
             "SCL is the canonical international gateway for Santiago/central Chile trips.",
             "Santiago neighborhoods, Barrio Italia, Bellavista, Providencia, and Maipo Valley are map/activity/lodging areas only; never pass them as flight route codes.",
