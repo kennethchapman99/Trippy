@@ -2419,7 +2419,7 @@ function stayStructureForm(structure) {
       </label>
     </div>
     <label>Edit nights
-      <textarea name="night_plan_text" rows="4" placeholder="Ponta Delgada | 4 | lodging-1 | central base&#10;Furnas | 3 | lodging-2 | hot springs side">${escapeHtml(text)}</textarea>
+      <textarea name="night_plan_text" rows="4" placeholder="Primary base | 4 | lodging-1 | central base&#10;Second area | 3 | lodging-2 | activity side">${escapeHtml(text)}</textarea>
     </label>
     <label>Why this structure?
       <textarea name="notes" rows="2" placeholder="What tradeoff are we testing?">${escapeHtml(structure.manual_notes || "")}</textarea>

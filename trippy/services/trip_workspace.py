@@ -739,19 +739,21 @@ def _placeholder_segments(
     shortlists: dict[str, Any] | None = None,
 ) -> list[Segment]:
     origin = intake.departure_airports[0] if intake.departure_airports else "YYZ"
+    gateway = intake.geography.primary_gateway_iata() if intake.geography else None
+    destination = gateway or "DESTINATION_AIRPORT_REQUIRED"
     segments = [
         Segment(
             segment_id="flight-outbound-research",
             segment_type=SegmentType.FLIGHT,
             origin=origin,
-            destination="PDL",
+            destination=destination,
             confirmation_code="UNCONFIRMED",
             notes=f"Research outbound for {option.title}; prefer direct or sane one-stop.",
         ),
         Segment(
             segment_id="flight-return-research",
             segment_type=SegmentType.FLIGHT,
-            origin="PDL",
+            origin=destination,
             destination=origin,
             confirmation_code="UNCONFIRMED",
             notes="Research return with family-friendly departure time and baggage/seat clarity.",

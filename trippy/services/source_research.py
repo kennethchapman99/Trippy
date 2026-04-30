@@ -2068,7 +2068,6 @@ def _extract_price(text: str) -> str:
 def _airline_signal(text: str, request: SourceResearchRequest) -> str:
     candidates = [
         str(request.context.get("airline", "")),
-        "Azores Airlines",
         "SATA",
         "Air Canada",
         "TAP Portugal",

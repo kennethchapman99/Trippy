@@ -32,10 +32,10 @@ class _ConceptTemplate:
 
 _TEMPLATES = [
     _ConceptTemplate(
-        concept_id="azores-sao-miguel-short-comfort",
-        title="Azores Sao Miguel Easy Week",
-        countries=["Portugal"],
-        destinations=["Ponta Delgada", "Furnas", "Sete Cidades"],
+        concept_id="island-nature-short-comfort",
+        title="Island Nature Easy Week",
+        countries=[],
+        destinations=["Primary island base", "Thermal or nature area", "Scenic viewpoint area"],
         recommended_duration_days=6,
         best_season="late summer or early fall",
         estimated_cost_band_cad="CAD 12k-20k for a couple before final flights and lodging",
@@ -49,8 +49,6 @@ _TEMPLATES = [
             "nature",
             "food",
             "island",
-            "azores",
-            "portugal",
             "short-flight",
             "low-crowd",
             "chill",

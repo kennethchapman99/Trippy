@@ -318,7 +318,7 @@ def test_firecrawl_merges_into_shortlist_pipeline(
     intake = TripIntake(
         mode=TripIntakeMode.SELECTED_DESTINATION,
         trip_name="Azores Firecrawl 2027",
-        destination_seeds=["Azores"],
+        destination_seeds=["PDL", "Ponta Delgada", "Furnas"],
         travel_window=TravelWindow(label="summer 2027"),
         duration_days=9,
         travelers=5,
@@ -340,7 +340,7 @@ def test_firecrawl_merges_into_shortlist_pipeline(
     created = intake_service.create(intake)
     planner = TripPlannerService(intake_service)
     planner.draft(created.trip_id)
-    planner.select_option(created.trip_id, "azores-two-island-balanced")
+    planner.select_option(created.trip_id, "two-region-balanced")
     state: ResearchShortlistState = FlightShortlistService(intake_service, planner).build(
         created.trip_id
     )

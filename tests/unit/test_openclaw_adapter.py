@@ -29,10 +29,13 @@ from trippy.models.source_research import (
     SourceResearchStatus,
 )
 from trippy.models.trip_planning import (
+    TravelAirportRef,
     TravelerAgeBand,
     TravelWindow,
+    TripGeography,
     TripIntake,
     TripIntakeMode,
+    TripMapLocation,
     TripParty,
     TripPartyType,
     TripTraveler,
@@ -94,6 +97,28 @@ def _azores_intake() -> TripIntake:
             sleeping_considerations="At least 3 beds.",
         ),
         departure_airports=["YYZ"],
+        geography=TripGeography(
+            primary_destination_name="Azores, Portugal",
+            country="Portugal",
+            destination_airports=[
+                TravelAirportRef(iata_code="PDL", city="Ponta Delgada", country="Portugal")
+            ],
+            map_locations=[
+                TripMapLocation(
+                    name="Ponta Delgada",
+                    country="Portugal",
+                    use_for=["planning", "lodging", "activity", "car", "map"],
+                ),
+                TripMapLocation(
+                    name="Furnas",
+                    country="Portugal",
+                    use_for=["planning", "lodging", "activity", "map"],
+                ),
+            ],
+            lodging_search_locations=["Ponta Delgada", "Furnas"],
+            activity_search_locations=["Ponta Delgada", "Furnas"],
+            car_search_locations=["PDL"],
+        ),
         goals=["nature", "family comfort"],
         avoidances=["overpacked days"],
         freeform_notes="OpenClaw test fixture.",
@@ -290,7 +315,7 @@ def test_openclaw_flight_extraction_maps_key_fields(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
 
     payload = {
         "observations": [
@@ -330,7 +355,7 @@ def test_openclaw_lodging_extraction_maps_key_fields(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
 
     payload = {
         "observations": [
@@ -365,7 +390,7 @@ def test_auto_lodging_falls_through_firecrawl_when_price_missing(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
     lodging = LodgingShortlistService(intake_service, planner).build(intake.trip_id)
     target = lodging.lodging_options[0]
 
@@ -417,7 +442,7 @@ def test_openclaw_car_extraction_maps_key_fields(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
 
     payload = {
         "observations": [
@@ -456,7 +481,7 @@ def test_openclaw_activity_extraction_maps_key_fields(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
 
     payload = {
         "observations": [
@@ -490,7 +515,7 @@ def test_link_only_row_remains_handoff_not_live_verified(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
     lodging = LodgingShortlistService(intake_service, planner).build(intake.trip_id)
 
     service = SourceResearchService(
@@ -787,7 +812,7 @@ def test_playwright_car_adapter_extracts_signals(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
     cars = CarShortlistService(intake_service, planner).build(intake.trip_id)
 
     fixture_html = """
@@ -828,7 +853,7 @@ def test_playwright_car_adapter_falls_back_to_link_on_fetch_error(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
     cars = CarShortlistService(intake_service, planner).build(intake.trip_id)
 
     service = SourceResearchService(

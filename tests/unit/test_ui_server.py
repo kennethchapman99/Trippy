@@ -21,7 +21,7 @@ def test_ui_service_runs_planning_and_feedback_loop(
     intake_result = service.create_intake(
         {
             "trip_name": "Azores UI 2027",
-            "destinations": "Azores",
+            "destinations": "PDL, Ponta Delgada, Furnas",
             "travel_window": "June 2027 flexible",
             "duration": "6 to 8 days",
             "party_type": "whole_family",
@@ -199,7 +199,7 @@ def test_ui_suggest_ideas_respects_caribbean_region_intent(
 
     concept_ids = {concept["concept_id"] for concept in result["comparison"]["concepts"]}
     assert len(concept_ids) == 3
-    assert "azores-sao-miguel-short-comfort" not in concept_ids
+    assert "island-nature-short-comfort" not in concept_ids
     assert concept_ids <= {
         "belize-reef-jungle-short",
         "curacao-color-beach-drivable-short",
@@ -234,7 +234,7 @@ def test_ui_suggest_ideas_respects_snorkeling_requirement(
     assert len(concept_ids) == 3
     assert "quebec-city-montreal-food-short" not in concept_ids
     assert "mexico-city-food-short" not in concept_ids
-    assert "azores-sao-miguel-short-comfort" not in concept_ids
+    assert "island-nature-short-comfort" not in concept_ids
     assert concept_ids <= {
         "belize-reef-jungle-short",
         "cayman-reef-food-easy-week",
@@ -364,7 +364,8 @@ def test_ui_can_generate_stay_structure_options(
     assert len(options) == 3
     assert any(option["strategy"] == "split_stay" for option in options)
     assert any(
-        any("Furnas" in stay["region"] for stay in option["night_plan"]) for option in options
+        any("activity side" in stay["region"] for stay in option["night_plan"])
+        for option in options
     )
     assert any(
         event["title"] == "ui-trip-plan-lodging-structure-suggest"
@@ -381,7 +382,7 @@ def test_ui_lodging_for_couple_does_not_force_family_bed_query(
     intake_result = service.create_intake(
         {
             "trip_name": "Azores Couple 2027",
-            "destinations": "Azores",
+            "destinations": "PDL, Ponta Delgada, Furnas",
             "travel_window": "September 2027 flexible",
             "duration": "6 to 8 days",
             "party_type": "couple",
@@ -403,7 +404,7 @@ def test_ui_lodging_for_couple_does_not_force_family_bed_query(
     first = result["shortlist"]["lodging_options"][0]
     assert first["bed_layout"] == "bed layout not confirmed yet"
     assert "family+room+3+beds" not in first["deep_link"]
-    assert "king+room" in first["deep_link"]
+    assert "king+bed" in first["deep_link"]
 
 
 def test_ui_booking_lodging_links_include_trip_dates_and_party(
@@ -415,7 +416,7 @@ def test_ui_booking_lodging_links_include_trip_dates_and_party(
     intake_result = service.create_intake(
         {
             "trip_name": "Cayman Family 2027",
-            "destinations": "Seven Mile Beach, West Bay",
+            "destinations": "GCM, Seven Mile Beach, West Bay",
             "start_date": "2027-03-13",
             "end_date": "2027-03-19",
             "duration": "7 days",
@@ -781,7 +782,7 @@ def _create_selected_trip(service: TrippyUIService) -> str:
     intake_result = service.create_intake(
         {
             "trip_name": "Azores UI 2027",
-            "destinations": "Azores",
+            "destinations": "PDL, Ponta Delgada, Furnas",
             "travel_window": "June 2027 flexible",
             "duration": "6 to 8 days",
             "party_type": "whole_family",

@@ -6,7 +6,7 @@ def test_resolver_keeps_flight_codes_clean() -> None:
     intake = TripIntake(
         mode=TripIntakeMode.SELECTED_DESTINATION,
         trip_name="Family trip",
-        destination_seeds=["Santiago, Providencia, Bellavista, Barrio Italia, Maipo Valley"],
+        destination_seeds=["SCL, Providencia, Bellavista, Barrio Italia, Maipo Valley"],
         departure_airports=["YYZ"],
     )
     geography = resolve_trip_geography(intake)

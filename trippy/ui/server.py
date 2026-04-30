@@ -181,7 +181,7 @@ class TrippyUIService:
         intake = TripIntake(
             trip_id=str(payload.get("trip_id") or ""),
             mode=mode,
-            trip_name=str(payload.get("trip_name") or "Azores 2027"),
+            trip_name=str(payload.get("trip_name") or "New trip"),
             destination_seeds=destination_seeds,
             travel_window=TravelWindow(
                 label=_optional_str(payload.get("travel_window")),

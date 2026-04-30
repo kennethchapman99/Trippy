@@ -81,39 +81,11 @@ class TripPlannerService:
         return self._path(trip_id)
 
     def _build_draft(self, intake: TripIntake) -> TripPlanDraft:
-        if _is_azores(intake):
-            return self._build_azores_draft(intake)
         if intake.mode == TripIntakeMode.IDEA and intake.destination_seeds:
             return self._build_generic_selected_destination_draft(intake)
         if intake.mode == TripIntakeMode.IDEA:
             return self._build_idea_draft(intake)
         return self._build_generic_selected_destination_draft(intake)
-
-    def _build_azores_draft(self, intake: TripIntake) -> TripPlanDraft:
-        duration = intake.duration_days or 10
-        country_signals = _country_signals(self._country_priors, "Portugal")
-        options = [
-            _azores_easy_option(duration, country_signals),
-            _azores_balanced_option(duration, country_signals),
-            _azores_ambitious_option(duration, country_signals),
-        ]
-        ranked = sorted(options, key=lambda option: option.recommendation_strength, reverse=True)
-        return TripPlanDraft(
-            trip_id=intake.trip_id,
-            intake_mode=intake.mode,
-            options=options,
-            recommended_option_id=ranked[0].option_id,
-            assumptions=[
-                "Azores planning starts with deterministic structure before live fares and lodging availability.",
-                "Family comfort is weighted above covering every island.",
-                "Inter-island movement must be validated against flight/ferry schedules before booking.",
-                "Portugal is not yet a historical country-prior entry, so Trippy applies family preference patterns directly and asks for live evidence.",
-            ],
-            source_notes=[
-                "Golden-path scenario: selected destination is Azores, Portugal.",
-                "Scores are planning-shape confidence, not live price or booking availability.",
-            ],
-        )
 
     def _build_idea_draft(self, intake: TripIntake) -> TripPlanDraft:
         comparison = TripIdeationService().compare(
@@ -299,176 +271,10 @@ class TripPlannerService:
             recommended_option_id=recommended,
             assumptions=[
                 "Generic selected-destination draft uses canonical TripGeography so connector inputs separate airports from map/search locations.",
-                "Replace with a destination-specific planner once enough evidence exists.",
+                "Enrich TripGeography with scanner evidence before connector-specific searches that require resolved facts.",
             ],
             source_notes=["Generated without live availability."],
         )
-
-
-def _is_azores(intake: TripIntake) -> bool:
-    text = " ".join([intake.trip_name, *intake.destination_seeds, intake.freeform_notes or ""])
-    return "azores" in text.lower()
-
-
-def _country_signals(service: CountryPriorService, country: str) -> list[str]:
-    fit = service.fit_for_country(country)
-    if fit is None:
-        return [
-            f"No direct historical country prior for {country}; use family rules around food, safety, natural beauty, practical mobility, crowd avoidance, and comfort."
-        ]
-    return [fit.rationale]
-
-
-def _azores_easy_option(duration: int, country_signals: list[str]) -> TripPlanOption:
-    strength = 88 if duration <= 8 else 82
-    return TripPlanOption(
-        option_id="azores-sao-miguel-easy",
-        title="Azores One-Island Easy Version",
-        summary="Base on Sao Miguel, prioritize Ponta Delgada/Furnas/Sete Cidades, and avoid inter-island logistics.",
-        duration_days=duration,
-        regions=["Sao Miguel"],
-        nights_by_region={"Sao Miguel": max(1, duration - 1)},
-        rationale=[
-            "Best if the goal is a beautiful, low-friction first Azores trip.",
-            "One rental car, one lodging base, and fewer packing/airport transitions protects family comfort.",
-            "Still gives strong nature, hot springs, coast, food, whale watching, and scenic drives.",
-        ],
-        travel_burden="meaningful transatlantic trip; verify direct or one-stop YYZ-PDL routing",
-        island_region_movement_friction="low: no inter-island flights or ferries",
-        family_comfort_score=89,
-        food_fit="Good for seafood, cozido in Furnas, Ponta Delgada restaurants, and casual local food.",
-        driving_fit="Good if using a comfortable rental car; still vet narrow roads, parking, and night driving.",
-        crowd_fit="Generally workable; avoid peak cruise-ship windows and crowded hot springs times.",
-        major_risks=[
-            "May feel too narrow if the family wants the broader Azores geography.",
-            "Car rental fit, luggage capacity, and parking at lodging need validation.",
-            "Weather can change quickly; build flexible indoor/short-drive backups.",
-        ],
-        recommendation_strength=strength,
-        lodging_strategy="Choose a safe, practical Sao Miguel base with 3+ beds, king-bed upside if available, parking, and easy food access.",
-        car_strategy="Rental car likely useful; prioritize automatic, luggage capacity, clear pickup, and cancellation terms.",
-        country_prior_signals=country_signals,
-        map_seed_queries=[
-            "Ponta Delgada airport",
-            "Ponta Delgada family lodging",
-            "Furnas Azores",
-            "Sete Cidades",
-            "Lagoa do Fogo",
-            "Sao Miguel whale watching",
-            "Ponta Delgada restaurants",
-        ],
-        required_research=_required_research(),
-    )
-
-
-def _azores_balanced_option(duration: int, country_signals: list[str]) -> TripPlanOption:
-    enough_time = duration >= 9
-    strength = 91 if enough_time else 70
-    return TripPlanOption(
-        option_id="azores-two-island-balanced",
-        title="Azores Two-Island Balanced Version",
-        summary="Use Sao Miguel plus Pico/Faial to get the main-island ease and a second-island adventure without overpacking.",
-        duration_days=duration,
-        regions=["Sao Miguel", "Pico or Faial"],
-        nights_by_region=_balanced_azores_nights(duration),
-        rationale=[
-            "Best first recommendation for 9-12 days: it materially broadens the trip while preserving downtime.",
-            "Sao Miguel provides the easiest base; Pico/Faial adds volcanic landscapes, ocean, wine/food, and a more distinct island feel.",
-            "One inter-island move is manageable if flights/ferries are buffered and luggage handling is simple.",
-        ],
-        travel_burden="meaningful international flight plus one inter-island segment",
-        island_region_movement_friction="moderate: one inter-island flight or ferry with weather/schedule buffer",
-        family_comfort_score=87 if enough_time else 72,
-        food_fit="Strong enough if food clusters are researched in Ponta Delgada plus Horta/Madalena; validate hours and reservations.",
-        driving_fit="Good with rental cars on each island; verify road comfort, parking, and pickup/dropoff logistics.",
-        crowd_fit="Good: easier to avoid crowd concentrations than a single most-touristed itinerary.",
-        major_risks=[
-            "Inter-island weather and schedule changes can disrupt the plan; avoid same-day tight flight chains.",
-            "Two car rentals and two lodgings increase admin load.",
-            "Needs explicit bed-layout validation for family of 5 in both bases.",
-        ],
-        recommendation_strength=strength,
-        lodging_strategy="Two comfortable bases: practical Sao Miguel lodging plus a well-located Pico/Faial stay with 3+ beds and parking.",
-        car_strategy="Likely rent cars on both islands; avoid cross-island pickup/dropoff ambiguity and weak cancellation terms.",
-        country_prior_signals=country_signals,
-        map_seed_queries=[
-            "Ponta Delgada airport",
-            "Ponta Delgada family lodging",
-            "Furnas Azores",
-            "Sete Cidades",
-            "Pico Island Azores family lodging",
-            "Madalena Pico restaurants",
-            "Horta Faial marina",
-            "Capelinhos Volcano",
-        ],
-        required_research=_required_research()
-        + [
-            "Inter-island flight/ferry schedule buffers and backup plan.",
-            "Whether Pico or Faial has the better lodging fit for 3+ beds and parking.",
-        ],
-    )
-
-
-def _azores_ambitious_option(duration: int, country_signals: list[str]) -> TripPlanOption:
-    enough_time = duration >= 12
-    strength = 83 if enough_time else 58
-    return TripPlanOption(
-        option_id="azores-three-island-ambitious",
-        title="Azores More Ambitious Version",
-        summary="Sao Miguel plus Terceira plus Pico/Faial for a broader Azores sampler if the trip is long enough.",
-        duration_days=duration,
-        regions=["Sao Miguel", "Terceira", "Pico or Faial"],
-        nights_by_region=_three_island_nights(duration),
-        rationale=[
-            "Works only if the trip is long enough to absorb multiple transitions.",
-            "Adds Angra do Heroismo, more food/history, and another island personality.",
-            "Useful as an upper-bound comparison, not the default comfort-first recommendation.",
-        ],
-        travel_burden="high: international flight plus multiple inter-island movements",
-        island_region_movement_friction="high unless duration is 12+ days and schedule buffers are strong",
-        family_comfort_score=81 if enough_time else 61,
-        food_fit="Potentially good, but short stays risk missing the best restaurants and relaxed meals.",
-        driving_fit="Several car-rental handoffs; only worth it with clear pickup/dropoff and luggage fit.",
-        crowd_fit="Can avoid crowds by spreading sights, but transition days reduce flexibility.",
-        major_risks=[
-            "Too many moves can waste precious trip time and create stress.",
-            "Weather disruption risk compounds across inter-island segments.",
-            "Three lodging searches with family bed requirements is a real planning load.",
-        ],
-        recommendation_strength=strength,
-        lodging_strategy="Only pursue if each island has a clear lodging win with 3+ beds, parking, and easy logistics.",
-        car_strategy="Use car rentals selectively and compare against transfers/tours on shorter island stays.",
-        country_prior_signals=country_signals,
-        map_seed_queries=[
-            "Ponta Delgada airport",
-            "Furnas Azores",
-            "Angra do Heroismo restaurants",
-            "Terceira family lodging",
-            "Pico Island Azores",
-            "Horta Faial marina",
-            "Azores whale watching",
-        ],
-        required_research=_required_research()
-        + [
-            "Exact inter-island route sequencing and weather backup.",
-            "Minimum two-night stay per island with no same-day risky connections.",
-        ],
-    )
-
-
-def _balanced_azores_nights(duration: int) -> dict[str, int]:
-    nights = max(1, duration - 1)
-    second = max(3, min(4, nights // 3))
-    first = max(1, nights - second)
-    return {"Sao Miguel": first, "Pico or Faial": second}
-
-
-def _three_island_nights(duration: int) -> dict[str, int]:
-    nights = max(1, duration - 1)
-    sao = max(3, nights - 6)
-    terceira = 3 if nights >= 8 else max(1, nights // 3)
-    pico_faial = max(1, nights - sao - terceira)
-    return {"Sao Miguel": sao, "Terceira": terceira, "Pico or Faial": pico_faial}
 
 
 def _even_nights(regions: list[str], duration_days: int) -> dict[str, int]:

@@ -72,7 +72,7 @@ def test_trip_ideas_respect_explicit_caribbean_region_intent() -> None:
 
     concept_ids = {concept.concept_id for concept in comparison.concepts}
     assert len(comparison.concepts) == 3
-    assert "azores-sao-miguel-short-comfort" not in concept_ids
+    assert "island-nature-short-comfort" not in concept_ids
     assert concept_ids <= {
         "belize-reef-jungle-short",
         "curacao-color-beach-drivable-short",
@@ -109,7 +109,7 @@ def test_trip_ideas_treat_snorkeling_as_required_experience() -> None:
     }
     assert "quebec-city-montreal-food-short" not in concept_ids
     assert "mexico-city-food-short" not in concept_ids
-    assert "azores-sao-miguel-short-comfort" not in concept_ids
+    assert "island-nature-short-comfort" not in concept_ids
     assert all(
         any("snorkeling" in item for item in concept.rationale) for concept in comparison.concepts
     )

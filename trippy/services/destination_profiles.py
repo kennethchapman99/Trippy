@@ -34,8 +34,8 @@ def profile_for_intake(intake: TripIntake) -> DestinationProfile:
         if geography and geography.primary_destination_name
         else ", ".join(intake.destination_seeds) or intake.trip_name
     )
-    gateway_airports = [geography.primary_gateway_iata()] if geography and geography.primary_gateway_iata() else []
-    gateway_airports = [code for code in gateway_airports if code]
+    gateway = geography.primary_gateway_iata() if geography else None
+    gateway_airports = [gateway] if gateway else []
     country = geography.country or "" if geography else ""
     regions = geography.region_names() if geography else _dedupe_strings(intake.destination_seeds)
     lodging_locations = geography.lodging_locations() if geography else regions or [destination]

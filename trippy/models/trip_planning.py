@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Any
@@ -108,6 +109,10 @@ class TravelAirportRef(BaseModel):
     city: str | None = None
     country: str | None = None
     role: str = "gateway"
+    confidence: float | None = None
+    source: str | None = None
+    evidence_url: str | None = None
+    requires_user_confirmation: bool = False
 
     @field_validator("iata_code")
     @classmethod
@@ -138,6 +143,10 @@ class TripMapLocation(BaseModel):
     longitude: float | None = None
     iata_code: str | None = None
     use_for: list[str] = Field(default_factory=list)
+    confidence: float | None = None
+    source: str | None = None
+    evidence_url: str | None = None
+    requires_user_confirmation: bool = False
 
     @field_validator("name")
     @classmethod
@@ -601,211 +610,31 @@ class TripWorkspaceState(BaseModel):
 def canonicalize_trip_geography(intake: TripIntake) -> TripGeography:
     """Create connector-safe geography from raw intake strings.
 
-    This is intentionally deterministic and conservative. Known destinations receive
-    strong airport/place structure. Unknown destinations keep map/search places but do
-    not invent flight airport codes.
+    This bootstrap is intentionally conservative and destination-agnostic. It only
+    validates explicit three-letter airport codes supplied by the user. Every other
+    destination chunk remains an unresolved place candidate for scanners or the UI to
+    resolve and write back into the canonical trip JSON.
     """
-    text = _searchable_intake_text(intake)
     origin_airports = [
-        TravelAirportRef(iata_code=code, role="origin")
+        TravelAirportRef(
+            iata_code=code,
+            role="origin",
+            source="user_input",
+            confidence=1.0,
+            requires_user_confirmation=False,
+        )
         for code in intake.departure_airports
         if _looks_like_iata(code)
     ]
-    if _looks_like_chile_trip(text):
-        return _chile_geography(origin_airports, text)
-    if "azores" in text:
-        return _azores_geography(origin_airports)
-    if _looks_like_grand_cayman_trip(text):
-        return _grand_cayman_geography(origin_airports)
-    return _generic_geography(intake, origin_airports)
-
-
-def _searchable_intake_text(intake: TripIntake) -> str:
-    parts = [intake.trip_name, *intake.destination_seeds, intake.freeform_notes or ""]
-    return " ".join(parts).lower().replace("_", "-")
-
-
-def _chile_geography(origin_airports: list[TravelAirportRef], text: str) -> TripGeography:
-    locations = [
-        TripMapLocation(
-            name="Santiago",
-            kind="city",
-            country="Chile",
-            iata_code="SCL",
-            use_for=["planning", "lodging", "activity", "car"],
-        ),
-        TripMapLocation(
-            name="Providencia",
-            kind="neighborhood",
-            city="Santiago",
-            country="Chile",
-            use_for=["lodging", "activity", "map"],
-        ),
-        TripMapLocation(
-            name="Bellavista",
-            kind="neighborhood",
-            city="Santiago",
-            country="Chile",
-            use_for=["activity", "map"],
-        ),
-        TripMapLocation(
-            name="Barrio Italia",
-            kind="neighborhood",
-            city="Santiago",
-            country="Chile",
-            use_for=["lodging", "activity", "map"],
-        ),
-        TripMapLocation(
-            name="Maipo Valley",
-            kind="region",
-            region="Santiago Metropolitan Region",
-            country="Chile",
-            use_for=["activity", "map", "car"],
-        ),
-    ]
-    planning_regions = ["Santiago"]
-    activity_locations = ["Santiago", "Providencia", "Bellavista", "Barrio Italia", "Maipo Valley"]
-    lodging_locations = ["Providencia, Santiago, Chile", "Barrio Italia, Santiago, Chile", "Santiago, Chile"]
-    car_locations = ["SCL", "Santiago, Chile", "Maipo Valley, Chile"]
-    in_trip_airports: list[TravelAirportRef] = []
-    if "atacama" in text or "san pedro" in text or "calama" in text:
-        planning_regions.append("Atacama")
-        activity_locations.append("San Pedro de Atacama")
-        lodging_locations.append("San Pedro de Atacama, Chile")
-        car_locations.append("CJC")
-        in_trip_airports.append(
-            TravelAirportRef(
-                iata_code="CJC",
-                name="El Loa Airport",
-                city="Calama",
-                country="Chile",
-                role="in_trip",
-            )
-        )
-        locations.append(
-            TripMapLocation(
-                name="San Pedro de Atacama",
-                kind="town",
-                region="Antofagasta Region",
-                country="Chile",
-                iata_code="CJC",
-                use_for=["planning", "lodging", "activity", "car", "map"],
-            )
-        )
-    if "patagonia" in text or "torres del paine" in text or "punta arenas" in text:
-        planning_regions.append("Patagonia")
-        activity_locations.append("Torres del Paine")
-        lodging_locations.append("Puerto Natales, Chile")
-        car_locations.append("PUQ")
-        in_trip_airports.append(
-            TravelAirportRef(
-                iata_code="PUQ",
-                name="Presidente Carlos Ibanez del Campo International Airport",
-                city="Punta Arenas",
-                country="Chile",
-                role="in_trip",
-            )
-        )
-        locations.append(
-            TripMapLocation(
-                name="Torres del Paine",
-                kind="national_park",
-                region="Patagonia",
-                country="Chile",
-                iata_code="PUQ",
-                use_for=["planning", "lodging", "activity", "car", "map"],
-            )
-        )
-    return TripGeography(
-        primary_destination_name="Santiago, Chile",
-        primary_city="Santiago",
-        country="Chile",
-        departure_airports=origin_airports,
-        destination_airports=[
-            TravelAirportRef(
-                iata_code="SCL",
-                name="Arturo Merino Benitez International Airport",
-                city="Santiago",
-                country="Chile",
-                role="gateway",
-            )
-        ],
-        in_trip_airports=in_trip_airports,
-        map_locations=_dedupe_locations(locations),
-        planning_regions=_dedupe_strings(planning_regions),
-        lodging_search_locations=_dedupe_strings(lodging_locations),
-        car_search_locations=_dedupe_strings(car_locations),
-        activity_search_locations=_dedupe_strings(activity_locations),
-        warnings=[
-            "Chile geography normalized: flight search uses SCL; Santiago neighborhoods and Maipo Valley are map/search locations, not flight route codes."
-        ],
-    )
-
-
-def _azores_geography(origin_airports: list[TravelAirportRef]) -> TripGeography:
-    return TripGeography(
-        primary_destination_name="Azores, Portugal",
-        country="Portugal",
-        departure_airports=origin_airports,
-        destination_airports=[
-            TravelAirportRef(
-                iata_code="PDL",
-                name="Joao Paulo II Airport",
-                city="Ponta Delgada",
-                country="Portugal",
-                role="gateway",
-            )
-        ],
-        in_trip_airports=[
-            TravelAirportRef(iata_code="PIX", city="Pico", country="Portugal", role="in_trip"),
-            TravelAirportRef(iata_code="HOR", city="Horta", country="Portugal", role="in_trip"),
-            TravelAirportRef(iata_code="TER", city="Terceira", country="Portugal", role="in_trip"),
-        ],
-        map_locations=[
-            TripMapLocation(name="Sao Miguel", kind="island", country="Portugal", use_for=["planning", "lodging", "activity", "car", "map"]),
-            TripMapLocation(name="Ponta Delgada", kind="city", country="Portugal", iata_code="PDL", use_for=["lodging", "activity", "car", "map"]),
-            TripMapLocation(name="Pico", kind="island", country="Portugal", iata_code="PIX", use_for=["planning", "lodging", "activity", "car", "map"]),
-            TripMapLocation(name="Faial", kind="island", country="Portugal", iata_code="HOR", use_for=["planning", "lodging", "activity", "car", "map"]),
-            TripMapLocation(name="Terceira", kind="island", country="Portugal", iata_code="TER", use_for=["planning", "lodging", "activity", "car", "map"]),
-        ],
-        planning_regions=["Sao Miguel", "Pico or Faial", "Terceira"],
-        lodging_search_locations=["Ponta Delgada", "Furnas", "Madalena", "Horta", "Angra do Heroismo"],
-        car_search_locations=["PDL", "PIX", "HOR", "TER"],
-        activity_search_locations=["Sao Miguel", "Furnas", "Sete Cidades", "Pico", "Faial", "Terceira"],
-    )
-
-
-def _grand_cayman_geography(origin_airports: list[TravelAirportRef]) -> TripGeography:
-    return TripGeography(
-        primary_destination_name="Grand Cayman, Cayman Islands",
-        country="Cayman Islands",
-        departure_airports=origin_airports,
-        destination_airports=[
-            TravelAirportRef(
-                iata_code="GCM",
-                name="Owen Roberts International Airport",
-                city="George Town",
-                country="Cayman Islands",
-                role="gateway",
-            )
-        ],
-        map_locations=[
-            TripMapLocation(name="Seven Mile Beach", kind="beach", country="Cayman Islands", use_for=["planning", "lodging", "activity", "map"]),
-            TripMapLocation(name="West Bay", kind="district", country="Cayman Islands", use_for=["planning", "lodging", "activity", "map"]),
-            TripMapLocation(name="Rum Point", kind="beach", country="Cayman Islands", use_for=["planning", "lodging", "activity", "map"]),
-            TripMapLocation(name="George Town", kind="city", country="Cayman Islands", iata_code="GCM", use_for=["planning", "lodging", "activity", "car", "map"]),
-        ],
-        planning_regions=["Seven Mile Beach", "West Bay", "Rum Point", "George Town"],
-        lodging_search_locations=["Seven Mile Beach", "West Bay", "Rum Point"],
-        car_search_locations=["GCM", "Seven Mile Beach"],
-        activity_search_locations=["Stingray City", "Seven Mile Beach", "West Bay", "Rum Point"],
-    )
-
-
-def _generic_geography(intake: TripIntake, origin_airports: list[TravelAirportRef]) -> TripGeography:
-    seeds = _dedupe_strings(intake.destination_seeds or [intake.trip_name])
+    seeds = _destination_seed_chunks(intake.destination_seeds or [intake.trip_name])
     destination_airports = [
-        TravelAirportRef(iata_code=seed, role="gateway")
+        TravelAirportRef(
+            iata_code=seed,
+            role="gateway",
+            source="user_input",
+            confidence=1.0,
+            requires_user_confirmation=False,
+        )
         for seed in seeds
         if _looks_like_iata(seed)
     ]
@@ -817,7 +646,13 @@ def _generic_geography(intake: TripIntake, origin_airports: list[TravelAirportRe
             "No canonical gateway airport resolved yet; live flight adapters must fail closed until a valid IATA destination is known."
         )
     map_locations = [
-        TripMapLocation(name=seed, use_for=["planning", "lodging", "activity", "car", "map"])
+        TripMapLocation(
+            name=seed,
+            use_for=["planning", "lodging", "activity", "car", "map"],
+            source="user_input",
+            confidence=0.0,
+            requires_user_confirmation=True,
+        )
         for seed in non_airport_seeds
     ]
     return TripGeography(
@@ -826,9 +661,6 @@ def _generic_geography(intake: TripIntake, origin_airports: list[TravelAirportRe
         destination_airports=destination_airports,
         map_locations=map_locations,
         planning_regions=non_airport_seeds or seeds,
-        lodging_search_locations=non_airport_seeds or seeds,
-        car_search_locations=[*(airport.iata_code for airport in destination_airports), *(non_airport_seeds or seeds)],
-        activity_search_locations=non_airport_seeds or seeds,
         warnings=warnings,
     )
 
@@ -837,42 +669,20 @@ def _looks_like_iata(value: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z]{3}", value.strip()))
 
 
-def _looks_like_chile_trip(text: str) -> bool:
-    return any(
-        term in text
-        for term in [
-            "chile",
-            "santiago",
-            "providencia",
-            "bellavista",
-            "barrio italia",
-            "barrio-italia",
-            "maipo",
-            "atacama",
-            "patagonia",
-            "torres del paine",
-        ]
-    )
+def _destination_seed_chunks(values: list[str]) -> list[str]:
+    chunks: list[str] = []
+    for value in values:
+        # Split only obvious user separators. A spaced hyphen is often used as a
+        # delimiter, while unspaced hyphens can be part of a place name.
+        normalized = re.sub(r"\s+-\s+", ",", value)
+        chunks.extend(part.strip() for part in re.split(r"[,;/]", normalized) if part.strip())
+    return _dedupe_strings(chunks)
 
 
-def _looks_like_grand_cayman_trip(text: str) -> bool:
-    return any(
-        term in text
-        for term in [
-            "cayman",
-            "seven mile beach",
-            "west bay",
-            "stingray city",
-            "rum point",
-            "grand cayman",
-        ]
-    )
-
-
-def _dedupe_strings(values: list[str] | tuple[str, ...] | object) -> list[str]:
+def _dedupe_strings(values: Iterable[object]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
-    for value in values:  # type: ignore[operator]
+    for value in values:
         text = " ".join(str(value).strip().split())
         if not text:
             continue
