@@ -24,37 +24,61 @@ def profile_for_intake(intake: TripIntake) -> DestinationProfile:
     lower_text = text.lower()
     if "azores" in lower_text:
         return _AZORES
+    if _looks_like_chile(lower_text):
+        return _chile_profile(intake)
     if _looks_like_grand_cayman(lower_text):
         return _GRAND_CAYMAN
-    destination = ", ".join(intake.destination_seeds) or intake.trip_name
+    return _generic_profile(intake)
+
+
+def _generic_profile(intake: TripIntake) -> DestinationProfile:
+    geography = intake.geography
+    destination = (
+        geography.primary_destination_name
+        if geography and geography.primary_destination_name
+        else ", ".join(intake.destination_seeds) or intake.trip_name
+    )
+    gateway_airports = list(geography.destination_airports[0:1]) if geography else []
+    gateway_codes = [airport.iata_code for airport in gateway_airports]
+    regions = geography.region_names() if geography else list(intake.destination_seeds)
+    lodging_locations = geography.lodging_locations() if geography else regions or [destination]
+    car_locations = geography.car_locations() if geography else regions or [destination]
+    activity_locations = geography.activity_locations() if geography else regions or [destination]
+    notes = [
+        "Generic profile: validate gateway airport, seasonal service, and same-ticket routing."
+    ]
+    if geography and geography.warnings:
+        notes.extend(geography.warnings)
+    lodging_targets = [
+        {
+            "name": f"{location} family lodging search",
+            "location_area": location,
+            "island_or_region": location,
+            "lodging_type": "family lodging",
+            "query": f"{location} family lodging 3 beds parking",
+        }
+        for location in lodging_locations[:6]
+    ]
+    car_targets = [
+        {
+            "name": f"{location} family SUV or minivan",
+            "pickup": location,
+            "dropoff": location,
+            "vehicle_class": "SUV or minivan",
+            "query": f"{location} car rental SUV minivan family luggage",
+        }
+        for location in car_locations[:6]
+    ]
     return DestinationProfile(
         key="generic",
         title=destination,
-        country="",
-        gateway_airports=[],
-        island_or_region_terms=list(intake.destination_seeds),
-        flight_notes=[
-            "Generic profile: validate gateway airport, seasonal service, and same-ticket routing."
-        ],
-        lodging_search_targets=[
-            {
-                "name": f"{destination} family lodging search",
-                "location_area": destination,
-                "island_or_region": destination,
-                "lodging_type": "family lodging",
-                "query": f"{destination} family lodging 3 beds parking",
-            }
-        ],
-        car_search_targets=[
-            {
-                "name": f"{destination} airport family SUV or minivan",
-                "pickup": destination,
-                "dropoff": destination,
-                "vehicle_class": "SUV or minivan",
-                "query": f"{destination} car rental SUV minivan family luggage",
-            }
-        ],
-        activity_search_targets=_generic_activity_search_targets(intake, destination),
+        country=geography.country or "" if geography else "",
+        gateway_airports=gateway_codes,
+        island_or_region_terms=regions,
+        flight_notes=notes,
+        lodging_search_targets=lodging_targets,
+        car_search_targets=car_targets,
+        activity_search_targets=_generic_activity_search_targets(intake, destination, activity_locations),
     )
 
 
@@ -72,11 +96,117 @@ def _looks_like_grand_cayman(text: str) -> bool:
     )
 
 
+def _looks_like_chile(text: str) -> bool:
+    return any(
+        term in text
+        for term in [
+            "chile",
+            "santiago",
+            "providencia",
+            "bellavista",
+            "barrio italia",
+            "barrio-italia",
+            "maipo",
+            "atacama",
+            "patagonia",
+            "torres del paine",
+        ]
+    )
+
+
+def _chile_profile(intake: TripIntake) -> DestinationProfile:
+    geography = intake.geography
+    gateway = geography.primary_gateway_iata() if geography else "SCL"
+    regions = geography.region_names() if geography else ["Santiago"]
+    lodging_locations = geography.lodging_locations() if geography else ["Providencia, Santiago, Chile", "Barrio Italia, Santiago, Chile", "Santiago, Chile"]
+    car_locations = geography.car_locations() if geography else ["SCL", "Santiago, Chile", "Maipo Valley, Chile"]
+    activity_locations = geography.activity_locations() if geography else ["Santiago", "Providencia", "Bellavista", "Barrio Italia", "Maipo Valley"]
+    lodging_targets = [
+        {
+            "name": f"{location} family lodging search",
+            "location_area": location,
+            "island_or_region": _region_for_chile_location(location),
+            "lodging_type": "family hotel or apartment",
+            "query": f"{location} family hotel apartment 3 beds safe neighborhood parking",
+        }
+        for location in lodging_locations[:6]
+    ]
+    car_targets = [
+        {
+            "name": f"{location} family SUV or minivan",
+            "pickup": _car_pickup_label(location),
+            "dropoff": _car_pickup_label(location),
+            "vehicle_class": "SUV or minivan",
+            "query": f"{location} car rental automatic SUV minivan family luggage",
+        }
+        for location in car_locations[:6]
+    ]
+    activity_targets = [
+        {
+            "name": f"{location} family-friendly activity search",
+            "location": location,
+            "query": _chile_activity_query(location),
+        }
+        for location in activity_locations[:8]
+    ]
+    return DestinationProfile(
+        key="chile",
+        title="Santiago, Chile",
+        country="Chile",
+        gateway_airports=[gateway or "SCL"],
+        island_or_region_terms=regions,
+        flight_notes=[
+            "SCL is the canonical international gateway for Santiago/central Chile trips.",
+            "Santiago neighborhoods, Barrio Italia, Bellavista, Providencia, and Maipo Valley are map/activity/lodging areas only; never pass them as flight route codes.",
+            "If Atacama or Patagonia are selected, use CJC/PUQ as in-trip domestic airports only after the international gateway is set.",
+            *(geography.warnings if geography else []),
+        ],
+        lodging_search_targets=lodging_targets,
+        car_search_targets=car_targets,
+        activity_search_targets=activity_targets,
+    )
+
+
+def _region_for_chile_location(location: str) -> str:
+    lower = location.lower()
+    if "atacama" in lower:
+        return "Atacama"
+    if "patagonia" in lower or "natales" in lower or "torres" in lower:
+        return "Patagonia"
+    if "maipo" in lower:
+        return "Maipo Valley"
+    return "Santiago"
+
+
+def _car_pickup_label(location: str) -> str:
+    if location.upper() in {"SCL", "CJC", "PUQ"}:
+        return f"{location.upper()} airport"
+    return location
+
+
+def _chile_activity_query(location: str) -> str:
+    lower = location.lower()
+    if "maipo" in lower:
+        return "Maipo Valley small group family wine food day trip from Santiago"
+    if "bellavista" in lower:
+        return "Bellavista Santiago family culture food walking tour"
+    if "barrio italia" in lower:
+        return "Barrio Italia Santiago food design walking tour family"
+    if "providencia" in lower:
+        return "Providencia Santiago family-friendly neighborhood restaurants parks"
+    if "atacama" in lower:
+        return "San Pedro de Atacama family small group desert tour"
+    if "patagonia" in lower or "torres" in lower:
+        return "Torres del Paine family day tour small group"
+    return f"{location} Santiago Chile family friendly guided activity small group"
+
+
 def _generic_activity_search_targets(
     intake: TripIntake,
     destination: str,
+    locations: list[str] | None = None,
 ) -> list[dict[str, str]]:
-    seeds = [seed.strip() for seed in intake.destination_seeds if seed.strip()] or [destination]
+    seeds = [seed.strip() for seed in (locations or intake.destination_seeds) if seed.strip()] or [destination]
     targets: list[dict[str, str]] = []
     for seed in seeds[:5]:
         lower = seed.lower()
