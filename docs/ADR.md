@@ -3,7 +3,7 @@
 ## 1. Current Repo Shape
 
 ### What exists
-The repo (`hermes_trip` Python package, CLI command `hermes-trip`) is a standalone data
+The repo (`trippy` Python package, CLI command `trippy`) is a standalone data
 ingestion CLI. Its phases are:
 
 - **Phase 1 (done):** Import trip sheets (xlsx/csv/Google Sheets) via Claude structured
@@ -17,16 +17,16 @@ ingestion CLI. Its phases are:
 
 | Component | File(s) | Quality |
 |-----------|---------|---------|
-| SQLAlchemy ORM models | `hermes_trip/db/models.py` | Good — keep |
-| Alembic migrations | `hermes_trip/db/migrations/` | Good — keep |
-| Google OAuth2 manager | `hermes_trip/ingest/google_auth.py` | Good — keep |
-| Gmail watcher | `hermes_trip/ingest/gmail_watcher.py` | Good — keep |
-| Confirmation parser (Claude) | `hermes_trip/ingest/parser.py` | Good — keep |
-| Confirmation linker | `hermes_trip/ingest/linker.py` | Good — keep |
-| Sheet importer (Claude) | `hermes_trip/importers/sheet_importer.py` | Good — keep |
-| Drive folder importer | `hermes_trip/importers/drive_importer.py` | Good — keep |
-| Typer CLI | `hermes_trip/cli.py` | Keep, extend |
-| Config | `hermes_trip/config.py` | Keep, extend |
+| SQLAlchemy ORM models | `trippy/db/models.py` | Good — keep |
+| Alembic migrations | `trippy/db/migrations/` | Good — keep |
+| Google OAuth2 manager | `trippy/ingest/google_auth.py` | Good — keep |
+| Gmail watcher | `trippy/ingest/gmail_watcher.py` | Good — keep |
+| Confirmation parser (Claude) | `trippy/ingest/parser.py` | Good — keep |
+| Confirmation linker | `trippy/ingest/linker.py` | Good — keep |
+| Sheet importer (Claude) | `trippy/importers/sheet_importer.py` | Good — keep |
+| Drive folder importer | `trippy/importers/drive_importer.py` | Good — keep |
+| Typer CLI | `trippy/cli.py` | Keep, extend |
+| Config | `trippy/config.py` | Keep, extend |
 
 ### What is missing
 
@@ -132,7 +132,7 @@ one — no itinerary building, no flight option reasoning, no friction auditing.
 - `ParsedTrip` / `ParsedConfirmation` Pydantic models → feed into canonical models
 
 ### Replace
-- `hermes_trip/` package → `trippy/` package (complete rename)
+- Legacy duplicate package → `trippy/` package (complete rename)
 - Standalone CLI-only flows → Agent-orchestrated skill invocations
 - Phase 3–7 stubs → Proper services + skills implementation
 
@@ -147,7 +147,7 @@ one — no itinerary building, no flight option reasoning, no friction auditing.
 - AGENTS.md, SOUL.md, CLAUDE.md, .hermes.md — Hermes context files
 
 ### Delete
-- `hermes_trip/` directory entirely (replaced by `trippy/`)
+- Legacy duplicate package directory entirely (replaced by `trippy/`)
 - Phase 2–7 stubs in cli.py that do nothing (replaced by proper implementations)
 
 ---
@@ -164,7 +164,7 @@ one — no itinerary building, no flight option reasoning, no friction auditing.
 - [ ] All 6 skill definitions written as markdown
 - [ ] Friction detector implemented and tested
 - [ ] Sheet sync service skeleton
-- [ ] `hermes_trip/` package removed, all tests pass with `trippy/` imports
+- [ ] Legacy duplicate package removed, all tests pass with `trippy/` imports
 - [ ] `trippy agent` CLI command launches interactive agent
 
 ### Phase 2 — Google tooling / MCP integration
@@ -234,7 +234,7 @@ about skills without running them.
 A structured JSON file with categories is inspectable, testable, and trivially portable.
 It can be upgraded to a vector store if/when semantic search becomes valuable.
 
-### D5: Package rename from `hermes_trip` to `trippy`
+### D5: Package rename to `trippy`
 **Decision:** Complete rename; no backward-compat shim.
 **Rationale:** The old name was confusing ("hermes" referred to the project name, not the
 Hermes agent framework). A clean rename eliminates the ambiguity and aligns with the

@@ -1,4 +1,4 @@
-# Hermes Trip Agent — Getting Started (Ken's Guide)
+# Trippy Agent — Getting Started (Ken's Guide)
 
 ## Install in 60 seconds
 
@@ -17,14 +17,14 @@ cp .env.example .env
 alembic upgrade head
 ```
 
-That's it. The database lives at `~/.hermes_trip/state.db`.
+That's it. The database lives at `~/.trippy/state.db`.
 
 ---
 
 ## Set up your inbox folder
 
 ```bash
-mkdir -p ~/hermes-trip-inbox
+mkdir -p ~/trippy-inbox
 ```
 
 Drop any trip sheet here — Numbers exports, Excel files, Google Sheets CSV exports, plain CSV. Any format works.
@@ -34,7 +34,7 @@ Drop any trip sheet here — Numbers exports, Excel files, Google Sheets CSV exp
 ## Import your first trip
 
 ```bash
-hermes-trip import ~/hermes-trip-inbox/japan-2024.xlsx
+trippy import ~/trippy-inbox/japan-2024.xlsx
 ```
 
 **What you'll see:**
@@ -55,7 +55,7 @@ Anything with confidence < 0.70 is flagged. Null fields (not in the sheet) are n
 ## Fix flagged fields
 
 ```bash
-hermes-trip review <trip_id>
+trippy review <trip_id>
 ```
 
 The interactive TUI is coming in a later phase. For now, the fastest fix is to **add the missing data to your sheet and re-import** — re-imports are idempotent (update, never duplicate).
@@ -66,10 +66,10 @@ The interactive TUI is coming in a later phase. For now, the fastest fix is to *
 
 ```bash
 # Preview first (no writes)
-hermes-trip import-folder ~/hermes-trip-inbox/ --dry-run
+trippy import-folder ~/trippy-inbox/ --dry-run
 
 # Then import for real
-hermes-trip import-folder ~/hermes-trip-inbox/
+trippy import-folder ~/trippy-inbox/
 ```
 
 ---
@@ -77,8 +77,8 @@ hermes-trip import-folder ~/hermes-trip-inbox/
 ## Verify your data
 
 ```bash
-hermes-trip list-trips
-hermes-trip show "Japan 2024"
+trippy list-trips
+trippy show "Japan 2024"
 ```
 
 ---
@@ -111,11 +111,11 @@ All non-skipped tests should pass. Then proceed to Phase 2 (Gmail confirmation i
 
 | Command | What it does |
 |---------|-------------|
-| `hermes-trip import <path>` | Import one file (xlsx, csv, or Google Sheets URL) |
-| `hermes-trip import-folder <dir>` | Import all xlsx/csv in a folder |
-| `hermes-trip import-folder <dir> --dry-run` | Preview without writing |
-| `hermes-trip list-trips` | Table of all trips |
-| `hermes-trip show "<name>"` | Full detail for one trip (partial name match) |
-| `hermes-trip review <id>` | Review low-confidence fields (TUI, Phase 2+) |
-| `hermes-trip db-init` | Re-run migrations (safe to run again) |
-| `hermes-trip version` | Print version |
+| `trippy import <path>` | Import one file (xlsx, csv, or Google Sheets URL) |
+| `trippy import-folder <dir>` | Import all xlsx/csv in a folder |
+| `trippy import-folder <dir> --dry-run` | Preview without writing |
+| `trippy list-trips` | Table of all trips |
+| `trippy show "<name>"` | Full detail for one trip (partial name match) |
+| `trippy review <id>` | Review low-confidence fields (TUI, Phase 2+) |
+| `trippy db-init` | Re-run migrations (safe to run again) |
+| `trippy version` | Print version |

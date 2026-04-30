@@ -141,4 +141,4 @@ TRIPPY_SHEET_TEMPLATE_ID   Google Sheet template spreadsheet ID (optional)
 - Do not write trip-specific facts into Hermes memory
 - Do not call Google APIs directly from services — use MCP tools
 - Do not treat Google Sheets as the canonical state — they are a view
-- Do not keep `hermes_trip/` references — the package is `trippy`
+- Keep package and CLI references aligned with the active `trippy` package.
