@@ -171,20 +171,34 @@ class TripPlannerService:
 
     def _build_generic_selected_destination_draft(self, intake: TripIntake) -> TripPlanDraft:
         duration = intake.duration_days or 8
-        destination = ", ".join(intake.destination_seeds) or intake.trip_name or "Destination"
-        single_base_region = (
-            intake.destination_seeds[0] if intake.destination_seeds else destination
+        geography = intake.geography
+        geography_regions = geography.region_names() if geography else []
+        planning_regions = geography_regions or [seed for seed in intake.destination_seeds if seed.strip()]
+        destination = (
+            geography.primary_destination_name
+            if geography and geography.primary_destination_name
+            else ", ".join(planning_regions or intake.destination_seeds)
+            or intake.trip_name
+            or "Destination"
         )
-        balanced_regions = intake.destination_seeds[:2] or [single_base_region]
+        map_seed_queries = geography.map_seed_queries() if geography else list(intake.destination_seeds)
+        single_base_region = planning_regions[0] if planning_regions else destination
+        balanced_regions = planning_regions[:2] or [single_base_region]
+        signal_sources = [*intake.destination_seeds, destination]
+        if geography:
+            signal_sources.extend(
+                source for source in [geography.country, geography.primary_destination_name] if source
+            )
         signals = [
             signal.rationale
-            for seed in intake.destination_seeds
+            for seed in signal_sources
             for signal in self._country_priors.fit_for_text(seed)
         ]
         if not signals:
             signals = [
                 "No direct country prior matched; require live evidence and family-fit validation."
             ]
+        fuller_regions = _fuller_regions(planning_regions, single_base_region)
         options = [
             TripPlanOption(
                 option_id="single-base-easy",
@@ -212,7 +226,7 @@ class TripPlannerService:
                 car_strategy=intake.car_rental_expectations.notes
                 or "Validate car need against local roads, parking, and transfer options.",
                 country_prior_signals=signals,
-                map_seed_queries=intake.destination_seeds,
+                map_seed_queries=map_seed_queries,
                 required_research=_required_research(),
             ),
             TripPlanOption(
@@ -237,7 +251,7 @@ class TripPlannerService:
                 lodging_strategy=intake.lodging_preferences.non_city_strategy,
                 car_strategy="Likely local transfer or car rental depending on destination geography.",
                 country_prior_signals=signals,
-                map_seed_queries=intake.destination_seeds,
+                map_seed_queries=map_seed_queries,
                 required_research=_required_research(),
             ),
             TripPlanOption(
@@ -245,11 +259,8 @@ class TripPlannerService:
                 title=f"{destination} Fuller Multi-Spot Version",
                 summary="Keep the destination fixed, but spend time across more distinct areas or activity clusters.",
                 duration_days=duration,
-                regions=_fuller_regions(intake.destination_seeds, single_base_region),
-                nights_by_region=_even_nights(
-                    _fuller_regions(intake.destination_seeds, single_base_region),
-                    duration,
-                ),
+                regions=fuller_regions,
+                nights_by_region=_even_nights(fuller_regions, duration),
                 rationale=[
                     "Useful comparison if the family wants more variety within the chosen destination.",
                     "Only worth choosing if each extra stop materially improves beach, food, activity, or drive-time fit.",
@@ -272,7 +283,7 @@ class TripPlannerService:
                 ),
                 car_strategy="Compare rental-car coverage against private transfers and day-trip operators.",
                 country_prior_signals=signals,
-                map_seed_queries=intake.destination_seeds,
+                map_seed_queries=map_seed_queries,
                 required_research=_required_research()
                 + [
                     "Whether extra local bases improve the trip enough to justify packing and check-in friction.",
@@ -287,7 +298,8 @@ class TripPlannerService:
             options=options,
             recommended_option_id=recommended,
             assumptions=[
-                "Generic selected-destination draft; replace with a destination-specific planner once enough evidence exists."
+                "Generic selected-destination draft uses canonical TripGeography so connector inputs separate airports from map/search locations.",
+                "Replace with a destination-specific planner once enough evidence exists.",
             ],
             source_notes=["Generated without live availability."],
         )
