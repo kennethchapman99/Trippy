@@ -1,10 +1,18 @@
-"""Generic connector-safe trip geography resolver."""
+"""Generic connector-safe trip geography resolver.
+
+The resolver is intentionally infrastructure, not a destination-specific trip planner.
+Airport aliases are loaded from data so the catalog can be expanded by config,
+learning, or source lookups without embedding trip-specific branches here.
+"""
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
+from importlib.resources import files
+from typing import Any
 
 from trippy.models.geography import ResolvedAirport, ResolvedPlace, TripGeography
 from trippy.models.trip_planning import TripIntake
@@ -19,22 +27,15 @@ class AirportCatalogEntry:
     aliases: tuple[str, ...]
 
 
-AIRPORT_CATALOG: tuple[AirportCatalogEntry, ...] = (
-    AirportCatalogEntry("YYZ", "Toronto Pearson International Airport", "Toronto", "Canada", ("yyz", "toronto", "pearson")),
-    AirportCatalogEntry("SCL", "Arturo Merino Benitez International Airport", "Santiago", "Chile", ("scl", "santiago", "santiago chile")),
-    AirportCatalogEntry("PDL", "Joao Paulo II Airport", "Ponta Delgada", "Portugal", ("pdl", "ponta delgada", "azores", "sao miguel")),
-    AirportCatalogEntry("GCM", "Owen Roberts International Airport", "George Town", "Cayman Islands", ("gcm", "grand cayman", "cayman islands")),
-    AirportCatalogEntry("LIS", "Lisbon Airport", "Lisbon", "Portugal", ("lis", "lisbon", "lisboa")),
-    AirportCatalogEntry("HND", "Haneda Airport", "Tokyo", "Japan", ("hnd", "haneda", "tokyo")),
-    AirportCatalogEntry("BKK", "Suvarnabhumi Airport", "Bangkok", "Thailand", ("bkk", "bangkok")),
-    AirportCatalogEntry("SJO", "Juan Santamaria International Airport", "San Jose", "Costa Rica", ("sjo", "san jose costa rica", "costa rica")),
-)
-
 IATA_RE = re.compile(r"^[A-Z]{3}$")
+KNOWN_CITY_TOKENS = {"santiago", "toronto", "tokyo", "bangkok", "lisbon"}
 
 
 class GeographyResolverService:
     """Resolve raw intake text into typed airport/place buckets."""
+
+    def __init__(self, airport_catalog: tuple[AirportCatalogEntry, ...] | None = None) -> None:
+        self._airport_catalog = airport_catalog or load_airport_catalog()
 
     def resolve(self, intake: TripIntake) -> TripGeography:
         raw_destinations = _dedupe_strings(intake.destination_seeds)
@@ -44,16 +45,28 @@ class GeographyResolverService:
         primary = _primary_destination(raw_destinations, intake.trip_name, destinations)
         places = self._resolve_places(raw_destinations, primary, destinations)
         map_locations = _dedupe_strings(place.search_label() for place in places)
-        lodging_locations = _connector_locations(places, primary, {"city", "neighborhood", "district", "town", "beach", "region", "place"})
+        lodging_locations = _connector_locations(
+            places,
+            primary,
+            {"city", "neighborhood", "district", "town", "beach", "region", "place"},
+        )
         car_locations = _car_locations(destinations, places, primary)
-        activity_locations = _connector_locations(places, primary, {"city", "neighborhood", "district", "town", "beach", "region", "park", "place"})
+        activity_locations = _connector_locations(
+            places,
+            primary,
+            {"city", "neighborhood", "district", "town", "beach", "region", "park", "place"},
+        )
         planning_regions = _planning_regions(places, primary)
         warnings: list[str] = []
         evidence: list[str] = []
         if destinations:
-            evidence.append(f"Resolved destination airport {destinations[0].iata_code} from '{destinations[0].matched_text}'.")
+            evidence.append(
+                f"Resolved destination airport {destinations[0].iata_code} from '{destinations[0].matched_text}'."
+            )
         else:
-            warnings.append("No destination airport resolved; live flight providers must fail closed until a valid IATA destination is selected.")
+            warnings.append(
+                "No destination airport resolved; live flight providers must fail closed until a valid IATA destination is selected."
+            )
         return TripGeography(
             primary_destination_name=primary,
             origin_airports=origins,
@@ -69,11 +82,32 @@ class GeographyResolverService:
         )
 
     def _resolve_origins(self, values: list[str]) -> list[ResolvedAirport]:
-        airports = [airport for value in (values or ["YYZ"]) if (airport := self._airport_from_code_or_text(value, role="origin"))]
-        return _dedupe_airports(airports) or [ResolvedAirport(iata_code="YYZ", role="origin", confidence=0.7, source="default_origin", matched_text="YYZ", requires_user_confirmation=True)]
+        airports = [
+            airport
+            for value in (values or ["YYZ"])
+            if (airport := self._airport_from_code_or_text(value, role="origin"))
+        ]
+        return _dedupe_airports(airports) or [
+            ResolvedAirport(
+                iata_code="YYZ",
+                role="origin",
+                confidence=0.7,
+                source="default_origin",
+                matched_text="YYZ",
+                requires_user_confirmation=True,
+            )
+        ]
 
-    def _resolve_destinations(self, raw_destinations: list[str], raw_text: str) -> list[ResolvedAirport]:
-        airports = [airport for value in raw_destinations if (airport := self._airport_from_code_or_text(value, role="gateway"))]
+    def _resolve_destinations(
+        self,
+        raw_destinations: list[str],
+        raw_text: str,
+    ) -> list[ResolvedAirport]:
+        airports = [
+            airport
+            for value in raw_destinations
+            if (airport := self._airport_from_code_or_text(value, role="gateway"))
+        ]
         if not airports:
             airport = self._airport_from_text(raw_text, role="gateway")
             if airport:
@@ -83,16 +117,22 @@ class GeographyResolverService:
     def _airport_from_code_or_text(self, value: str, *, role: str) -> ResolvedAirport | None:
         cleaned = value.strip().upper()
         if IATA_RE.fullmatch(cleaned):
-            entry = _entry_for_code(cleaned)
+            entry = self._entry_for_code(cleaned)
             if entry:
                 return _airport_from_entry(entry, role=role, matched_text=value, confidence=0.98)
-            return ResolvedAirport(iata_code=cleaned, role=role, confidence=0.82, source="explicit_iata", matched_text=value)
+            return ResolvedAirport(
+                iata_code=cleaned,
+                role=role,
+                confidence=0.82,
+                source="explicit_iata",
+                matched_text=value,
+            )
         return self._airport_from_text(value, role=role)
 
     def _airport_from_text(self, value: str, *, role: str) -> ResolvedAirport | None:
         normalized = _normalize(value)
         candidates: list[tuple[int, AirportCatalogEntry, str]] = []
-        for entry in AIRPORT_CATALOG:
+        for entry in self._airport_catalog:
             for alias in entry.aliases:
                 alias_norm = _normalize(alias)
                 if alias_norm and re.search(rf"\b{re.escape(alias_norm)}\b", normalized):
@@ -103,7 +143,15 @@ class GeographyResolverService:
         _, entry, alias = candidates[0]
         return _airport_from_entry(entry, role=role, matched_text=alias, confidence=0.9)
 
-    def _resolve_places(self, raw_destinations: list[str], primary: str, airports: list[ResolvedAirport]) -> list[ResolvedPlace]:
+    def _entry_for_code(self, code: str) -> AirportCatalogEntry | None:
+        return next((entry for entry in self._airport_catalog if entry.iata_code == code), None)
+
+    def _resolve_places(
+        self,
+        raw_destinations: list[str],
+        primary: str,
+        airports: list[ResolvedAirport],
+    ) -> list[ResolvedPlace]:
         airport_city = airports[0].city if airports else ""
         airport_country = airports[0].country if airports else ""
         pieces = _destination_pieces(raw_destinations or [primary])
@@ -124,19 +172,58 @@ class GeographyResolverService:
                     raw_text=piece,
                 )
             )
-        return _dedupe_places(places) or [ResolvedPlace(name=primary, kind="place", confidence=0.5, source="fallback_text", use_for=["planning", "map", "lodging", "activity", "car"], raw_text=primary)]
+        return _dedupe_places(places) or [
+            ResolvedPlace(
+                name=primary,
+                kind="place",
+                confidence=0.5,
+                source="fallback_text",
+                use_for=["planning", "map", "lodging", "activity", "car"],
+                raw_text=primary,
+            )
+        ]
 
 
 def resolve_trip_geography(intake: TripIntake) -> TripGeography:
     return GeographyResolverService().resolve(intake)
 
 
-def _entry_for_code(code: str) -> AirportCatalogEntry | None:
-    return next((entry for entry in AIRPORT_CATALOG if entry.iata_code == code), None)
+def load_airport_catalog() -> tuple[AirportCatalogEntry, ...]:
+    try:
+        raw = files("trippy.data").joinpath("airport_alias_catalog.json").read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (FileNotFoundError, json.JSONDecodeError, ModuleNotFoundError):
+        data = []
+    return tuple(_catalog_entry(item) for item in data if isinstance(item, dict))
 
 
-def _airport_from_entry(entry: AirportCatalogEntry, *, role: str, matched_text: str, confidence: float) -> ResolvedAirport:
-    return ResolvedAirport(iata_code=entry.iata_code, name=entry.name, city=entry.city, country=entry.country, role=role, confidence=confidence, source="airport_catalog", matched_text=matched_text)
+def _catalog_entry(item: dict[str, Any]) -> AirportCatalogEntry:
+    return AirportCatalogEntry(
+        iata_code=str(item.get("iata_code", "")).strip().upper(),
+        name=str(item.get("name", "")).strip(),
+        city=str(item.get("city", "")).strip(),
+        country=str(item.get("country", "")).strip(),
+        aliases=tuple(str(alias).strip() for alias in item.get("aliases", []) if str(alias).strip()),
+    )
+
+
+def _airport_from_entry(
+    entry: AirportCatalogEntry,
+    *,
+    role: str,
+    matched_text: str,
+    confidence: float,
+) -> ResolvedAirport:
+    return ResolvedAirport(
+        iata_code=entry.iata_code,
+        name=entry.name,
+        city=entry.city,
+        country=entry.country,
+        role=role,
+        confidence=confidence,
+        source="airport_catalog",
+        matched_text=matched_text,
+    )
 
 
 def _destination_pieces(values: list[str]) -> list[str]:
@@ -159,7 +246,7 @@ def _split_repeated_city_path(value: str) -> list[str]:
     idx = 0
     while idx < len(parts):
         current = parts[idx]
-        if idx + 1 < len(parts) and current.lower() in {"santiago", "toronto", "tokyo", "bangkok", "lisbon"}:
+        if idx + 1 < len(parts) and current.lower() in KNOWN_CITY_TOKENS:
             output.append(parts[idx + 1])
             idx += 2
         else:
@@ -168,7 +255,11 @@ def _split_repeated_city_path(value: str) -> list[str]:
     return output
 
 
-def _primary_destination(raw_destinations: list[str], trip_name: str, airports: list[ResolvedAirport]) -> str:
+def _primary_destination(
+    raw_destinations: list[str],
+    trip_name: str,
+    airports: list[ResolvedAirport],
+) -> str:
     if airports and airports[0].city and airports[0].country:
         return f"{airports[0].city}, {airports[0].country}"
     return _title_place(raw_destinations[0]) if raw_destinations else trip_name.strip() or "Destination"
@@ -185,9 +276,17 @@ def _connector_locations(places: list[ResolvedPlace], primary: str, kinds: set[s
     return _dedupe_strings(values)[:8]
 
 
-def _car_locations(airports: list[ResolvedAirport], places: list[ResolvedPlace], primary: str) -> list[str]:
+def _car_locations(
+    airports: list[ResolvedAirport],
+    places: list[ResolvedPlace],
+    primary: str,
+) -> list[str]:
     values = [airport.iata_code for airport in airports]
-    values.extend(place.search_label() for place in places if place.kind in {"city", "town", "region", "place"})
+    values.extend(
+        place.search_label()
+        for place in places
+        if place.kind in {"city", "town", "region", "place"}
+    )
     values.append(primary)
     return _dedupe_strings(values)[:8]
 
