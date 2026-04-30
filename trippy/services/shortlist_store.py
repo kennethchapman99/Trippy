@@ -8,7 +8,6 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote_plus
-from zoneinfo import ZoneInfo
 
 from trippy.models.shortlists import ResearchShortlistState, ShortlistCategory
 from trippy.models.sources import SourcePlan, TravelSourceCategory
@@ -243,7 +242,7 @@ def _repair_flight_duration(option: object) -> None:
     current = _duration_minutes(str(getattr(option, "total_travel_duration", "") or ""))
     should_repair = current is None or current >= 18 * 60 or (computed < current and current - computed > 30)
     if should_repair:
-        option.total_travel_duration = _format_minutes(computed)
+        object.__setattr__(option, "total_travel_duration", _format_minutes(computed))
         validation = getattr(option, "validation", None)
         if validation is not None:
             validation.extracted_fields["total_duration"] = _format_minutes(computed)
@@ -278,16 +277,7 @@ def _duration_from_option_times(option: object) -> int | None:
     return total
 
 
-AIRPORT_TIME_ZONES: dict[str, str] = {
-    "BOS": "America/New_York",
-    "GCM": "America/Cayman",
-    "LIS": "Europe/Lisbon",
-    "PDL": "Atlantic/Azores",
-    "YYZ": "America/Toronto",
-}
-
-
-def _parse_flight_datetime(date_text: str, time_text: str, airport: str) -> datetime | None:
+def _parse_flight_datetime(date_text: str, time_text: str, _airport: str) -> datetime | None:
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_text.strip()):
         return None
     cleaned_time = time_text.strip().upper().replace(".", "")
@@ -305,10 +295,7 @@ def _parse_flight_datetime(date_text: str, time_text: str, airport: str) -> date
         parsed = datetime.fromisoformat(date_text).replace(hour=hour, minute=minute)
     except ValueError:
         return None
-    timezone_name = AIRPORT_TIME_ZONES.get(airport.strip().upper())
-    if not timezone_name:
-        return parsed
-    return parsed.replace(tzinfo=ZoneInfo(timezone_name))
+    return parsed
 
 
 def _duration_minutes(value: str) -> int | None:
@@ -346,8 +333,8 @@ def _normalize_flight_price_to_cad(option: object) -> None:
         total = cad_amount
         per_person = cad_amount / traveler_count
     normalized = f"CAD {_money(total)} total; CAD {_money(per_person)} per person"
-    option.fare_estimate_cad = normalized
-    option.price_band = normalized
+    object.__setattr__(option, "fare_estimate_cad", normalized)
+    object.__setattr__(option, "price_band", normalized)
     validation = getattr(option, "validation", None)
     if validation is not None:
         validation.extracted_fields["price_signal"] = normalized

@@ -67,7 +67,7 @@ trippy/
     travel_intelligence.py Past-trip intelligence extraction
     trip_ideation.py    Family-fit trip concept scoring
     trip_intake.py      New-trip intake persistence
-    trip_planner.py     Deterministic trip planning drafts, including Azores golden path
+    trip_planner.py     Deterministic trip planning drafts from canonical JSON geography
     trip_workspace.py   Canonical trip + hydrated planning workspace + Master Timeline creation
     trip_map_builder.py Planning map artifacts from selected plan options
     flight_shortlist.py Source-linked flight recommendation shortlists
@@ -117,17 +117,17 @@ uv run trippy learn review
 # Generate ranked family-fit trip concepts
 uv run trippy trip-ideas --time "March break" --days 9 --goal food --goal culture --avoid crowds
 
-# Plan a selected destination with the Azores golden path
-uv run trippy trip-intake wizard --no-prompt --trip-name "Azores 2027" --destination Azores --travel-window "summer 2027" --days "9 to 11 days" --party-type whole_family --adults 2 --children 3 --child-age 15 --child-age 12 --child-age 10 --goal nature --goal food
-uv run trippy trip-plan draft --trip-id azores-2027
-uv run trippy trip-plan select --trip-id azores-2027 --option-id azores-two-island-balanced
-uv run trippy trip-plan workspace --trip-id azores-2027
-uv run trippy trip-map build --trip-id azores-2027
-uv run trippy trip-plan flights --trip-id azores-2027
-uv run trippy trip-plan lodging --trip-id azores-2027 --deep-research --adapter auto
-uv run trippy trip-plan cars --trip-id azores-2027
-uv run trippy trip-plan activities --trip-id azores-2027
-uv run trippy trip-plan propose-learning --trip-id azores-2027
+# Plan a selected destination from JSON-first geography
+uv run trippy trip-intake wizard --no-prompt --trip-name "Summer family trip" --destination "Primary city, preferred neighborhood, day trip area" --travel-window "summer 2027" --days "9 to 11 days" --party-type whole_family --adults 2 --children 3 --child-age 15 --child-age 12 --child-age 10 --goal nature --goal food
+uv run trippy trip-plan draft --trip-id summer-family-trip
+uv run trippy trip-plan select --trip-id summer-family-trip --option-id two-region-balanced
+uv run trippy trip-plan workspace --trip-id summer-family-trip
+uv run trippy trip-map build --trip-id summer-family-trip
+uv run trippy trip-plan flights --trip-id summer-family-trip
+uv run trippy trip-plan lodging --trip-id summer-family-trip --deep-research --adapter auto
+uv run trippy trip-plan cars --trip-id summer-family-trip
+uv run trippy trip-plan activities --trip-id summer-family-trip
+uv run trippy trip-plan propose-learning --trip-id summer-family-trip
 
 # Duration accepts exact or fuzzy values: --days 10, --days "6 to 8 days", --duration "about a week"
 # Named rosters are repeatable: --traveler "Ken|adult" --traveler "Child 1|12"

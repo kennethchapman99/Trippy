@@ -69,14 +69,20 @@ class FlightShortlistService:
         )
         plan = source_plan(TravelSourceCategory.FLIGHTS)
         profile = profile_for_intake(ctx.intake)
-        gateway = profile.gateway_airports[0] if profile.gateway_airports else _destination_gateway(ctx, "")
-        live_options, live_notes = _duffel_live_options(ctx, gateway)
+        gateway = profile.gateway_airports[0] if profile.gateway_airports else ""
+        live_options: list[FlightOption] = []
+        live_notes: list[str] = []
+        if gateway:
+            live_options, live_notes = _duffel_live_options(ctx, gateway)
         if not live_options:
-            serp_options, serp_notes = _serpapi_live_flights(ctx, gateway)
-            live_notes = [*live_notes, *serp_notes]
-            if serp_options:
-                live_options = serp_options
-        options = live_options or _fallback_flight_options(ctx, gateway)
+            serp_options: list[FlightOption] = []
+            serp_notes: list[str] = []
+            if gateway:
+                serp_options, serp_notes = _serpapi_live_flights(ctx, gateway)
+                live_notes = [*live_notes, *serp_notes]
+                if serp_options:
+                    live_options = serp_options
+        options = live_options or (_fallback_flight_options(ctx, gateway) if gateway else [])
         state = ResearchShortlistState(
             trip_id=trip_id,
             category=ShortlistCategory.FLIGHTS,
@@ -1136,11 +1142,10 @@ def _representative_departure_date(label: str) -> date:
 
 
 def _iata_or_text(value: str) -> str:
-    match = re.search(r"\b[A-Z]{3}\b", value.upper())
-    if match:
-        return match.group(0)
-    cleaned = re.sub(r"[^A-Za-z0-9]+", "-", value.strip()).strip("-").upper()
-    return cleaned or "DEST"
+    cleaned = value.strip().upper()
+    if _looks_like_iata(cleaned):
+        return cleaned
+    return "DESTINATION_AIRPORT_REQUIRED"
 
 
 def _refresh_flight_recommendations(
@@ -1598,7 +1603,6 @@ def _price_signal(notes: str) -> str:
 
 def _airline_from_notes(notes: str) -> str:
     for candidate in [
-        "Azores Airlines",
         "SATA",
         "Air Canada",
         "TAP Portugal",

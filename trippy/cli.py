@@ -333,9 +333,9 @@ def trip_intake_wizard(
     if not no_prompt:
         mode = str(typer.prompt("Mode (idea or selected_destination)", default=mode)).strip()
         if not trip_name:
-            trip_name = str(typer.prompt("Trip name", default="Azores family trip")).strip()
+            trip_name = str(typer.prompt("Trip name", default="Family trip")).strip()
         if not destinations:
-            raw_destination = str(typer.prompt("Destination seed(s)", default="Azores")).strip()
+            raw_destination = str(typer.prompt("Destination seed(s)", default="Destination")).strip()
             destinations = _split_cli_list([raw_destination])
         if not travel_window and not season and not start_date:
             travel_window = str(

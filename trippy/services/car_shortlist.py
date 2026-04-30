@@ -79,7 +79,7 @@ class CarShortlistService:
             ),
             warnings=[
                 "Vehicle model, transmission, luggage capacity, and fees must be confirmed on the live listing.",
-                "Azores driving can be practical, but narrow roads and parking still need local validation.",
+                "Driving practicality, road conditions, and parking need local validation from current evidence.",
                 *live_notes,
             ],
             next_actions=[

@@ -204,49 +204,18 @@ def _pins_for_shortlists(
 
 def _routes_for_option(option: TripPlanOption) -> list[MapRoute]:
     routes: list[MapRoute] = []
-    if any("Sao Miguel" in region for region in option.regions):
-        routes.append(
-            MapRoute(
-                route_id="route-1",
-                label="PDL airport to Ponta Delgada/Sao Miguel base",
-                origin_query="Ponta Delgada airport",
-                destination_query="Ponta Delgada family lodging",
-                google_maps_url=_directions_url(
-                    "Ponta Delgada airport",
-                    "Ponta Delgada family lodging",
-                    MapRouteMode.DRIVING,
-                ),
-                mode=MapRouteMode.DRIVING,
-                notes="First practical route to validate with luggage and arrival timing.",
-            )
-        )
-        routes.append(
-            MapRoute(
-                route_id="route-2",
-                label="Sao Miguel west/east day drive grouping",
-                origin_query="Ponta Delgada",
-                destination_query="Sete Cidades and Furnas Azores",
-                google_maps_url=_directions_url(
-                    "Ponta Delgada",
-                    "Sete Cidades and Furnas Azores",
-                    MapRouteMode.DRIVING,
-                ),
-                mode=MapRouteMode.DRIVING,
-                notes="Use to sanity-check whether a day is overpacked.",
-            )
-        )
     if len(option.regions) > 1:
         routes.append(
             MapRoute(
                 route_id=f"route-{len(routes) + 1}",
-                label="Inter-island movement to validate",
+                label="Inter-region movement to validate",
                 origin_query=option.regions[0],
                 destination_query=option.regions[1],
                 google_maps_url=_directions_url(
                     option.regions[0], option.regions[1], MapRouteMode.DRIVING
                 ),
                 mode=MapRouteMode.DRIVING,
-                notes="Placeholder for flight/ferry research; do not treat as a literal drive route.",
+                notes="Placeholder for route research; do not treat as a validated drive route.",
             )
         )
     return routes
@@ -406,38 +375,7 @@ def _primary_route_for_pins(pins: list[MapPin]) -> MapRoute | None:
 
 
 def _expanded_queries(option: TripPlanOption) -> list[str]:
-    queries = list(option.map_seed_queries)
-    if any("Sao Miguel" in region for region in option.regions):
-        queries.extend(
-            [
-                "Ponta Delgada airport",
-                "Ponta Delgada family lodging",
-                "Ponta Delgada restaurants",
-                "Furnas Azores hot springs",
-                "Sete Cidades viewpoint",
-                "Lagoa do Fogo",
-                "Sao Miguel whale watching",
-                "Gorreana tea plantation",
-            ]
-        )
-    if any("Pico" in region or "Faial" in region for region in option.regions):
-        queries.extend(
-            [
-                "Madalena Pico family lodging",
-                "Pico Island wine landscape",
-                "Horta Faial marina restaurants",
-                "Capelinhos Volcano",
-            ]
-        )
-    if any("Terceira" in region for region in option.regions):
-        queries.extend(
-            [
-                "Angra do Heroismo family lodging",
-                "Angra do Heroismo restaurants",
-                "Algar do Carvao",
-            ]
-        )
-    return queries
+    return list(option.map_seed_queries)
 
 
 def _category(query: str) -> MapPinCategory:
@@ -456,9 +394,6 @@ def _category(query: str) -> MapPinCategory:
             "viewpoint",
             "volcano",
             "tea",
-            "lagoa",
-            "furnas",
-            "sete",
         ]
     ):
         return MapPinCategory.ACTIVITY

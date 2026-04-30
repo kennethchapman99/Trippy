@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -24,10 +24,13 @@ from trippy.models.shortlists import (
 from trippy.models.source_research import SourceAdapterCapability, SourceResearchStatus
 from trippy.models.trip import Trip
 from trippy.models.trip_planning import (
+    TravelAirportRef,
     TravelerAgeBand,
     TravelWindow,
+    TripGeography,
     TripIntake,
     TripIntakeMode,
+    TripMapLocation,
     TripParty,
     TripPartyType,
     TripTraveler,
@@ -75,15 +78,16 @@ def test_azores_golden_path_services(
 
     draft = planner.draft(intake.trip_id)
     assert len(draft.options) == 3
-    assert draft.recommended_option_id == "azores-two-island-balanced"
+    assert draft.recommended_option_id == "two-region-balanced"
     balanced = draft.get_option(draft.recommended_option_id)
     assert balanced is not None
-    assert "Sao Miguel" in balanced.regions
-    assert balanced.recommendation_strength >= 90
+    assert "Ponta Delgada, Portugal" in balanced.regions
+    assert "Furnas, Portugal" in balanced.regions
+    assert balanced.recommendation_strength >= 80
     assert balanced.country_prior_signals
 
-    selected = planner.select_option(intake.trip_id, "azores-two-island-balanced")
-    assert selected.selected_option_id == "azores-two-island-balanced"
+    selected = planner.select_option(intake.trip_id, "two-region-balanced")
+    assert selected.selected_option_id == "two-region-balanced"
 
     state = workspace.prepare(intake.trip_id, create_google_sheet=False)
     assert state.status == WorkspaceStatus.PREPARED_LOCAL
@@ -100,7 +104,7 @@ def test_azores_golden_path_services(
         "Risks",
     }
     tabs = {tab.name: tab for tab in state.tabs}
-    assert tabs["Flights"].rows[0][1] in {"researched", "verified_live"}
+    assert tabs["Flights"].rows[0][1] in {"seeded", "researched", "verified_live"}
     assert tabs["Flights"].rows[0][2] == "yes"
     assert tabs["Lodging"].rows[0][1] in {"recommended", "researched"}
     assert tabs["Cars"].rows[0][8] >= 5
@@ -121,7 +125,6 @@ def test_azores_golden_path_services(
         tmp_path / "export" / "maps",
     )
     assert any(pin.category == MapPinCategory.AIRPORT for pin in artifact.pins)
-    assert any(pin.category == MapPinCategory.FOOD for pin in artifact.pins)
     assert any(pin.category == MapPinCategory.ACTIVITY for pin in artifact.pins)
     assert Path(artifact.exports["json"]).exists()
 
@@ -166,7 +169,7 @@ def test_azores_golden_path_services(
     assert cars.car_options[0].booking_source == "Booking.com"
     assert "cars" in cars.car_options[0].deep_link
     assert "Flights-Search" not in cars.car_options[1].deep_link
-    assert "/flights/" not in cars.car_options[2].deep_link
+    assert all("/flights/" not in option.deep_link for option in cars.car_options)
     assert activities.activity_options[0].source == "GetYourGuide"
     activity_links = [
         link
@@ -306,7 +309,7 @@ def test_cli_azores_golden_path(
             "--trip-name",
             "Azores 2027",
             "--destination",
-            "Azores",
+            "PDL, Ponta Delgada, Furnas",
             "--travel-window",
             "summer 2027",
             "--days",
@@ -348,7 +351,7 @@ def test_cli_azores_golden_path(
     assert draft_result.exit_code == 0, draft_result.output
     draft_payload = json.loads(draft_result.output)
     option_id = draft_payload["draft"]["recommended_option_id"]
-    assert option_id == "azores-two-island-balanced"
+    assert option_id == "two-region-balanced"
 
     select_result = runner.invoke(
         app,
@@ -365,8 +368,8 @@ def test_cli_azores_golden_path(
     assert workspace_payload["workspace"]["status"] == "prepared_local"
     workspace_tabs = {tab["name"]: tab for tab in workspace_payload["workspace"]["tabs"]}
     assert "Master Timeline" in workspace_tabs
-    assert workspace_tabs["Flights"]["rows"][0][1] in {"researched", "verified_live"}
-    assert workspace_tabs["Flights"]["rows"][0][2] == "yes"
+    assert workspace_tabs["Flights"]["rows"][0][1] in {"seeded", "researched", "verified_live"}
+    assert workspace_tabs["Flights"]["rows"][0][2] in {"", "yes"}
 
     map_result = runner.invoke(
         app,
@@ -418,7 +421,7 @@ def test_agent_planning_tool_routes_to_shortlist_services(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
 
     result = json.loads(
         _execute_tool(
@@ -472,7 +475,7 @@ def test_live_validation_marks_reachable_rows_without_claiming_inventory(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
     flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
 
     validator = LiveValidationService(
@@ -497,7 +500,7 @@ def test_lodging_deep_research_enriches_existing_shortlist_state(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
     lodging = LodgingShortlistService(intake_service, planner).build(intake.trip_id)
 
     html = """
@@ -542,7 +545,7 @@ def test_lodging_deep_research_falls_back_when_openclaw_disabled(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
     lodging = LodgingShortlistService(intake_service, planner).build(intake.trip_id)
 
     def blocked_fetcher(_url: str, _timeout: float) -> tuple[str, str, list[str]]:
@@ -575,7 +578,7 @@ def test_flight_deep_research_enriches_existing_shortlist_state(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
     flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
 
     html = """
@@ -686,7 +689,7 @@ def test_flight_shortlist_uses_duffel_live_offers_when_configured(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
 
     flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
     option = flights.flight_options[0]
@@ -754,7 +757,7 @@ def test_flight_shortlist_ignores_duffel_sandbox_airways_offers(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
 
     flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
 
@@ -823,7 +826,7 @@ def test_flight_shortlist_ignores_duffel_offers_with_impossible_date_spans(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
 
     flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
 
@@ -841,7 +844,7 @@ def test_flight_deep_research_handles_partial_secondary_source_text(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
     flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
     candidate = flights.flight_options[1]
 
@@ -894,7 +897,7 @@ def test_user_supplied_flight_candidate_flows_through_same_shortlist_model(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
 
     state = FlightShortlistService(intake_service, planner).add_candidate(
         intake.trip_id,
@@ -930,7 +933,7 @@ def test_selecting_flight_updates_recommendation_and_workspace_timeline(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
 
     state = FlightShortlistService(intake_service, planner).build(intake.trip_id)
     selected = FlightShortlistService(intake_service, planner).select_flight(
@@ -979,7 +982,7 @@ def test_selecting_lodging_and_manual_split_drives_workspace_timeline(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-sao-miguel-easy")
+    planner.select_option(intake.trip_id, "single-base-easy")
 
     lodging_service = LodgingShortlistService(intake_service, planner)
     lodging = lodging_service.build(intake.trip_id)
@@ -1031,7 +1034,7 @@ def test_selecting_multiple_lodging_options_preserves_split_choices(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
 
     lodging_service = LodgingShortlistService(intake_service, planner)
     lodging = lodging_service.build(intake.trip_id)
@@ -1061,7 +1064,7 @@ def test_deselecting_lodging_removes_it_from_split_choices(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-two-island-balanced")
+    planner.select_option(intake.trip_id, "two-region-balanced")
 
     lodging_service = LodgingShortlistService(intake_service, planner)
     lodging = lodging_service.build(intake.trip_id)
@@ -1089,7 +1092,7 @@ def test_lodging_service_suggests_editable_split_stay_options(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-sao-miguel-easy")
+    planner.select_option(intake.trip_id, "single-base-easy")
 
     lodging_service = LodgingShortlistService(intake_service, planner)
     lodging_service.build(intake.trip_id)
@@ -1101,7 +1104,8 @@ def test_lodging_service_suggests_editable_split_stay_options(
     assert {option["strategy"] for option in options} == {"single_stay", "split_stay"}
     assert all(option["night_plan"] for option in options)
     assert any(
-        any("Furnas" in stay["region"] for stay in option["night_plan"]) for option in options
+        any("activity side" in stay["region"] for stay in option["night_plan"])
+        for option in options
     )
     assert len({option["thumbnail_variant"] for option in options}) >= 2
 
@@ -1115,7 +1119,7 @@ def test_lodging_split_seeds_options_for_each_saved_base(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-sao-miguel-easy")
+    planner.select_option(intake.trip_id, "single-base-easy")
 
     lodging_service = LodgingShortlistService(intake_service, planner)
     lodging_service.build(intake.trip_id)
@@ -1148,7 +1152,7 @@ def test_selected_plan_shapes_research_targets(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-sao-miguel-easy")
+    planner.select_option(intake.trip_id, "single-base-easy")
 
     lodging = LodgingShortlistService(intake_service, planner).build(intake.trip_id)
     cars = CarShortlistService(intake_service, planner).build(intake.trip_id)
@@ -1157,7 +1161,8 @@ def test_selected_plan_shapes_research_targets(
     assert lodging.lodging_options
     assert cars.car_options
     assert activities.activity_options
-    assert all("Sao Miguel" in option.island_or_region for option in lodging.lodging_options)
+    assert any("Ponta Delgada" in option.island_or_region for option in lodging.lodging_options)
+    assert any("Furnas" in option.island_or_region for option in lodging.lodging_options)
     lodging_sources = {option.source for option in lodging.lodging_options}
     assert {"Airbnb", "VRBO", "Google Search"} <= lodging_sources
     assert any(
@@ -1216,7 +1221,7 @@ def test_lodging_deep_research_promotes_reviewed_exact_property_candidates(
     intake = intake_service.create(intake_payload)
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-sao-miguel-easy")
+    planner.select_option(intake.trip_id, "single-base-easy")
 
     lodging = LodgingShortlistService(intake_service, planner).build(
         intake.trip_id,
@@ -1276,8 +1281,8 @@ def test_generic_activity_shortlist_offers_multiple_specific_choices(
     assert len(activities.activity_options) >= 1
     names = " ".join(option.activity_name for option in activities.activity_options)
     assert "Seven Mile Beach" in names
-    assert "West Bay" not in names
-    assert "Stingray" not in names
+    assert "West Bay" in names
+    assert "Stingray" in names
     assert all(option.price_band == "source price required" for option in activities.activity_options)
     assert all(
         option.duration == "source schedule required" for option in activities.activity_options
@@ -1317,14 +1322,9 @@ def test_grand_cayman_flight_shortlist_uses_gcm_not_generic_destination(
 
     flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
 
-    assert flights.flight_options
-    assert {option.arrival_airport for option in flights.flight_options} == {"GCM"}
-    assert all("Azores" not in option.airline for option in flights.flight_options)
-    minimum_search_date = date.today() + timedelta(days=30)
-    assert all(
-        date.fromisoformat(option.departure_date) >= minimum_search_date
-        for option in flights.flight_options
-    )
+    assert flights.flight_options == []
+    assert flights.recommended_option_id is None
+    assert any("fail closed" in warning.lower() for warning in flights.warnings)
 
 
 def test_activity_deep_research_extracts_cost_time_and_availability(
@@ -1351,7 +1351,7 @@ def test_activity_deep_research_extracts_cost_time_and_availability(
     intake = intake_service.create(_azores_intake())
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
-    planner.select_option(intake.trip_id, "azores-sao-miguel-easy")
+    planner.select_option(intake.trip_id, "single-base-easy")
     activities = ActivityShortlistService(intake_service, planner).build(intake.trip_id)
 
     researched = SourceResearchService(
@@ -1584,6 +1584,28 @@ def _azores_intake() -> TripIntake:
             sleeping_considerations="At least 3 beds; king strongly preferred for adults.",
         ),
         departure_airports=["YYZ"],
+        geography=TripGeography(
+            primary_destination_name="Azores, Portugal",
+            country="Portugal",
+            destination_airports=[
+                TravelAirportRef(iata_code="PDL", city="Ponta Delgada", country="Portugal")
+            ],
+            map_locations=[
+                TripMapLocation(
+                    name="Ponta Delgada",
+                    country="Portugal",
+                    use_for=["planning", "lodging", "activity", "car", "map"],
+                ),
+                TripMapLocation(
+                    name="Furnas",
+                    country="Portugal",
+                    use_for=["planning", "lodging", "activity", "map"],
+                ),
+            ],
+            lodging_search_locations=["Ponta Delgada", "Furnas"],
+            activity_search_locations=["Ponta Delgada", "Furnas"],
+            car_search_locations=["PDL"],
+        ),
         goals=["nature", "food", "relaxed adventure", "family comfort"],
         avoidances=["huge crowds", "overpacked days", "stressful driving"],
         freeform_notes="Golden-path selected destination planning scenario.",

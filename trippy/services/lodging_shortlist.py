@@ -547,7 +547,7 @@ def _options_from_profile(
                 if is_private
                 else RecommendationGrade.CONDITIONAL,
                 tradeoffs=[
-                    "Private space usually fits Azores island travel if location, safety, and parking are strong."
+                    "Private space can fit destination travel if location, safety, and parking are strong."
                     if is_private
                     else "Boutique hotel comfort can be excellent, but family bed fit may require two rooms.",
                     "Do not advance unless occupancy, beds, cancellation, and access are explicit.",
@@ -1791,9 +1791,6 @@ def _structure_total_nights(option: TripPlanOption, intake: TripIntake) -> int:
 
 
 def _same_region_stay_anchors(primary_region: str, intake: TripIntake) -> list[str]:
-    text = " ".join([primary_region, *intake.destination_seeds, intake.trip_name]).lower()
-    if "azores" in text or "sao miguel" in text or "são miguel" in text:
-        return ["Ponta Delgada / south coast", "Furnas / east side", "Ribeira Grande / north coast"]
     destination = primary_region or ", ".join(intake.destination_seeds) or "destination"
     return [
         f"{destination} central base",
