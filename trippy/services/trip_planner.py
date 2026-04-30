@@ -13,6 +13,7 @@ from trippy.models.trip_planning import (
     TripPlanOption,
 )
 from trippy.services.country_priors import CountryPriorService
+from trippy.services.geography_resolver import resolve_trip_geography
 from trippy.services.planning_advisor import PlanningAdvisorService
 from trippy.services.trip_ideation import TripIdeationService
 from trippy.services.trip_intake import TripIntakeService
@@ -43,10 +44,7 @@ class TripPlannerService:
         draft = self._build_draft(intake)
         draft.advisor = (
             PlanningAdvisorService(enabled=False)
-            .advise_trip_shape(
-                intake,
-                draft,
-            )
+            .advise_trip_shape(intake, draft)
             .model_dump(mode="json")
         )
         self.save_draft(draft)
@@ -81,39 +79,9 @@ class TripPlannerService:
         return self._path(trip_id)
 
     def _build_draft(self, intake: TripIntake) -> TripPlanDraft:
-        if _is_azores(intake):
-            return self._build_azores_draft(intake)
-        if intake.mode == TripIntakeMode.IDEA and intake.destination_seeds:
-            return self._build_generic_selected_destination_draft(intake)
-        if intake.mode == TripIntakeMode.IDEA:
+        if intake.mode == TripIntakeMode.IDEA and not intake.destination_seeds:
             return self._build_idea_draft(intake)
-        return self._build_generic_selected_destination_draft(intake)
-
-    def _build_azores_draft(self, intake: TripIntake) -> TripPlanDraft:
-        duration = intake.duration_days or 10
-        country_signals = _country_signals(self._country_priors, "Portugal")
-        options = [
-            _azores_easy_option(duration, country_signals),
-            _azores_balanced_option(duration, country_signals),
-            _azores_ambitious_option(duration, country_signals),
-        ]
-        ranked = sorted(options, key=lambda option: option.recommendation_strength, reverse=True)
-        return TripPlanDraft(
-            trip_id=intake.trip_id,
-            intake_mode=intake.mode,
-            options=options,
-            recommended_option_id=ranked[0].option_id,
-            assumptions=[
-                "Azores planning starts with deterministic structure before live fares and lodging availability.",
-                "Family comfort is weighted above covering every island.",
-                "Inter-island movement must be validated against flight/ferry schedules before booking.",
-                "Portugal is not yet a historical country-prior entry, so Trippy applies family preference patterns directly and asks for live evidence.",
-            ],
-            source_notes=[
-                "Golden-path scenario: selected destination is Azores, Portugal.",
-                "Scores are planning-shape confidence, not live price or booking availability.",
-            ],
-        )
+        return self._build_selected_destination_draft(intake)
 
     def _build_idea_draft(self, intake: TripIntake) -> TripPlanDraft:
         comparison = TripIdeationService().compare(
@@ -140,9 +108,7 @@ class TripPlannerService:
                 summary=", ".join(concept.destinations),
                 duration_days=concept.recommended_duration_days,
                 regions=concept.destinations,
-                nights_by_region=_even_nights(
-                    concept.destinations, concept.recommended_duration_days
-                ),
+                nights_by_region=_even_nights(concept.destinations, concept.recommended_duration_days),
                 rationale=concept.rationale,
                 travel_burden=concept.estimated_travel_burden,
                 island_region_movement_friction="Requires live validation by exact route and lodging sequence.",
@@ -166,39 +132,22 @@ class TripPlannerService:
             options=options,
             recommended_option_id=comparison.recommended_concept_id,
             assumptions=comparison.scoring_notes,
-            source_notes=["Idea-stage draft generated from existing trip ideation service."],
+            source_notes=["Idea-stage draft generated from trip ideation service."],
         )
 
-    def _build_generic_selected_destination_draft(self, intake: TripIntake) -> TripPlanDraft:
+    def _build_selected_destination_draft(self, intake: TripIntake) -> TripPlanDraft:
         duration = intake.duration_days or 8
-        geography = intake.geography
-        geography_regions = geography.region_names() if geography else []
-        planning_regions = geography_regions or [seed for seed in intake.destination_seeds if seed.strip()]
-        destination = (
-            geography.primary_destination_name
-            if geography and geography.primary_destination_name
-            else ", ".join(planning_regions or intake.destination_seeds)
-            or intake.trip_name
-            or "Destination"
-        )
-        map_seed_queries = geography.map_seed_queries() if geography else list(intake.destination_seeds)
-        single_base_region = planning_regions[0] if planning_regions else destination
-        balanced_regions = planning_regions[:2] or [single_base_region]
-        signal_sources = [*intake.destination_seeds, destination]
-        if geography:
-            signal_sources.extend(
-                source for source in [geography.country, geography.primary_destination_name] if source
-            )
-        signals = [
-            signal.rationale
-            for seed in signal_sources
-            for signal in self._country_priors.fit_for_text(seed)
-        ]
-        if not signals:
-            signals = [
-                "No direct country prior matched; require live evidence and family-fit validation."
-            ]
+        geography = resolve_trip_geography(intake)
+        destination = geography.primary_destination_name or ", ".join(intake.destination_seeds) or intake.trip_name or "Destination"
+        planning_regions = _planning_regions_for_draft(intake, geography, destination)
+        single_base_region = planning_regions[0]
+        balanced_regions = planning_regions[:2]
         fuller_regions = _fuller_regions(planning_regions, single_base_region)
+        map_seed_queries = _dedupe_strings([*geography.map_locations, *geography.activity_search_locations, *planning_regions])
+        signals = _country_and_destination_signals(
+            self._country_priors,
+            [destination, *intake.destination_seeds, *planning_regions, *[airport.country for airport in geography.destination_airports]],
+        )
         options = [
             TripPlanOption(
                 option_id="single-base-easy",
@@ -209,22 +158,22 @@ class TripPlannerService:
                 nights_by_region={single_base_region: max(1, duration - 1)},
                 rationale=[
                     f"Lowest movement friction and easiest to make comfortable for {intake.party.summary()}.",
-                    "Best first draft when exact transport and lodging options are not yet validated.",
+                    "Best first draft when exact transport, lodging, and activity options are not yet validated.",
                 ],
                 travel_burden="requires live flight validation",
-                island_region_movement_friction="low if one lodging base works",
+                island_region_movement_friction="low if one lodging base covers the priority activities",
                 family_comfort_score=82,
-                food_fit="Needs destination-specific food cluster research.",
-                driving_fit="Rent only if parking and roads are practical.",
+                food_fit="Needs destination-specific food cluster research from live sources.",
+                driving_fit="Rent only if parking, roads, and pickup/dropoff improve comfort.",
                 crowd_fit="Use timing and neighborhood/activity choices to avoid large crowds.",
                 major_risks=[
                     "May underuse the destination if the best experiences are spread out.",
-                    "Exact lodging bed layout and location quality still need validation.",
+                    "Exact lodging bed layout, location quality, and transfer burden still need validation.",
                 ],
                 recommendation_strength=78,
                 lodging_strategy=intake.lodging_preferences.non_city_strategy,
                 car_strategy=intake.car_rental_expectations.notes
-                or "Validate car need against local roads, parking, and transfer options.",
+                or "Validate car need against local roads, parking, pickup/dropoff, and transfer options.",
                 country_prior_signals=signals,
                 map_seed_queries=map_seed_queries,
                 required_research=_required_research(),
@@ -232,22 +181,22 @@ class TripPlannerService:
             TripPlanOption(
                 option_id="two-region-balanced",
                 title=f"{destination} Two-Region Balanced Version",
-                summary="Use two bases to improve coverage while preserving downtime.",
+                summary="Use two bases or two major clusters to improve coverage while preserving downtime.",
                 duration_days=duration,
                 regions=balanced_regions,
                 nights_by_region=_even_nights(balanced_regions, duration),
                 rationale=[
                     "Balances depth with a broader sense of place.",
-                    "Usually the best pattern if the trip is at least 8-10 days.",
+                    "Usually the best pattern if the trip is at least 8-10 days and the second area materially improves the experience.",
                 ],
                 travel_burden="requires live flight and transfer validation",
                 island_region_movement_friction="moderate; one mid-trip transition with buffer",
-                family_comfort_score=80 if duration >= 8 else 68,
+                family_comfort_score=80 if duration >= 8 and len(balanced_regions) > 1 else 68,
                 food_fit="Use the second base only if food/logistics justify the move.",
-                driving_fit="Check transfer load and parking before committing.",
+                driving_fit="Check transfer load, parking, and luggage handling before committing.",
                 crowd_fit="Can avoid crowds by splitting busy sights across days.",
                 major_risks=["Too short a duration can turn the move into wasted trip time."],
-                recommendation_strength=82 if duration >= 8 else 64,
+                recommendation_strength=82 if duration >= 8 and len(balanced_regions) > 1 else 64,
                 lodging_strategy=intake.lodging_preferences.non_city_strategy,
                 car_strategy="Likely local transfer or car rental depending on destination geography.",
                 country_prior_signals=signals,
@@ -257,30 +206,26 @@ class TripPlannerService:
             TripPlanOption(
                 option_id="multi-spot-fuller-version",
                 title=f"{destination} Fuller Multi-Spot Version",
-                summary="Keep the destination fixed, but spend time across more distinct areas or activity clusters.",
+                summary="Stress-test a broader route across more distinct areas or activity clusters.",
                 duration_days=duration,
                 regions=fuller_regions,
                 nights_by_region=_even_nights(fuller_regions, duration),
                 rationale=[
                     "Useful comparison if the family wants more variety within the chosen destination.",
-                    "Only worth choosing if each extra stop materially improves beach, food, activity, or drive-time fit.",
+                    "Only worth choosing if each extra stop materially improves beach, food, activity, nature, or drive-time fit.",
                 ],
                 travel_burden="requires live transfer, drive-time, and lodging validation",
-                island_region_movement_friction=(
-                    "higher: more local movement and possible extra lodging handoffs"
-                ),
-                family_comfort_score=76 if duration >= 8 else 66,
+                island_region_movement_friction="higher: more local movement and possible extra lodging handoffs",
+                family_comfort_score=76 if duration >= 8 and len(fuller_regions) > 1 else 66,
                 food_fit="Best if the extra areas unlock clearly better meals or easier activity timing.",
                 driving_fit="Validate drive times, parking, and whether a single lodging base can cover the same activities.",
                 crowd_fit="Can spread busy sights across days, but short stays reduce flexibility.",
                 major_risks=[
-                    "Can turn a single chosen destination into too many hotel changes or car-transfer days.",
+                    "Can turn a focused trip into too many hotel changes or transfer days.",
                     "Short trips may be better served by day trips from one strong base.",
                 ],
-                recommendation_strength=74 if duration >= 8 else 58,
-                lodging_strategy=(
-                    "Treat as a stress test: use multiple stays only if each lodging move earns its friction cost."
-                ),
+                recommendation_strength=74 if duration >= 8 and len(fuller_regions) > 1 else 58,
+                lodging_strategy="Treat as a stress test: use multiple stays only if each lodging move earns its friction cost.",
                 car_strategy="Compare rental-car coverage against private transfers and day-trip operators.",
                 country_prior_signals=signals,
                 map_seed_queries=map_seed_queries,
@@ -298,177 +243,35 @@ class TripPlannerService:
             options=options,
             recommended_option_id=recommended,
             assumptions=[
-                "Generic selected-destination draft uses canonical TripGeography so connector inputs separate airports from map/search locations.",
-                "Replace with a destination-specific planner once enough evidence exists.",
+                "Selected-destination draft generated from user input and resolver-derived geography, not a hardcoded destination profile.",
+                "Scores are planning-shape confidence only; live source research must verify availability, prices, routes, timing, and friction.",
+                *geography.warnings,
             ],
             source_notes=["Generated without live availability."],
         )
 
 
-def _is_azores(intake: TripIntake) -> bool:
-    text = " ".join([intake.trip_name, *intake.destination_seeds, intake.freeform_notes or ""])
-    return "azores" in text.lower()
+def _planning_regions_for_draft(intake: TripIntake, geography: object, destination: str) -> list[str]:
+    raw_regions = [
+        *getattr(geography, "planning_regions", []),
+        *getattr(geography, "lodging_search_locations", []),
+        *getattr(geography, "activity_search_locations", []),
+        *intake.destination_seeds,
+        destination,
+    ]
+    regions = _dedupe_strings(raw_regions)
+    return regions[:3] or [destination]
 
 
-def _country_signals(service: CountryPriorService, country: str) -> list[str]:
-    fit = service.fit_for_country(country)
-    if fit is None:
-        return [
-            f"No direct historical country prior for {country}; use family rules around food, safety, natural beauty, practical mobility, crowd avoidance, and comfort."
-        ]
-    return [fit.rationale]
-
-
-def _azores_easy_option(duration: int, country_signals: list[str]) -> TripPlanOption:
-    strength = 88 if duration <= 8 else 82
-    return TripPlanOption(
-        option_id="azores-sao-miguel-easy",
-        title="Azores One-Island Easy Version",
-        summary="Base on Sao Miguel, prioritize Ponta Delgada/Furnas/Sete Cidades, and avoid inter-island logistics.",
-        duration_days=duration,
-        regions=["Sao Miguel"],
-        nights_by_region={"Sao Miguel": max(1, duration - 1)},
-        rationale=[
-            "Best if the goal is a beautiful, low-friction first Azores trip.",
-            "One rental car, one lodging base, and fewer packing/airport transitions protects family comfort.",
-            "Still gives strong nature, hot springs, coast, food, whale watching, and scenic drives.",
-        ],
-        travel_burden="meaningful transatlantic trip; verify direct or one-stop YYZ-PDL routing",
-        island_region_movement_friction="low: no inter-island flights or ferries",
-        family_comfort_score=89,
-        food_fit="Good for seafood, cozido in Furnas, Ponta Delgada restaurants, and casual local food.",
-        driving_fit="Good if using a comfortable rental car; still vet narrow roads, parking, and night driving.",
-        crowd_fit="Generally workable; avoid peak cruise-ship windows and crowded hot springs times.",
-        major_risks=[
-            "May feel too narrow if the family wants the broader Azores geography.",
-            "Car rental fit, luggage capacity, and parking at lodging need validation.",
-            "Weather can change quickly; build flexible indoor/short-drive backups.",
-        ],
-        recommendation_strength=strength,
-        lodging_strategy="Choose a safe, practical Sao Miguel base with 3+ beds, king-bed upside if available, parking, and easy food access.",
-        car_strategy="Rental car likely useful; prioritize automatic, luggage capacity, clear pickup, and cancellation terms.",
-        country_prior_signals=country_signals,
-        map_seed_queries=[
-            "Ponta Delgada airport",
-            "Ponta Delgada family lodging",
-            "Furnas Azores",
-            "Sete Cidades",
-            "Lagoa do Fogo",
-            "Sao Miguel whale watching",
-            "Ponta Delgada restaurants",
-        ],
-        required_research=_required_research(),
-    )
-
-
-def _azores_balanced_option(duration: int, country_signals: list[str]) -> TripPlanOption:
-    enough_time = duration >= 9
-    strength = 91 if enough_time else 70
-    return TripPlanOption(
-        option_id="azores-two-island-balanced",
-        title="Azores Two-Island Balanced Version",
-        summary="Use Sao Miguel plus Pico/Faial to get the main-island ease and a second-island adventure without overpacking.",
-        duration_days=duration,
-        regions=["Sao Miguel", "Pico or Faial"],
-        nights_by_region=_balanced_azores_nights(duration),
-        rationale=[
-            "Best first recommendation for 9-12 days: it materially broadens the trip while preserving downtime.",
-            "Sao Miguel provides the easiest base; Pico/Faial adds volcanic landscapes, ocean, wine/food, and a more distinct island feel.",
-            "One inter-island move is manageable if flights/ferries are buffered and luggage handling is simple.",
-        ],
-        travel_burden="meaningful international flight plus one inter-island segment",
-        island_region_movement_friction="moderate: one inter-island flight or ferry with weather/schedule buffer",
-        family_comfort_score=87 if enough_time else 72,
-        food_fit="Strong enough if food clusters are researched in Ponta Delgada plus Horta/Madalena; validate hours and reservations.",
-        driving_fit="Good with rental cars on each island; verify road comfort, parking, and pickup/dropoff logistics.",
-        crowd_fit="Good: easier to avoid crowd concentrations than a single most-touristed itinerary.",
-        major_risks=[
-            "Inter-island weather and schedule changes can disrupt the plan; avoid same-day tight flight chains.",
-            "Two car rentals and two lodgings increase admin load.",
-            "Needs explicit bed-layout validation for family of 5 in both bases.",
-        ],
-        recommendation_strength=strength,
-        lodging_strategy="Two comfortable bases: practical Sao Miguel lodging plus a well-located Pico/Faial stay with 3+ beds and parking.",
-        car_strategy="Likely rent cars on both islands; avoid cross-island pickup/dropoff ambiguity and weak cancellation terms.",
-        country_prior_signals=country_signals,
-        map_seed_queries=[
-            "Ponta Delgada airport",
-            "Ponta Delgada family lodging",
-            "Furnas Azores",
-            "Sete Cidades",
-            "Pico Island Azores family lodging",
-            "Madalena Pico restaurants",
-            "Horta Faial marina",
-            "Capelinhos Volcano",
-        ],
-        required_research=_required_research()
-        + [
-            "Inter-island flight/ferry schedule buffers and backup plan.",
-            "Whether Pico or Faial has the better lodging fit for 3+ beds and parking.",
-        ],
-    )
-
-
-def _azores_ambitious_option(duration: int, country_signals: list[str]) -> TripPlanOption:
-    enough_time = duration >= 12
-    strength = 83 if enough_time else 58
-    return TripPlanOption(
-        option_id="azores-three-island-ambitious",
-        title="Azores More Ambitious Version",
-        summary="Sao Miguel plus Terceira plus Pico/Faial for a broader Azores sampler if the trip is long enough.",
-        duration_days=duration,
-        regions=["Sao Miguel", "Terceira", "Pico or Faial"],
-        nights_by_region=_three_island_nights(duration),
-        rationale=[
-            "Works only if the trip is long enough to absorb multiple transitions.",
-            "Adds Angra do Heroismo, more food/history, and another island personality.",
-            "Useful as an upper-bound comparison, not the default comfort-first recommendation.",
-        ],
-        travel_burden="high: international flight plus multiple inter-island movements",
-        island_region_movement_friction="high unless duration is 12+ days and schedule buffers are strong",
-        family_comfort_score=81 if enough_time else 61,
-        food_fit="Potentially good, but short stays risk missing the best restaurants and relaxed meals.",
-        driving_fit="Several car-rental handoffs; only worth it with clear pickup/dropoff and luggage fit.",
-        crowd_fit="Can avoid crowds by spreading sights, but transition days reduce flexibility.",
-        major_risks=[
-            "Too many moves can waste precious trip time and create stress.",
-            "Weather disruption risk compounds across inter-island segments.",
-            "Three lodging searches with family bed requirements is a real planning load.",
-        ],
-        recommendation_strength=strength,
-        lodging_strategy="Only pursue if each island has a clear lodging win with 3+ beds, parking, and easy logistics.",
-        car_strategy="Use car rentals selectively and compare against transfers/tours on shorter island stays.",
-        country_prior_signals=country_signals,
-        map_seed_queries=[
-            "Ponta Delgada airport",
-            "Furnas Azores",
-            "Angra do Heroismo restaurants",
-            "Terceira family lodging",
-            "Pico Island Azores",
-            "Horta Faial marina",
-            "Azores whale watching",
-        ],
-        required_research=_required_research()
-        + [
-            "Exact inter-island route sequencing and weather backup.",
-            "Minimum two-night stay per island with no same-day risky connections.",
-        ],
-    )
-
-
-def _balanced_azores_nights(duration: int) -> dict[str, int]:
-    nights = max(1, duration - 1)
-    second = max(3, min(4, nights // 3))
-    first = max(1, nights - second)
-    return {"Sao Miguel": first, "Pico or Faial": second}
-
-
-def _three_island_nights(duration: int) -> dict[str, int]:
-    nights = max(1, duration - 1)
-    sao = max(3, nights - 6)
-    terceira = 3 if nights >= 8 else max(1, nights // 3)
-    pico_faial = max(1, nights - sao - terceira)
-    return {"Sao Miguel": sao, "Terceira": terceira, "Pico or Faial": pico_faial}
+def _country_and_destination_signals(service: CountryPriorService, values: list[str]) -> list[str]:
+    signals = [
+        signal.rationale
+        for value in _dedupe_strings(values)
+        for signal in service.fit_for_text(value)
+    ]
+    if not signals:
+        signals = ["No direct country prior matched; require live evidence and family-fit validation."]
+    return _dedupe_strings(signals)
 
 
 def _even_nights(regions: list[str], duration_days: int) -> dict[str, int]:
@@ -480,13 +283,11 @@ def _even_nights(regions: list[str], duration_days: int) -> dict[str, int]:
     return {region: base + (1 if idx < extra else 0) for idx, region in enumerate(regions)}
 
 
-def _fuller_regions(destination_seeds: list[str], fallback_region: str) -> list[str]:
-    regions = destination_seeds[:3]
-    if len(regions) >= 3:
-        return regions
-    if len(regions) == 2:
-        return [regions[0], regions[1], f"{regions[0]} day-trip cluster"]
-    return [regions[0] if regions else fallback_region]
+def _fuller_regions(regions: list[str], fallback_region: str) -> list[str]:
+    candidates = _dedupe_strings(regions)[:3]
+    if len(candidates) >= 2:
+        return candidates
+    return candidates or [fallback_region]
 
 
 def _normalize_loaded_draft(draft: TripPlanDraft) -> TripPlanDraft:
@@ -494,12 +295,8 @@ def _normalize_loaded_draft(draft: TripPlanDraft) -> TripPlanDraft:
     for option in draft.options:
         if option.option_id == "single-base-easy" and len(option.regions) > 1:
             primary = option.regions[0]
-            total_nights = sum(option.nights_by_region.values()) or max(
-                1, option.duration_days - 1
-            )
-            option.title = option.title.replace(
-                ", ".join(option.regions), primary, 1
-            )
+            total_nights = sum(option.nights_by_region.values()) or max(1, option.duration_days - 1)
+            option.title = option.title.replace(", ".join(option.regions), primary, 1)
             option.regions = [primary]
             option.nights_by_region = {primary: total_nights}
         if option.option_id == "two-region-balanced" and option.nights_by_region:
@@ -509,9 +306,21 @@ def _normalize_loaded_draft(draft: TripPlanDraft) -> TripPlanDraft:
 
 def _required_research() -> list[str]:
     return [
-        "Live flight options, total travel time, layovers, baggage, seats, and Aeroplan application.",
-        "Exact lodging shortlist with 3+ beds, king-bed upside if possible, parking/access, safe location, and cancellation terms.",
-        "Car rental fit for family of 5 plus bags, pickup clarity, hidden fees, and cancellation terms.",
-        "Small-group activities/tours with strong review and safety signals.",
+        "Live flight options, total travel time, layovers, baggage, seats, and loyalty/points application.",
+        "Exact lodging shortlist with required beds, comfort upside, parking/access, safe location, and cancellation terms.",
+        "Car rental or transfer fit for party size plus bags, pickup clarity, hidden fees, and cancellation terms.",
+        "Small-group activities/tours with strong review, safety, timing, and location signals.",
         "Entry requirements, passport validity, health precautions, local cash guidance, and weather seasonality.",
     ]
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = " ".join(str(value).strip().split())
+        key = text.casefold()
+        if text and key not in seen:
+            seen.add(key)
+            result.append(text)
+    return result
