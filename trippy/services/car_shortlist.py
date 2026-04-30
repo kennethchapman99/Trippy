@@ -18,6 +18,7 @@ from trippy.models.trip_planning import TripIntake
 from trippy.services import serpapi_client
 from trippy.services.destination_profiles import profile_for_intake
 from trippy.services.live_validation import LiveValidationService
+from trippy.services.scanner_fallback import run_scanner_fallback, scanner_fallback_available
 from trippy.services.serpapi_options import car_options_from_serpapi
 from trippy.services.shortlist_store import (
     ShortlistContext,
@@ -89,13 +90,19 @@ class CarShortlistService:
             ],
         )
         LiveValidationService().validate_state(state, attempt_network=validate_live)
-        fallback_research = bool(validate_live and not live_options)
+        fallback_research = bool(not live_options and scanner_fallback_available())
         if deep_research or fallback_research:
             if fallback_research and not deep_research:
-                state.warnings.append(
-                    "No live car inventory rows returned, so Trippy ran Firecrawl/OpenClaw-capable source research against date-aware car source links."
+                state = run_scanner_fallback(
+                    state,
+                    adapter_mode=adapter_mode,
+                    reason=(
+                        "No live car inventory rows returned, so Trippy ran "
+                        "Firecrawl/OpenClaw scanner fallback against date-aware car source links."
+                    ),
                 )
-            SourceResearchService().research_state(state, adapter_mode=adapter_mode)
+            else:
+                SourceResearchService().research_state(state, adapter_mode=adapter_mode)
         return self._store.save(state)
 
     def select_car(self, trip_id: str, option_id: str) -> ResearchShortlistState:

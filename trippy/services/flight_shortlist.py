@@ -29,6 +29,7 @@ from trippy.models.sources import TravelSourceCategory
 from trippy.services import serpapi_client
 from trippy.services.destination_profiles import profile_for_intake
 from trippy.services.live_validation import LiveValidationService
+from trippy.services.scanner_fallback import run_scanner_fallback, scanner_fallback_available
 from trippy.services.serpapi_options import flight_options_from_serpapi
 from trippy.services.shortlist_store import (
     ShortlistContext,
@@ -83,6 +84,11 @@ class FlightShortlistService:
                 if serp_options:
                     live_options = serp_options
         options = live_options
+        scanner_fallback = bool(gateway and not live_options and scanner_fallback_available())
+        if scanner_fallback:
+            fallback_option = _scanner_fallback_option(ctx, gateway)
+            if fallback_option is not None:
+                options = [fallback_option]
         if gateway and not options:
             live_notes.append(
                 "No flight options were created because configured flight providers returned no usable live rows; add a user-supplied candidate or configure a live provider."
@@ -119,6 +125,15 @@ class FlightShortlistService:
         LiveValidationService().validate_state(state, attempt_network=validate_live)
         if deep_research:
             SourceResearchService().research_state(state, adapter_mode=adapter_mode)
+        elif scanner_fallback and state.flight_options:
+            state = run_scanner_fallback(
+                state,
+                adapter_mode=adapter_mode,
+                reason=(
+                    "Configured flight APIs returned no usable rows, so Trippy ran "
+                    "Firecrawl/OpenClaw scanner fallback against the route search."
+                ),
+            )
         _refresh_flight_recommendations(state, ctx)
         return self._store.save(state)
 
@@ -218,6 +233,74 @@ class FlightShortlistService:
             ),
         )
         return self._store.save(state)
+
+
+def _scanner_fallback_option(
+    ctx: ShortlistContext,
+    gateway: str,
+) -> FlightOption | None:
+    origin = _iata_or_text(
+        ctx.intake.departure_airports[0] if ctx.intake.departure_airports else "YYZ"
+    )
+    destination = _iata_or_text(gateway)
+    if not _looks_like_iata(origin) or not _looks_like_iata(destination):
+        return None
+    deep_link = _flight_source_url("Google Flights", origin, destination, ctx)
+    return FlightOption(
+        option_id="scanner-flight-search-1",
+        rank=1,
+        airline="Scanner fallback route search",
+        flight_numbers=[],
+        departure_airport=origin,
+        arrival_airport=destination,
+        stops=0,
+        total_travel_duration="scanner evidence required",
+        timing_fit=(
+            "Firecrawl/OpenClaw will inspect public route evidence; no exact flight is "
+            "trusted until the scanner extracts itinerary facts."
+        ),
+        fare_estimate_cad="scanner evidence required",
+        price_band="scanner evidence required",
+        baggage_cabin_notes="Baggage and fare rules require provider evidence.",
+        booking_source="Google Flights scanner fallback",
+        deep_link=deep_link,
+        traveler_count=ctx.intake.party.total_travelers,
+        traveler_fit=f"Route search for {ctx.intake.party.total_travelers} traveler(s).",
+        comparison_links=_flight_comparison_links(origin, destination, ctx),
+        friction_score=55,
+        family_comfort_score=45,
+        recommendation_grade=RecommendationGrade.CONDITIONAL,
+        tradeoffs=[
+            "This row exists only to drive scanner fallback after API failure.",
+            "Do not treat it as an itinerary until source research extracts flight numbers, timing, fare, and baggage evidence.",
+        ],
+        friction_flags=["API search returned no usable flight rows"],
+        confidence_notes=[
+            "Scanner fallback candidate; public source evidence required before recommendation."
+        ],
+        live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
+        validation=SourceValidation(
+            source_name="Google Flights scanner fallback",
+            source_type=SourceType.LIVE_SEARCH,
+            verification_status=VerificationStatus.MANUAL_REQUIRED,
+            confidence=0.2,
+            evidence_url=deep_link,
+            missing_fields=[
+                "exact_departure_date",
+                "exact_arrival_date",
+                "flight_numbers",
+                "exact_departure_time",
+                "exact_arrival_time",
+                "total_duration",
+                "exact_fare",
+                "fare_rules",
+                "baggage_terms",
+            ],
+            notes=[
+                "Generated only because configured live flight APIs returned no usable rows and scanner fallback is configured."
+            ],
+        ),
+    )
 
 
 def _duffel_live_options(

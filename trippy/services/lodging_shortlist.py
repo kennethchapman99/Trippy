@@ -29,6 +29,7 @@ from trippy.services.destination_profiles import profile_for_intake
 from trippy.services.firecrawl import FirecrawlService
 from trippy.services.live_validation import LiveValidationService
 from trippy.services.planning_advisor import PlanningAdvisorService
+from trippy.services.scanner_fallback import run_scanner_fallback, scanner_fallback_available
 from trippy.services.serpapi_options import lodging_options_from_serpapi
 from trippy.services.shortlist_store import (
     ShortlistContext,
@@ -163,13 +164,21 @@ class LodgingShortlistService:
             if advisor.night_plan:
                 structure["advisor_night_plan"] = advisor.night_plan
         LiveValidationService().validate_state(state, attempt_network=validate_live)
-        fallback_research = bool(validate_live and not live_options and _serpapi_lodging_problem(live_notes))
+        fallback_research = bool(
+            not live_options and _serpapi_lodging_problem(live_notes) and scanner_fallback_available()
+        )
         if deep_research or fallback_research:
             if fallback_research and not deep_research:
-                state.warnings.append(
-                    "SerpAPI did not return usable lodging rows, so Trippy ran Firecrawl/OpenClaw-capable source research against source links."
+                state = run_scanner_fallback(
+                    state,
+                    adapter_mode=adapter_mode,
+                    reason=(
+                        "SerpAPI did not return usable lodging rows, so Trippy ran "
+                        "Firecrawl/OpenClaw scanner fallback against lodging source links."
+                    ),
                 )
-            SourceResearchService().research_state(state, adapter_mode=adapter_mode)
+            else:
+                SourceResearchService().research_state(state, adapter_mode=adapter_mode)
         if deep_research:
             _review_lodging_discovery_sources(state, ctx.intake)
             state.recommended_option_id = _recommended_lodging_option_id(state.lodging_options)

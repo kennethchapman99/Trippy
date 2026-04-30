@@ -32,9 +32,11 @@ def _disable_live_apis(monkeypatch):  # type: ignore[no-untyped-def]
     monkeypatch.setenv("SERPAPI_KEY", "")
     monkeypatch.setenv("DUFFEL_ACCESS_TOKEN", "")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "")
+    monkeypatch.setenv("TRIPPY_SOURCE_RESEARCH_OPENCLAW_ENABLED", "false")
     monkeypatch.setattr(trippy_config, "SERPAPI_KEY", "", raising=False)
     monkeypatch.setattr(trippy_config, "DUFFEL_ACCESS_TOKEN", "", raising=False)
     monkeypatch.setattr(trippy_config, "FIRECRAWL_API_KEY", "", raising=False)
+    monkeypatch.setattr(trippy_config, "SOURCE_RESEARCH_OPENCLAW_ENABLED", False, raising=False)
     yield
 
 
