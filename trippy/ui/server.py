@@ -119,6 +119,48 @@ class TrippyUIService:
             ),
         }
 
+    def export_trip_json(self, trip_id: str) -> dict[str, Any]:
+        intake = self._intakes.require(trip_id)
+        geography = intake.geography
+        return {
+            "schema": "trippy.trip_intake.v1",
+            "trip_id": intake.trip_id,
+            "intake": intake.model_dump(mode="json"),
+            "resolver_evidence": {
+                "warnings": list(geography.warnings if geography else []),
+                "departure_airports": [
+                    airport.model_dump(mode="json")
+                    for airport in (geography.departure_airports if geography else [])
+                ],
+                "destination_airports": [
+                    airport.model_dump(mode="json")
+                    for airport in (geography.destination_airports if geography else [])
+                ],
+                "map_locations": [
+                    location.model_dump(mode="json")
+                    for location in (geography.map_locations if geography else [])
+                ],
+            },
+            "next_step": "Edit unresolved fields, then POST this JSON to /api/trip-json.",
+        }
+
+    def import_trip_json(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raw_intake = payload.get("intake") if isinstance(payload.get("intake"), dict) else payload
+        intake = TripIntake.model_validate(raw_intake)
+        saved = self._intakes.create(intake, overwrite=bool(payload.get("overwrite", True)))
+        workflow = self._record_workflow(
+            workflow_name="ui-trip-json-import",
+            trip_id=saved.trip_id,
+            summary=f"Imported enriched TripIntake JSON for {saved.trip_name}",
+            result=saved.model_dump(mode="json"),
+        )
+        return {
+            "workflow_id": workflow.id,
+            "intake": saved.model_dump(mode="json"),
+            "resolver_evidence": self.export_trip_json(saved.trip_id)["resolver_evidence"],
+            "next_step": "Review unresolved airports and places before connector searches.",
+        }
+
     def logs(self, trip_id: str | None = None, limit: int = 50) -> dict[str, Any]:
         events = self._learning.list_events()
         workflow_trip_ids = _workflow_trip_index(events)
@@ -814,6 +856,14 @@ class TrippyUIHandler(BaseHTTPRequestHandler):
                     return
                 self._send_json(self._ui.trip_state(trip_id))
                 return
+            if path == "/api/trip-json":
+                query = parse_qs(urlparse(self.path).query)
+                trip_id = query.get("trip_id", [""])[0]
+                if not trip_id:
+                    self._send_error("trip_id is required", HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(self._ui.export_trip_json(trip_id))
+                return
             if path == "/api/map-file":
                 query = parse_qs(urlparse(self.path).query)
                 trip_id = query.get("trip_id", [""])[0]
@@ -838,6 +888,9 @@ class TrippyUIHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             if path == "/api/intake":
                 self._send_json(self._ui.create_intake(payload))
+                return
+            if path == "/api/trip-json":
+                self._send_json(self._ui.import_trip_json(payload))
                 return
             if path == "/api/suggest-ideas":
                 self._send_json(self._ui.suggest_ideas(payload))

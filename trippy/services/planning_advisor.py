@@ -162,13 +162,11 @@ class PlanningAdvisorService:
         plan_option_payload: dict[str, Any] | None = None,
         shortlist_payload: Any = None,
     ) -> str:
-        destination_text = _destination_text(
-            intake, request_payload, comparison_payload, plan_option_payload
-        )
-        country_signals = [
-            signal.model_dump(mode="json")
-            for signal in self._country_priors.fit_for_text(destination_text)
-        ]
+        country_signals = []
+        if intake and intake.geography and intake.geography.country:
+            signal = self._country_priors.fit_for_country(intake.geography.country)
+            if signal:
+                country_signals.append(signal.model_dump(mode="json"))
         memory_context = self._memory.to_context_string()
         parts = [
             f"# Trippy Planning Advisor ({_PROMPT_VERSION})",
@@ -368,24 +366,6 @@ def _shortlist_summary(state: ResearchShortlistState | None) -> dict[str, Any]:
         "artifacts": _compact_dump(state.artifacts, ["planning_advisor"]),
         "options": compact_options,
     }
-
-
-def _destination_text(
-    intake: TripIntake | None,
-    request_payload: dict[str, Any] | None,
-    comparison_payload: dict[str, Any] | None,
-    plan_option_payload: dict[str, Any] | None,
-) -> str:
-    pieces: list[str] = []
-    if intake is not None:
-        pieces.extend([intake.trip_name, *intake.destination_seeds, intake.freeform_notes or ""])
-    if request_payload:
-        pieces.extend(str(value) for value in request_payload.values())
-    if comparison_payload:
-        pieces.append(_json(comparison_payload))
-    if plan_option_payload:
-        pieces.append(_json(plan_option_payload))
-    return " ".join(pieces)
 
 
 def _compact_dump(payload: Any, excluded_keys: list[str]) -> Any:

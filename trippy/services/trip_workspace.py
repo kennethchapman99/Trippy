@@ -493,9 +493,9 @@ class TripWorkspaceService:
                 rows=[
                     [
                         "Entry",
-                        "Portugal/Schengen entry requirements",
+                        "Destination entry requirements",
                         "seeded",
-                        "Check passport validity and any ETIAS timing.",
+                        "Check passport validity, visa, and entry timing requirements from official sources.",
                     ],
                     [
                         "Health",
@@ -507,10 +507,10 @@ class TripWorkspaceService:
                         "Cash",
                         "Local currency guidance",
                         "seeded",
-                        "Estimate euros to carry for small vendors, parking, tips, and markets.",
+                        "Estimate local cash to carry for small vendors, parking, tips, and markets.",
                     ],
                     [
-                        "Inter-island",
+                        "Local movement",
                         "Schedule buffers",
                         "seeded",
                         option.island_region_movement_friction,
@@ -816,7 +816,7 @@ def _placeholder_stays(
                 stay_type=stay_type,
                 property_name=_option_summary(linked_lodging) or f"{region} lodging shortlist",
                 city=region,
-                country="Portugal",
+                country=intake.geography.country if intake.geography and intake.geography.country else "",
                 check_in=check_in,
                 check_out=check_out,
                 confirmation_code="UNCONFIRMED",
@@ -834,10 +834,10 @@ def _workspace_checklist(option: TripPlanOption) -> list[ChecklistItem]:
         ("booking", "Shortlist lodging with 3+ beds and safe/practical location"),
         ("booking", "Validate car rental fit, luggage capacity, pickup/dropoff, and cancellation"),
         ("booking", "Research small-group tours and activity safety/review signals"),
-        ("logistics", "Validate island movement sequence and schedule buffers"),
-        ("document", "Check Portugal/Schengen entry requirements and passport validity"),
+        ("logistics", "Validate destination movement sequence and schedule buffers"),
+        ("document", "Check destination entry requirements and passport validity"),
         ("health", "Check destination health precautions and motion-sickness/weather backups"),
-        ("money", "Estimate euros to carry for parking, markets, tips, and small vendors"),
+        ("money", "Estimate local cash to carry for parking, markets, tips, and small vendors"),
         ("maps", "Build trip map artifacts and link them from the workspace"),
     ]
     return [

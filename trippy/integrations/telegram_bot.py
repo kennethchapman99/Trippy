@@ -211,7 +211,7 @@ class TelegramTrippyBot:
         if text in {"/start", "/help"}:
             self._api.send_message(
                 chat_id,
-                "Text Trippy questions like: 'What confirmations are missing for Japan?' or 'Audit friction for our next trip.' Send /whoami to get your Telegram chat ID for the allowlist.",
+                "Text Trippy questions like: 'What confirmations are missing for our trip?' or 'Audit friction for our next trip.' Send /whoami to get your Telegram chat ID for the allowlist.",
             )
             return
 

@@ -31,7 +31,7 @@ class ItineraryBuilderRunner:
         from trippy.services.trip_state import TripStateService
 
         trip_id: str = inputs["trip_id"]
-        destinations: list[str] = inputs.get("destinations", [])
+        destinations: list[str] = [str(item).strip() for item in inputs.get("destinations", []) if str(item).strip()]
         total_days: int = inputs.get("total_days", 14)
 
         memory = self._memory_store or MemoryStore(config.MEMORY_PATH)
@@ -46,9 +46,14 @@ class ItineraryBuilderRunner:
         raw = memory.get_value("pref:preferences_object")
         prefs = FamilyTravelPreferences.model_validate(raw) if raw else FamilyTravelPreferences()
 
-        # Use trip destinations if not provided
-        if not destinations and trip.destination_summary:
-            destinations = [d.strip() for d in trip.destination_summary.split(",")]
+        if not destinations:
+            return {
+                "error": (
+                    "Itinerary builder requires explicit destinations from canonical trip JSON "
+                    "or user-approved resolver output; it will not split destination_summary text."
+                ),
+                "trip_id": trip_id,
+            }
 
         start = trip.start_date or date.today()
         itinerary = self._build_itinerary(destinations, total_days, start, prefs)
@@ -93,6 +98,8 @@ class ItineraryBuilderRunner:
                 "date": str(current_date),
                 "city": destinations[0] if destinations else "Arrival city",
                 "type": "arrival",
+                "source": "explicit_input",
+                "requires_user_confirmation": True,
                 "notes": "Arrive, check in, easy first evening. Jet lag day — no packed schedule.",
             }
         )
@@ -122,6 +129,8 @@ class ItineraryBuilderRunner:
                         "date": str(current_date),
                         "city": dest,
                         "type": "transit" if is_transit_day else "regular",
+                        "source": "explicit_input",
+                        "requires_user_confirmation": True,
                         "notes": notes,
                     }
                 )
@@ -140,6 +149,8 @@ class ItineraryBuilderRunner:
                 "date": str(start + timedelta(days=total_days - 1)),
                 "city": destinations[-1] if destinations else "Departure",
                 "type": "departure",
+                "source": "explicit_input",
+                "requires_user_confirmation": True,
                 "notes": "Pack, check out, depart. No activities — buffer for airport.",
             }
         )

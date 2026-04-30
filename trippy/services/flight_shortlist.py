@@ -82,7 +82,11 @@ class FlightShortlistService:
                 live_notes = [*live_notes, *serp_notes]
                 if serp_options:
                     live_options = serp_options
-        options = live_options or (_fallback_flight_options(ctx, gateway) if gateway else [])
+        options = live_options
+        if gateway and not options:
+            live_notes.append(
+                "No flight options were created because configured flight providers returned no usable live rows; add a user-supplied candidate or configure a live provider."
+            )
         state = ResearchShortlistState(
             trip_id=trip_id,
             category=ShortlistCategory.FLIGHTS,
@@ -91,14 +95,13 @@ class FlightShortlistService:
             flight_options=options,
             recommended_option_id=options[0].option_id if options else None,
             recommendation_summary=(
-                "Start with the lowest-friction same-ticket or nonstop shape, then verify live "
-                "availability, fare rules, baggage, seats, and Aeroplan eligibility before handoff."
+                "Flight options require explicit origin and destination airport codes plus live provider rows or user-supplied itinerary evidence."
             ),
             warnings=[
                 (
                     "Live Duffel offers populated exact flight rows."
                     if live_options
-                    else "Flight numbers and fares are not asserted unless a live provider or source link confirms them."
+                    else "Flight shortlist failed closed; no placeholder flight rows, fares, airlines, or booking links were generated."
                 ),
                 *live_notes,
                 *profile.flight_notes,
@@ -107,7 +110,7 @@ class FlightShortlistService:
                 (
                     "Review the live provider offer details, then cross-check the top option in Google Flights."
                     if live_options
-                    else "Configure DUFFEL_ACCESS_TOKEN or add a flight candidate with exact itinerary text to replace placeholders."
+                    else "Configure DUFFEL_ACCESS_TOKEN, enable a live flight adapter, or add a flight candidate with exact itinerary text."
                 ),
                 "Cross-check the same routing on Kayak.ca before booking.",
                 "Reject multi-ticket routings unless airport, baggage, and delay protection are clearly acceptable.",
@@ -215,146 +218,6 @@ class FlightShortlistService:
             ),
         )
         return self._store.save(state)
-
-
-def _fallback_flight_options(ctx: ShortlistContext, gateway: str) -> list[FlightOption]:
-    origin = ctx.intake.departure_airports[0] if ctx.intake.departure_airports else "YYZ"
-    destination = _iata_or_text(gateway)
-    destination_label = profile_for_intake(ctx.intake).title or ", ".join(ctx.intake.destination_seeds) or destination
-    traveler_count = ctx.intake.party.total_travelers
-    party_note = ctx.intake.party.summary()
-    date_hint = _flight_date_hint(ctx)
-    departure_date, return_date = _flight_dates(ctx)
-    comparison = _flight_comparison_links(origin, destination, ctx)
-    return [
-        FlightOption(
-            option_id="flight-direct-route",
-            rank=1,
-            airline=f"{origin}-{destination} nonstop candidate",
-            flight_numbers=[],
-            departure_date=departure_date.isoformat(),
-            arrival_date=departure_date.isoformat(),
-            departure_airport=origin,
-            arrival_airport=destination,
-            departure_time="Open search",
-            arrival_time="Verify time",
-            stops=0,
-            layover_airports=[],
-            layover_duration=None,
-            total_travel_duration="duration live-verify",
-            timing_fit=(
-                "Best shape if nonstop service operates on the trip dates and arrival aligns with check-in."
-            ),
-            fare_estimate_cad="live verify; often worth a premium for family smoothness",
-            price_band="live-verify band",
-            baggage_cabin_notes="Validate included bags, seat selection, and family seating before booking.",
-            booking_source="Google Flights",
-            deep_link=_flight_source_url("Google Flights", origin, destination, ctx),
-            traveler_count=traveler_count,
-            traveler_fit=f"Best fit for {party_note}: one plane, no layover, simplest baggage/seat path.",
-            comparison_links=comparison,
-            aeroplan_relevance="Low/uncertain; verify partner earning before assuming Aeroplan value.",
-            friction_score=8,
-            family_comfort_score=94,
-            recommendation_grade=RecommendationGrade.STRONG,
-            tradeoffs=[
-                f"Likely highest comfort for {destination_label} if nonstop service is available.",
-                "May cost more or operate only on certain days; verify the source before relying on it.",
-            ],
-            friction_flags=[
-                "nonstop availability must be verified",
-                "baggage and seat terms unknown",
-            ],
-            confidence_notes=[
-                "This is a source-linked candidate, not a confirmed fare.",
-                date_hint,
-            ],
-            live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
-        ),
-        FlightOption(
-            option_id="flight-one-stop-same-ticket",
-            rank=2,
-            airline=f"{origin}-{destination} one-stop same-ticket candidate",
-            flight_numbers=[],
-            departure_date=departure_date.isoformat(),
-            arrival_date=departure_date.isoformat(),
-            departure_airport=origin,
-            arrival_airport=destination,
-            departure_time="Open search",
-            arrival_time="Verify time",
-            stops=1,
-            layover_airports=[],
-            layover_duration="verify connection buffer",
-            total_travel_duration="duration live-verify",
-            timing_fit="Acceptable only if the connection is protected and the arrival still works for lodging check-in.",
-            fare_estimate_cad="live verify; compare against nonstop premium",
-            price_band="live-verify band",
-            baggage_cabin_notes="Prefer same-ticket baggage through-check and long-haul seat selection clarity.",
-            booking_source="Google Flights",
-            deep_link=_flight_source_url("Google Flights", origin, destination, ctx),
-            traveler_count=traveler_count,
-            traveler_fit=f"Acceptable for {party_note} only with same-ticket baggage and a sane connection buffer.",
-            comparison_links=comparison,
-            aeroplan_relevance="Potentially relevant if booked on eligible Air Canada or partner fare; verify booking class.",
-            friction_score=24,
-            family_comfort_score=82,
-            recommendation_grade=RecommendationGrade.GOOD,
-            tradeoffs=[
-                "Can be the practical backup if nonstop is unavailable or irrationally priced.",
-                "Connection adds delay and baggage risk, especially with checked bags.",
-            ],
-            friction_flags=[
-                "layover timing needs validation",
-                "avoid overnight or very tight connection",
-            ],
-            confidence_notes=[
-                "Use as the best backup if nonstop is unavailable or irrationally expensive.",
-                date_hint,
-            ],
-        ),
-        FlightOption(
-            option_id="flight-price-sanity-check",
-            rank=3,
-            airline=f"{origin}-{destination} price sanity-check candidate",
-            flight_numbers=[],
-            departure_date=departure_date.isoformat(),
-            arrival_date=return_date.isoformat(),
-            departure_airport=origin,
-            arrival_airport=destination,
-            departure_time="Open search",
-            arrival_time="Verify time",
-            stops=1,
-            layover_airports=[],
-            layover_duration="requires generous protected buffer",
-            total_travel_duration="duration live-verify",
-            timing_fit="Weak unless protected routing and lodging timing are both unusually clean.",
-            fare_estimate_cad="live verify; only consider with a meaningful upside",
-            price_band="live-verify band",
-            baggage_cabin_notes="Do not accept unprotected baggage recheck with a tight family connection.",
-            booking_source="Kayak.ca",
-            deep_link=_flight_source_url("Kayak.ca", origin, destination, ctx),
-            traveler_count=traveler_count,
-            traveler_fit=f"Weak fit for {party_note} unless protected, because luggage/recheck risk scales with party size.",
-            comparison_links=_flight_comparison_links(origin, destination, ctx),
-            aeroplan_relevance="Weak unless a same-ticket eligible carrier routing is found.",
-            friction_score=48,
-            family_comfort_score=62,
-            recommendation_grade=RecommendationGrade.CONDITIONAL,
-            tradeoffs=[
-                "Could be cheaper, but multi-ticket or baggage recheck risk can erase the value.",
-                "Only acceptable with protected routing, sane layover, and clear luggage path.",
-            ],
-            friction_flags=[
-                "airport mismatch/recheck risk",
-                "delay protection risk",
-                "family luggage burden",
-            ],
-            confidence_notes=[
-                "Use mainly as a price sanity check, not default recommendation.",
-                date_hint,
-            ],
-        ),
-    ]
 
 
 def _duffel_live_options(
@@ -693,10 +556,7 @@ def _user_candidate_option(
         traveler_fit=(
             f"User-supplied flight for {intake.party.summary()}; verify timing, fare, baggage, and source evidence."
         ),
-        comparison_links={
-            "Google Flights": _flight_source_url("Google Flights", origin, destination, ctx),
-            "Kayak.ca": _flight_source_url("Kayak.ca", origin, destination, ctx),
-        },
+        comparison_links=_flight_comparison_links(origin, destination, ctx),
         aeroplan_relevance="User-supplied candidate; verify carrier, fare class, and Aeroplan earning.",
         friction_score=friction,
         family_comfort_score=comfort,
@@ -731,6 +591,8 @@ def _flight_source_url(
     """
     origin_code = _iata_or_text(origin)
     destination_code = _iata_or_text(destination)
+    if not _looks_like_iata(origin_code) or not _looks_like_iata(destination_code):
+        return ""
     departure_date, return_date = _flight_dates(ctx)
     adults = max(1, ctx.intake.party.adults or ctx.intake.party.total_travelers or 1)
     total_travelers = max(1, ctx.intake.party.total_travelers or ctx.intake.travelers or adults)
@@ -770,10 +632,11 @@ def _flight_comparison_links(
     ctx: ShortlistContext,
 ) -> dict[str, str]:
     """Only expose providers with route URLs that reliably preserve search fields."""
-    return {
+    links = {
         "Google Flights": _flight_source_url("Google Flights", origin, destination, ctx),
         "Kayak.ca": _flight_source_url("Kayak.ca", origin, destination, ctx),
     }
+    return {source: url for source, url in links.items() if url}
 
 
 def _looks_like_iata(value: str) -> bool:
@@ -1515,7 +1378,7 @@ def _destination_gateway(ctx: ShortlistContext, notes: str) -> str:
     profile = profile_for_intake(ctx.intake)
     if profile.gateway_airports:
         return str(profile.gateway_airports[0])
-    return ", ".join(ctx.intake.destination_seeds) or "destination TBD"
+    return "DESTINATION_AIRPORT_REQUIRED"
 
 
 def _stops_from_notes(lower: str) -> int | None:

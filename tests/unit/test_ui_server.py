@@ -45,7 +45,8 @@ def test_ui_service_runs_planning_and_feedback_loop(
 
     assert snapshot["intake"]["party"]["total_travelers"] == 5
     assert snapshot["draft"]["selected_option_id"] == option_id
-    assert flights["shortlist"]["recommended_option_id"]
+    assert flights["shortlist"]["recommended_option_id"] is None
+    assert flights["shortlist"]["flight_options"] == []
     assert workspace["workspace"]["status"] == "prepared_local"
     assert snapshot["shortlists"]
 
@@ -71,6 +72,40 @@ def test_ui_service_runs_planning_and_feedback_loop(
     assert "user_feedback" in event_types
     assert "learning_proposal" in event_types
     assert logs["pending_proposals"]
+
+
+def test_ui_can_export_and_import_enriched_trip_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_ui_paths(tmp_path, monkeypatch)
+    service = TrippyUIService()
+    trip_id = _create_selected_trip(service)
+
+    exported = service.export_trip_json(trip_id)
+    assert exported["schema"] == "trippy.trip_intake.v1"
+    assert exported["resolver_evidence"]["destination_airports"]
+
+    intake_json = exported["intake"]
+    intake_json["trip_id"] = "imported-json-trip"
+    intake_json["trip_name"] = "Imported JSON Trip"
+    intake_json["geography"]["destination_airports"] = [
+        {
+            "iata_code": "ABC",
+            "city": "User Supplied City",
+            "country": "User Supplied Country",
+            "source": "ui_test",
+        }
+    ]
+    intake_json["geography"]["lodging_search_locations"] = ["User Supplied District"]
+
+    imported = service.import_trip_json({"intake": intake_json, "overwrite": True})
+
+    assert imported["intake"]["trip_id"] == "imported-json-trip"
+    assert imported["resolver_evidence"]["destination_airports"][0]["iata_code"] == "ABC"
+    assert service.export_trip_json("imported-json-trip")["intake"]["geography"][
+        "lodging_search_locations"
+    ] == ["User Supplied District"]
 
 
 def test_ui_logs_capture_backend_errors(
@@ -176,7 +211,7 @@ def test_ui_suggest_ideas_respects_six_day_prompt_and_can_capture_idea_feedback(
     assert any(event["event_type"] == "user_feedback" for event in logs["events"])
 
 
-def test_ui_suggest_ideas_respects_caribbean_region_intent(
+def test_ui_suggest_ideas_does_not_convert_region_words_to_destination_catalog(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -197,15 +232,17 @@ def test_ui_suggest_ideas_respects_caribbean_region_intent(
         }
     )
 
-    concept_ids = {concept["concept_id"] for concept in result["comparison"]["concepts"]}
-    assert len(concept_ids) == 3
-    assert "island-nature-short-comfort" not in concept_ids
-    assert concept_ids <= {
-        "belize-reef-jungle-short",
-        "curacao-color-beach-drivable-short",
-        "st-lucia-private-rental-food-short",
-        "mexico-caribbean-food-beach-short",
-    }
+    concepts = result["comparison"]["concepts"]
+    assert len(concepts) == 3
+    output_text = " ".join(
+        [
+            *(concept["title"] for concept in concepts),
+            *(slot for concept in concepts for slot in concept["destinations"]),
+            *result["comparison"]["scoring_notes"],
+        ]
+    ).lower()
+    assert "caribbean" not in output_text
+    assert all(not concept["country_prior_signals"] for concept in concepts)
 
 
 def test_ui_suggest_ideas_respects_snorkeling_requirement(
@@ -230,17 +267,19 @@ def test_ui_suggest_ideas_respects_snorkeling_requirement(
         }
     )
 
-    concept_ids = {concept["concept_id"] for concept in result["comparison"]["concepts"]}
-    assert len(concept_ids) == 3
-    assert "quebec-city-montreal-food-short" not in concept_ids
-    assert "mexico-city-food-short" not in concept_ids
-    assert "island-nature-short-comfort" not in concept_ids
-    assert concept_ids <= {
-        "belize-reef-jungle-short",
-        "cayman-reef-food-easy-week",
-        "curacao-color-beach-drivable-short",
-        "mexico-caribbean-food-beach-short",
-    }
+    concepts = result["comparison"]["concepts"]
+    assert len(concepts) == 3
+    output_text = " ".join(
+        [
+            *(concept["title"] for concept in concepts),
+            *(slot for concept in concepts for slot in concept["destinations"]),
+        ]
+    ).lower()
+    assert "cayman" not in output_text
+    assert "belize" not in output_text
+    assert all(
+        any("snorkeling" in item for item in concept["rationale"]) for concept in concepts
+    )
 
 
 def test_ui_lodging_candidate_is_evaluated_in_shortlist(
@@ -574,7 +613,7 @@ def test_ui_select_flight_updates_canonical_shortlist(
     _patch_ui_paths(tmp_path, monkeypatch)
     service = TrippyUIService()
     trip_id = _create_selected_trip(service)
-    flights = service.build_shortlist(trip_id, "flights")
+    flights = _add_ui_flight_candidates(service, trip_id)
     option_id = flights["shortlist"]["flight_options"][1]["option_id"]
 
     result = service.select_flight({"trip_id": trip_id, "option_id": option_id})
@@ -608,7 +647,7 @@ def test_ui_can_confirm_core_bookings_and_hydrate_trip_packet(
     _patch_ui_paths(tmp_path, monkeypatch)
     service = TrippyUIService()
     trip_id = _create_selected_trip(service)
-    flights = service.build_shortlist(trip_id, "flights")
+    flights = _add_ui_flight_candidates(service, trip_id)
     lodging = service.build_shortlist(trip_id, "lodging")
     flight_id = flights["shortlist"]["flight_options"][0]["option_id"]
     lodging_id = lodging["shortlist"]["lodging_options"][0]["option_id"]
@@ -799,6 +838,24 @@ def _create_selected_trip(service: TrippyUIService) -> str:
     draft_result = service.draft_plan(trip_id)
     service.select_plan(trip_id, draft_result["draft"]["recommended_option_id"])
     return str(trip_id)
+
+
+def _add_ui_flight_candidates(service: TrippyUIService, trip_id: str) -> dict[str, object]:
+    service.build_shortlist(trip_id, "flights")
+    state: dict[str, object] = {}
+    for notes in [
+        "YYZ to PDL nonstop candidate; provider evidence pending.",
+        "YYZ to PDL one stop candidate; provider evidence pending.",
+        "PDL to YYZ return candidate; provider evidence pending.",
+    ]:
+        state = service.add_flight_candidate(
+            {
+                "trip_id": trip_id,
+                "link": "https://www.google.com/travel/flights/search",
+                "notes": notes,
+            }
+        )
+    return state
 
 
 def _patch_ui_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

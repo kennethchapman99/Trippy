@@ -33,8 +33,10 @@ def test_trip_ideas_penalize_long_flights_for_short_max() -> None:
         limit=20,
     )
 
-    japan = next(c for c in comparison.concepts if c.concept_id == "japan-food-rail-cities")
-    assert any("exceeds requested max" in reason for reason in japan.why_it_may_not_fit)
+    long_burden = next(
+        c for c in comparison.concepts if c.concept_id == "json-first-activity-led-sampler"
+    )
+    assert any("exceeds requested max" in reason for reason in long_burden.why_it_may_not_fit)
 
 
 def test_trip_ideas_respect_short_duration_before_generic_ranking() -> None:
@@ -51,14 +53,15 @@ def test_trip_ideas_respect_short_duration_before_generic_ranking() -> None:
 
     assert len(comparison.concepts) == 3
     assert all(concept.recommended_duration_days <= 6 for concept in comparison.concepts)
-    assert not any(
-        concept.concept_id in {"mexico-city-oaxaca-food", "portugal-food-cities-coast"}
-        for concept in comparison.concepts
-    )
+    assert {concept.concept_id for concept in comparison.concepts} <= {
+        "json-first-low-friction-single-base",
+        "json-first-food-culture-base",
+        "json-first-nature-water-base",
+    }
     assert any("Requested duration is 6" in note for note in comparison.scoring_notes)
 
 
-def test_trip_ideas_respect_explicit_caribbean_region_intent() -> None:
+def test_trip_ideas_do_not_convert_region_words_to_destination_catalog() -> None:
     comparison = TripIdeationService().compare(
         TripIdeaRequest(
             duration_days=6,
@@ -70,18 +73,19 @@ def test_trip_ideas_respect_explicit_caribbean_region_intent() -> None:
         limit=3,
     )
 
-    concept_ids = {concept.concept_id for concept in comparison.concepts}
     assert len(comparison.concepts) == 3
-    assert "island-nature-short-comfort" not in concept_ids
-    assert concept_ids <= {
-        "belize-reef-jungle-short",
-        "curacao-color-beach-drivable-short",
-        "st-lucia-private-rental-food-short",
-        "mexico-caribbean-food-beach-short",
-    }
+    output_text = " ".join(
+        [
+            *(concept.title for concept in comparison.concepts),
+            *(slot for concept in comparison.concepts for slot in concept.destinations),
+            *comparison.scoring_notes,
+        ]
+    ).lower()
+    assert "caribbean" not in output_text
+    assert all(not concept.country_prior_signals for concept in comparison.concepts)
     assert all(concept.recommended_duration_days <= 6 for concept in comparison.concepts)
     assert any(
-        "Explicit destination intent detected: caribbean" in note
+        "Regional wording was treated as user intent only" in note
         for note in comparison.scoring_notes
     )
 
@@ -99,17 +103,15 @@ def test_trip_ideas_treat_snorkeling_as_required_experience() -> None:
         limit=3,
     )
 
-    concept_ids = {concept.concept_id for concept in comparison.concepts}
     assert len(comparison.concepts) == 3
-    assert concept_ids <= {
-        "belize-reef-jungle-short",
-        "cayman-reef-food-easy-week",
-        "curacao-color-beach-drivable-short",
-        "mexico-caribbean-food-beach-short",
-    }
-    assert "quebec-city-montreal-food-short" not in concept_ids
-    assert "mexico-city-food-short" not in concept_ids
-    assert "island-nature-short-comfort" not in concept_ids
+    output_text = " ".join(
+        [
+            *(concept.title for concept in comparison.concepts),
+            *(slot for concept in comparison.concepts for slot in concept.destinations),
+        ]
+    ).lower()
+    assert "cayman" not in output_text
+    assert "belize" not in output_text
     assert all(
         any("snorkeling" in item for item in concept.rationale) for concept in comparison.concepts
     )
@@ -118,16 +120,16 @@ def test_trip_ideas_treat_snorkeling_as_required_experience() -> None:
     )
 
 
-def test_trip_ideas_include_country_prior_rationale() -> None:
+def test_trip_ideas_do_not_include_country_prior_rationale() -> None:
     comparison = TripIdeationService().compare(
         TripIdeaRequest(duration_days=14, goals=["food", "culture"]),
         limit=10,
     )
 
-    japan = next(c for c in comparison.concepts if c.concept_id == "japan-food-rail-cities")
-    italy = next(c for c in comparison.concepts if c.concept_id == "italy-food-culture-rail")
-
-    assert japan.country_prior_signals
-    assert any("past country-level history" in item for item in japan.rationale)
-    assert any("expense" in item for item in japan.why_it_may_not_fit)
-    assert any("summer heat" in item for item in italy.why_it_may_not_fit)
+    assert all(not concept.country_prior_signals for concept in comparison.concepts)
+    assert not any(
+        "past country-level history" in item
+        for concept in comparison.concepts
+        for item in concept.rationale
+    )
+    assert any("destination-agnostic scanner briefs" in note for note in comparison.scoring_notes)

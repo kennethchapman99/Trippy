@@ -127,15 +127,9 @@ class TripSheetCreatorRunner:
                 trip.sync.google_sheet_url = sheet_result.get("url", "")
                 state_svc.save(trip)
 
-        # Destination-specific flags
-        dest_lower = " ".join(d.lower() for d in destinations)
-        if "japan" in dest_lower:
-            flags.append("Add JR Pass to checklist (if rail travel planned)")
-            flags.append("Check Japan ETA requirement for Canadian passports")
-        if "us" in dest_lower or "united states" in dest_lower:
-            flags.append("Check eTA/ESTA requirement")
-        if "europe" in dest_lower:
-            flags.append("Check ETIAS requirement (effective 2025)")
+        flags.append(
+            "Destination facts are unresolved; confirm entry, visa, transport pass, and health requirements from official/current sources."
+        )
 
         next_actions: list[str] = []
         if sheet_result.get("error"):
@@ -239,6 +233,6 @@ def _suggest_structure(destinations: list[str]) -> str:
     if not destinations:
         return "No destinations specified"
     if len(destinations) == 1:
-        return f"{destinations[0]}: suggest 7-10 nights, explore different neighbourhoods"
+        return f"{destinations[0]}: single-base structure pending resolver/provider evidence"
     days_per = 14 // len(destinations)
-    return " → ".join(f"{d} {days_per}n" for d in destinations)
+    return " → ".join(f"{d} {days_per}n pending evidence" for d in destinations)

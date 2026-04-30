@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import base64
 import json
 from datetime import date
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
 
 import pytest
 from typer.testing import CliRunner
@@ -105,7 +103,7 @@ def test_azores_golden_path_services(
     }
     tabs = {tab.name: tab for tab in state.tabs}
     assert tabs["Flights"].rows[0][1] in {"seeded", "researched", "verified_live"}
-    assert tabs["Flights"].rows[0][2] == "yes"
+    assert tabs["Flights"].rows[0][2] == ""
     assert tabs["Lodging"].rows[0][1] in {"recommended", "researched"}
     assert tabs["Cars"].rows[0][8] >= 5
     timeline = tabs["Master Timeline"].rows
@@ -124,7 +122,7 @@ def test_azores_golden_path_services(
         intake.trip_id,
         tmp_path / "export" / "maps",
     )
-    assert any(pin.category == MapPinCategory.AIRPORT for pin in artifact.pins)
+    assert artifact.pins
     assert any(pin.category == MapPinCategory.ACTIVITY for pin in artifact.pins)
     assert Path(artifact.exports["json"]).exists()
 
@@ -134,36 +132,9 @@ def test_azores_golden_path_services(
     activities = ActivityShortlistService(intake_service, planner).build(intake.trip_id)
 
     assert flights.category == ShortlistCategory.FLIGHTS
-    assert flights.recommended_option_id == "flight-direct-route"
-    flight_link = flights.flight_options[0].deep_link
-    flight_params = parse_qs(urlparse(flight_link).query)
-    assert "google.com/travel/flights" in flight_link
-    assert "?q=" not in flight_link
-    assert flight_params["tfu"] == ["EgIIACIA"]
-    assert flight_params["origin"] == ["YYZ"]
-    assert flight_params["destination"] == ["PDL"]
-    assert flight_params["departure"] == ["2027-06-15"]
-    assert "f=0" not in flight_params["tfs"][0]
-    tfs_padding = "=" * (-len(flight_params["tfs"][0]) % 4)
-    tfs_payload = base64.urlsafe_b64decode(flight_params["tfs"][0] + tfs_padding)
-    assert b"YYZ" in tfs_payload
-    assert b"PDL" in tfs_payload
-    assert b"2027-06-15" in tfs_payload
-    flight_links = [
-        link
-        for option in flights.flight_options
-        for link in [option.deep_link, *option.comparison_links.values()]
-    ]
-    assert all("Flights-Search" not in link for link in flight_links)
-    assert all("flighthub.com" not in link for link in flight_links)
-    assert any(
-        "ca.kayak.com/flights/YYZ-PDL/2027-06-15/2027-06-25/5adults"
-        in link
-        for link in flight_links
-    )
-    assert any(
-        "placeholder search dates" in note for note in flights.flight_options[0].confidence_notes
-    )
+    assert flights.recommended_option_id is None
+    assert flights.flight_options == []
+    assert any("failed closed" in warning for warning in flights.warnings)
     assert lodging.lodging_options
     assert lodging.recommended_option_id is not None
     assert cars.car_options[0].booking_source == "Booking.com"
@@ -180,11 +151,6 @@ def test_azores_golden_path_services(
     assert all(
         "Airbnb Experiences" not in option.validation_links
         for option in activities.activity_options
-    )
-    assert flights.flight_options[0].row_status == ShortlistRowStatus.RESEARCHED
-    assert (
-        flights.flight_options[0].validation.verification_status
-        == VerificationStatus.MANUAL_REQUIRED
     )
     assert lodging.lodging_options[0].fit_category.value in {
         "preferred_fit",
@@ -204,7 +170,7 @@ def test_azores_golden_path_services(
     dashboard = DashboardService().build()
     planned = next(tile for tile in dashboard.planned_trips if tile.trip_id == intake.trip_id)
     assert planned.planning_status["workspace"] == "prepared_local"
-    assert planned.shortlist_status["flights"].startswith("3 option")
+    assert planned.shortlist_status["flights"].startswith("0 option")
     assert planned.planning_completeness < 100
 
 
@@ -401,7 +367,11 @@ def test_cli_azores_golden_path(
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
         assert payload["shortlist"]["trip_id"] == trip_id
-        assert payload["shortlist"]["recommended_option_id"]
+        if command == "flights":
+            assert payload["shortlist"]["recommended_option_id"] is None
+            assert payload["shortlist"]["flight_options"] == []
+        else:
+            assert payload["shortlist"]["recommended_option_id"]
 
     learning_result = runner.invoke(
         app,
@@ -434,7 +404,8 @@ def test_agent_planning_tool_routes_to_shortlist_services(
     )
 
     assert result["category"] == "flights"
-    assert result["recommended_option_id"] == "flight-direct-route"
+    assert result["recommended_option_id"] is None
+    assert result["flight_options"] == []
 
 
 def test_intake_accepts_fuzzy_duration_and_party_roster() -> None:
@@ -476,7 +447,12 @@ def test_live_validation_marks_reachable_rows_without_claiming_inventory(
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
     planner.select_option(intake.trip_id, "two-region-balanced")
-    flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
+    service = FlightShortlistService(intake_service, planner)
+    flights = service.add_candidate(
+        intake.trip_id,
+        link="https://www.google.com/travel/flights/search",
+        notes="YYZ to PDL nonstop candidate; provider evidence pending.",
+    )
 
     validator = LiveValidationService(
         fetcher=lambda _url, _timeout: (True, 200, "fake live source OK")
@@ -579,7 +555,12 @@ def test_flight_deep_research_enriches_existing_shortlist_state(
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
     planner.select_option(intake.trip_id, "two-region-balanced")
-    flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
+    service_builder = FlightShortlistService(intake_service, planner)
+    flights = service_builder.add_candidate(
+        intake.trip_id,
+        link="https://www.google.com/travel/flights/search",
+        notes="YYZ to PDL nonstop candidate; provider evidence pending.",
+    )
 
     html = """
     <html><body>
@@ -845,7 +826,17 @@ def test_flight_deep_research_handles_partial_secondary_source_text(
     planner = TripPlannerService(intake_service)
     planner.draft(intake.trip_id)
     planner.select_option(intake.trip_id, "two-region-balanced")
-    flights = FlightShortlistService(intake_service, planner).build(intake.trip_id)
+    flight_service = FlightShortlistService(intake_service, planner)
+    flights = flight_service.add_candidate(
+        intake.trip_id,
+        link="https://www.ca.kayak.com/flights/YYZ-PDL/2027-06-15/2027-06-25/5adults",
+        notes="YYZ to PDL one stop via LIS; secondary source evidence pending.",
+    )
+    flights = flight_service.add_candidate(
+        intake.trip_id,
+        link="https://www.ca.kayak.com/flights/YYZ-PDL/2027-06-15/2027-06-25/5adults",
+        notes="YYZ to PDL one stop via LIS; partial secondary source text.",
+    )
     candidate = flights.flight_options[1]
 
     html = """
@@ -935,8 +926,23 @@ def test_selecting_flight_updates_recommendation_and_workspace_timeline(
     planner.draft(intake.trip_id)
     planner.select_option(intake.trip_id, "two-region-balanced")
 
-    state = FlightShortlistService(intake_service, planner).build(intake.trip_id)
-    selected = FlightShortlistService(intake_service, planner).select_flight(
+    flight_service = FlightShortlistService(intake_service, planner)
+    state = flight_service.add_candidate(
+        intake.trip_id,
+        link="https://www.google.com/travel/flights/search",
+        notes="YYZ to PDL nonstop candidate; provider evidence pending.",
+    )
+    state = flight_service.add_candidate(
+        intake.trip_id,
+        link="https://www.google.com/travel/flights/search",
+        notes="YYZ to PDL one stop candidate; provider evidence pending.",
+    )
+    state = flight_service.add_candidate(
+        intake.trip_id,
+        link="https://www.google.com/travel/flights/search",
+        notes="PDL to YYZ return candidate; provider evidence pending.",
+    )
+    selected = flight_service.select_flight(
         intake.trip_id,
         state.flight_options[1].option_id,
     )
@@ -951,7 +957,7 @@ def test_selecting_flight_updates_recommendation_and_workspace_timeline(
     assert chosen.recommendation_label.startswith("Departure selected")
     assert selected.artifacts["flight_selection"]["selected_outbound_option_id"] == chosen.option_id
 
-    return_selected = FlightShortlistService(intake_service, planner).select_flight(
+    return_selected = flight_service.select_flight(
         intake.trip_id,
         state.flight_options[2].option_id,
         selection_kind="return",

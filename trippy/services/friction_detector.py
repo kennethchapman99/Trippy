@@ -808,13 +808,6 @@ def _countries_for_trip(trip: Trip) -> list[str]:
         if stay.country and stay.country.lower() not in seen:
             countries.append(stay.country)
             seen.add(stay.country.lower())
-    if trip.destination_summary:
-        from trippy.services.country_priors import CountryPriorService
-
-        for fit in CountryPriorService().fit_for_text(trip.destination_summary):
-            if fit.country.lower() not in seen:
-                countries.append(fit.country)
-                seen.add(fit.country.lower())
     return countries
 
 

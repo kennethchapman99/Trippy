@@ -16,9 +16,9 @@ pacing for a family with kids, buffer days, and logistics between cities.
 ## Inputs
 ```json
 {
-  "trip_id": "japan-2027",
-  "destinations": ["Tokyo", "Kyoto", "Osaka"],
-  "total_days": 14,
+  "trip_id": "family-trip-2027",
+  "destinations": ["Confirmed Base A", "Confirmed Base B"],
+  "total_days": 9,
   "interests": ["food", "culture", "nature"],
   "avoid": ["very early mornings", "packed schedules"]
 }
@@ -27,7 +27,7 @@ pacing for a family with kids, buffer days, and logistics between cities.
 ## Process
 1. Load family preferences from memory (pacing, stay length, arrival time preferences)
 2. Load family profile (5 travelers including minors — pace accordingly)
-3. Research destination logistics: city order, transport between cities, distances
+3. Use only destinations supplied from canonical trip JSON or user-approved resolver output
 4. Apply preference constraints:
    - min_nights_per_destination (≥2, prefer 3)
    - prefer_slow_travel (no more than 3 destinations per week)
@@ -36,28 +36,25 @@ pacing for a family with kids, buffer days, and logistics between cities.
    - Day 1: arrival + settle-in (no packed first day)
    - Intermediate days: activities with reasonable daily count for family
    - Last day: pack + depart (no full-day activities before a long flight)
-6. For each city: suggest 2–3 neighbourhoods to focus on
+6. For each confirmed place: leave unresolved lodging/activity areas flagged for scanner evidence
 7. Flag family-specific considerations (stroller access, kid-friendly options, etc.)
 8. Return as both structured JSON and human-readable day-by-day text
 
 ## Outputs
 ```json
 {
-  "trip_id": "japan-2027",
-  "total_days": 14,
+  "trip_id": "family-trip-2027",
+  "total_days": 9,
   "itinerary": [
-    {"day": 1, "date": "2027-03-10", "city": "Tokyo", "notes": "Arrive NRT (~14:00), transfer to hotel (Shinjuku). Easy evening — jet lag day."},
-    {"day": 2, "date": "2027-03-11", "city": "Tokyo", "notes": "Shibuya + Harajuku. Afternoon: teamLab if kids are up for it."},
+    {"day": 1, "date": "2027-03-10", "city": "Confirmed Base A", "source": "explicit_input", "requires_user_confirmation": true, "notes": "Arrive, check in, easy first evening."},
+    {"day": 2, "date": "2027-03-11", "city": "Confirmed Base A", "source": "explicit_input", "requires_user_confirmation": true, "notes": "Confirmed Base A: scanner-backed activity placeholder."},
     "..."
   ],
   "city_summary": {
-    "Tokyo": "4 nights (days 1-4)",
-    "Kyoto": "3 nights (days 5-7)",
-    "Osaka": "3 nights (days 8-10)",
-    "Tokyo": "3 nights (days 11-13)",
-    "Departure": "day 14"
+    "Confirmed Base A": "3 nights",
+    "Confirmed Base B": "3 nights"
   },
-  "warnings": ["Day 5 Kyoto shinkansen early (07:00 preferred) — check family preference"],
+  "warnings": ["All generated rows require user confirmation and scanner/provider evidence before booking."],
   "suggested_sheet_updates": [...]
 }
 ```
