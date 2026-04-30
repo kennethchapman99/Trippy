@@ -1,0 +1,58 @@
+[
+  {
+    "iata_code": "YYZ",
+    "name": "Toronto Pearson International Airport",
+    "city": "Toronto",
+    "country": "Canada",
+    "aliases": ["yyz", "toronto", "pearson"]
+  },
+  {
+    "iata_code": "SCL",
+    "name": "Arturo Merino Benitez International Airport",
+    "city": "Santiago",
+    "country": "Chile",
+    "aliases": ["scl", "santiago", "santiago chile"]
+  },
+  {
+    "iata_code": "PDL",
+    "name": "Joao Paulo II Airport",
+    "city": "Ponta Delgada",
+    "country": "Portugal",
+    "aliases": ["pdl", "ponta delgada", "azores", "sao miguel"]
+  },
+  {
+    "iata_code": "GCM",
+    "name": "Owen Roberts International Airport",
+    "city": "George Town",
+    "country": "Cayman Islands",
+    "aliases": ["gcm", "grand cayman", "cayman islands"]
+  },
+  {
+    "iata_code": "LIS",
+    "name": "Lisbon Airport",
+    "city": "Lisbon",
+    "country": "Portugal",
+    "aliases": ["lis", "lisbon", "lisboa"]
+  },
+  {
+    "iata_code": "HND",
+    "name": "Haneda Airport",
+    "city": "Tokyo",
+    "country": "Japan",
+    "aliases": ["hnd", "haneda", "tokyo"]
+  },
+  {
+    "iata_code": "BKK",
+    "name": "Suvarnabhumi Airport",
+    "city": "Bangkok",
+    "country": "Thailand",
+    "aliases": ["bkk", "bangkok"]
+  },
+  {
+    "iata_code": "SJO",
+    "name": "Juan Santamaria International Airport",
+    "city": "San Jose",
+    "country": "Costa Rica",
+    "aliases": ["sjo", "san jose costa rica", "costa rica"]
+  }
+]
