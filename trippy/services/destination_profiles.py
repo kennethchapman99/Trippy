@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from trippy.models.trip_planning import TripIntake
+from trippy.services.geography_resolver import resolve_trip_geography
 
 
 class DestinationProfile(BaseModel):
@@ -26,35 +27,55 @@ def profile_for_intake(intake: TripIntake) -> DestinationProfile:
         return _AZORES
     if _looks_like_grand_cayman(lower_text):
         return _GRAND_CAYMAN
-    destination = ", ".join(intake.destination_seeds) or intake.trip_name
+    return _generic_profile(intake)
+
+
+def _generic_profile(intake: TripIntake) -> DestinationProfile:
+    geography = resolve_trip_geography(intake)
+    destination = geography.primary_destination_name or ", ".join(intake.destination_seeds) or intake.trip_name
+    gateway_airports = [airport.iata_code for airport in geography.destination_airports]
+    regions = geography.planning_regions or geography.map_locations or list(intake.destination_seeds)
+    notes = [
+        "Generic profile: validate gateway airport, seasonal service, and same-ticket routing.",
+        *geography.warnings,
+        *geography.evidence,
+    ]
+    lodging_targets = [
+        {
+            "name": f"{location} family lodging search",
+            "location_area": location,
+            "island_or_region": location,
+            "lodging_type": "family lodging",
+            "query": f"{location} family lodging 3 beds parking",
+        }
+        for location in (geography.lodging_search_locations or [destination])[:6]
+    ]
+    car_targets = [
+        {
+            "name": f"{location} family SUV or minivan",
+            "pickup": location,
+            "dropoff": location,
+            "vehicle_class": "SUV or minivan",
+            "query": f"{location} car rental SUV minivan family luggage",
+        }
+        for location in (geography.car_search_locations or [destination])[:6]
+    ]
     return DestinationProfile(
         key="generic",
         title=destination,
-        country="",
-        gateway_airports=[],
-        island_or_region_terms=list(intake.destination_seeds),
-        flight_notes=[
-            "Generic profile: validate gateway airport, seasonal service, and same-ticket routing."
-        ],
-        lodging_search_targets=[
-            {
-                "name": f"{destination} family lodging search",
-                "location_area": destination,
-                "island_or_region": destination,
-                "lodging_type": "family lodging",
-                "query": f"{destination} family lodging 3 beds parking",
-            }
-        ],
-        car_search_targets=[
-            {
-                "name": f"{destination} airport family SUV or minivan",
-                "pickup": destination,
-                "dropoff": destination,
-                "vehicle_class": "SUV or minivan",
-                "query": f"{destination} car rental SUV minivan family luggage",
-            }
-        ],
-        activity_search_targets=_generic_activity_search_targets(intake, destination),
+        country=geography.destination_airports[0].country if geography.destination_airports else "",
+        gateway_airports=gateway_airports,
+        # Keep known terms empty for generic resolved profiles so specific neighborhood,
+        # region, and search targets are not filtered out by a selected raw destination blob.
+        island_or_region_terms=[],
+        flight_notes=notes,
+        lodging_search_targets=lodging_targets,
+        car_search_targets=car_targets,
+        activity_search_targets=_generic_activity_search_targets(
+            intake,
+            destination,
+            geography.activity_search_locations or regions or [destination],
+        ),
     )
 
 
@@ -75,8 +96,9 @@ def _looks_like_grand_cayman(text: str) -> bool:
 def _generic_activity_search_targets(
     intake: TripIntake,
     destination: str,
+    locations: list[str] | None = None,
 ) -> list[dict[str, str]]:
-    seeds = [seed.strip() for seed in intake.destination_seeds if seed.strip()] or [destination]
+    seeds = [seed.strip() for seed in (locations or intake.destination_seeds) if seed.strip()] or [destination]
     targets: list[dict[str, str]] = []
     for seed in seeds[:5]:
         lower = seed.lower()
