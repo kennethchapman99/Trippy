@@ -11,6 +11,7 @@ import Stays from "./pages/Stays.tsx";
 import Cars from "./pages/Cars.tsx";
 import Do from "./pages/Do.tsx";
 import Timeline from "./pages/Timeline.tsx";
+import Settings from "./pages/Settings.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
 const queryClient = new QueryClient();
@@ -24,6 +25,7 @@ const App = () => (
         <Routes>
           <Route path="/" element={<Index />} />
           <Route path="/new" element={<NewTrip />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="/trip/:tripId/shape" element={<TripShape />} />
           <Route path="/trip/:tripId/flights" element={<Flights />} />
           <Route path="/trip/:tripId/stays" element={<Stays />} />
