@@ -9,6 +9,8 @@ from typing import Any
 
 from pydantic import BaseModel, field_validator
 
+from trippy import config
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -51,9 +53,7 @@ class ParsedConfirmation(BaseModel):
 
 _EXTRACT_CONFIRMATION_TOOL: dict[str, Any] = {
     "name": "extract_confirmation",
-    "description": (
-        "Extract structured booking data from a travel confirmation email or attachment."
-    ),
+    "description": "Extract structured booking data from a travel confirmation email or attachment.",
     "input_schema": {
         "type": "object",
         "required": ["confirmation_type", "confirmation_code", "vendor"],
@@ -126,21 +126,11 @@ def _extract_pdf_text(data: bytes) -> str:
         return ""
 
 
-# ---------------------------------------------------------------------------
-# Public dataclass
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class ParserResult:
     ok: bool
     confirmation: ParsedConfirmation | None = None
     error: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# ConfirmationParser
-# ---------------------------------------------------------------------------
 
 
 class ConfirmationParser:
@@ -155,9 +145,7 @@ class ConfirmationParser:
         else:
             import anthropic
 
-            self._client = anthropic.Anthropic()
-
-    # ------------------------------------------------------------------
+            self._client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY or None)
 
     def parse(
         self,
@@ -176,7 +164,6 @@ class ConfirmationParser:
         if body_text:
             content_parts.append(f"=== EMAIL BODY (TEXT) ===\n{body_text}")
         if body_html:
-            # Strip tags crudely for context; not perfect but helps Claude
             import re
             from html import unescape
 
@@ -194,7 +181,7 @@ class ConfirmationParser:
         if not content_parts:
             return ParserResult(ok=False, error="No parseable content in email")
 
-        full_text = "\n\n".join(content_parts)[:12_000]  # stay within context
+        full_text = "\n\n".join(content_parts)[:12_000]
 
         try:
             result = self._call_claude(full_text)
@@ -214,7 +201,7 @@ class ConfirmationParser:
         tool_choice: ToolChoiceToolParam = {"type": "tool", "name": "extract_confirmation"}
 
         message = self._client.messages.create(
-            model="claude-opus-4-7",
+            model=config.CONFIRMATION_PARSER_MODEL,
             max_tokens=1024,
             system=_SYSTEM_PROMPT,
             tools=[tool],
@@ -227,7 +214,6 @@ class ConfirmationParser:
         for block in message.content:
             if isinstance(block, ToolUseBlock) and block.name == "extract_confirmation":
                 return ParsedConfirmation.model_validate(block.input)
-            # MagicMock fallback for tests
             b_type = getattr(block, "type", None)
             b_name = getattr(block, "name", None)
             b_input = getattr(block, "input", None)
