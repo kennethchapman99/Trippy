@@ -1,6 +1,7 @@
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { Home, Plus, Settings, Sun, Palmtree } from "lucide-react";
 import logo from "@/assets/trippy-logo.png";
+import { AiCostTile } from "@/components/AiCostTile";
 
 const nav = [
   { to: "/", label: "Trips", icon: Home },
@@ -8,8 +9,15 @@ const nav = [
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
+function tripIdFromPath(pathname: string): string | null {
+  const match = pathname.match(/^\/trip\/([^/]+)/);
+  return match?.[1] ?? null;
+}
+
 export const AppShell = ({ children }: { children: React.ReactNode }) => {
   const { pathname } = useLocation();
+  const tripId = tripIdFromPath(pathname);
+
   return (
     <div className="min-h-screen flex flex-col md:flex-row">
       {/* Sidebar */}
@@ -36,15 +44,7 @@ export const AppShell = ({ children }: { children: React.ReactNode }) => {
             );
           })}
         </nav>
-        <div className="hidden md:flex mt-auto items-center gap-3 p-3 rounded-2xl bg-gradient-sky border-2 border-foreground/10">
-          <div className="h-10 w-10 rounded-full bg-gradient-sunset flex items-center justify-center text-primary-foreground font-bold border-2 border-foreground/80">
-            K
-          </div>
-          <div className="text-sm">
-            <div className="font-bold leading-tight">Kenneth & co.</div>
-            <div className="text-muted-foreground text-xs">Family of 4</div>
-          </div>
-        </div>
+        <AiCostTile tripId={tripId} />
       </aside>
 
       {/* Main */}
