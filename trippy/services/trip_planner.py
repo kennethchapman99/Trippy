@@ -1,4 +1,4 @@
-"""Deterministic new-trip planning drafts."""
+"""Fast-first new-trip planning drafts with optional deep advisor pass."""
 
 from __future__ import annotations
 
@@ -38,17 +38,15 @@ class TripPlannerService:
     def _path(self, trip_id: str) -> Path:
         return self._dir / f"{trip_id}.draft.json"
 
-    def draft(self, trip_id: str) -> TripPlanDraft:
+    def draft(self, trip_id: str, *, depth: str = "fast") -> TripPlanDraft:
+        normalized_depth = "deep" if depth == "deep" else "fast"
         intake = self._intakes.require(trip_id)
-        draft = self._build_draft(intake)
-        draft.advisor = (
-            PlanningAdvisorService(enabled=False)
-            .advise_trip_shape(
-                intake,
-                draft,
-            )
-            .model_dump(mode="json")
-        )
+        draft = self._build_draft(intake, depth=normalized_depth)
+        advisor = PlanningAdvisorService(depth=normalized_depth).advise_trip_shape(intake, draft)
+        advisor_payload = advisor.model_dump(mode="json")
+        advisor_payload["depth"] = normalized_depth
+        advisor_payload["deep_available"] = normalized_depth == "fast"
+        draft.advisor = advisor_payload
         self.save_draft(draft)
         return draft
 
@@ -80,14 +78,14 @@ class TripPlannerService:
     def path_for(self, trip_id: str) -> Path:
         return self._path(trip_id)
 
-    def _build_draft(self, intake: TripIntake) -> TripPlanDraft:
+    def _build_draft(self, intake: TripIntake, *, depth: str = "fast") -> TripPlanDraft:
         if intake.mode == TripIntakeMode.IDEA and intake.destination_seeds:
-            return self._build_generic_selected_destination_draft(intake)
+            return self._build_generic_selected_destination_draft(intake, depth=depth)
         if intake.mode == TripIntakeMode.IDEA:
-            return self._build_idea_draft(intake)
-        return self._build_generic_selected_destination_draft(intake)
+            return self._build_idea_draft(intake, depth=depth)
+        return self._build_generic_selected_destination_draft(intake, depth=depth)
 
-    def _build_idea_draft(self, intake: TripIntake) -> TripPlanDraft:
+    def _build_idea_draft(self, intake: TripIntake, *, depth: str = "fast") -> TripPlanDraft:
         comparison = TripIdeationService().compare(
             TripIdeaRequest(
                 time_of_year=intake.travel_window.display(),
@@ -104,6 +102,7 @@ class TripPlannerService:
                 desired_vibe=intake.freeform_notes,
             ),
             limit=3,
+            depth=depth,
         )
         options = [
             TripPlanOption(
@@ -112,9 +111,7 @@ class TripPlannerService:
                 summary=", ".join(concept.destinations),
                 duration_days=concept.recommended_duration_days,
                 regions=concept.destinations,
-                nights_by_region=_even_nights(
-                    concept.destinations, concept.recommended_duration_days
-                ),
+                nights_by_region=_even_nights(concept.destinations, concept.recommended_duration_days),
                 rationale=concept.rationale,
                 travel_burden=concept.estimated_travel_burden,
                 island_region_movement_friction="Requires live validation by exact route and lodging sequence.",
@@ -138,10 +135,18 @@ class TripPlannerService:
             options=options,
             recommended_option_id=comparison.recommended_concept_id,
             assumptions=comparison.scoring_notes,
-            source_notes=["Idea-stage draft generated from existing trip ideation service."],
+            source_notes=[
+                f"Idea-stage draft generated in {depth} mode from trip ideation service.",
+                "Fast mode is the default; run depth=deep only after narrowing or selection.",
+            ],
         )
 
-    def _build_generic_selected_destination_draft(self, intake: TripIntake) -> TripPlanDraft:
+    def _build_generic_selected_destination_draft(
+        self,
+        intake: TripIntake,
+        *,
+        depth: str = "fast",
+    ) -> TripPlanDraft:
         duration = intake.duration_days or 8
         geography = intake.geography
         geography_regions = geography.region_names() if geography else []
@@ -156,16 +161,10 @@ class TripPlannerService:
         map_seed_queries = geography.map_seed_queries() if geography else list(intake.destination_seeds)
         single_base_region = planning_regions[0] if planning_regions else destination
         balanced_regions = planning_regions[:2] or [single_base_region]
-        signal = (
-            self._country_priors.fit_for_country(geography.country)
-            if geography and geography.country
-            else None
-        )
+        signal = self._country_priors.fit_for_country(geography.country) if geography and geography.country else None
         signals = [signal.rationale] if signal else []
         if not signals:
-            signals = [
-                "No direct country prior matched; require live evidence and family-fit validation."
-            ]
+            signals = ["No direct country prior matched; require live evidence and family-fit validation."]
         fuller_regions = _fuller_regions(planning_regions, single_base_region)
         options = [
             TripPlanOption(
@@ -191,8 +190,7 @@ class TripPlannerService:
                 ],
                 recommendation_strength=78,
                 lodging_strategy=intake.lodging_preferences.non_city_strategy,
-                car_strategy=intake.car_rental_expectations.notes
-                or "Validate car need against local roads, parking, and transfer options.",
+                car_strategy=intake.car_rental_expectations.notes or "Validate car need against local roads, parking, and transfer options.",
                 country_prior_signals=signals,
                 map_seed_queries=map_seed_queries,
                 required_research=_required_research(),
@@ -204,10 +202,7 @@ class TripPlannerService:
                 duration_days=duration,
                 regions=balanced_regions,
                 nights_by_region=_even_nights(balanced_regions, duration),
-                rationale=[
-                    "Balances depth with a broader sense of place.",
-                    "Usually the best pattern if the trip is at least 8-10 days.",
-                ],
+                rationale=["Balances depth with a broader sense of place.", "Usually the best pattern if the trip is at least 8-10 days."],
                 travel_burden="requires live flight and transfer validation",
                 island_region_movement_friction="moderate; one mid-trip transition with buffer",
                 family_comfort_score=80 if duration >= 8 else 68,
@@ -234,9 +229,7 @@ class TripPlannerService:
                     "Only worth choosing if each extra stop materially improves beach, food, activity, or drive-time fit.",
                 ],
                 travel_burden="requires live transfer, drive-time, and lodging validation",
-                island_region_movement_friction=(
-                    "higher: more local movement and possible extra lodging handoffs"
-                ),
+                island_region_movement_friction="higher: more local movement and possible extra lodging handoffs",
                 family_comfort_score=76 if duration >= 8 else 66,
                 food_fit="Best if the extra areas unlock clearly better meals or easier activity timing.",
                 driving_fit="Validate drive times, parking, and whether a single lodging base can cover the same activities.",
@@ -246,9 +239,7 @@ class TripPlannerService:
                     "Short trips may be better served by day trips from one strong base.",
                 ],
                 recommendation_strength=74 if duration >= 8 else 58,
-                lodging_strategy=(
-                    "Treat as a stress test: use multiple stays only if each lodging move earns its friction cost."
-                ),
+                lodging_strategy="Treat as a stress test: use multiple stays only if each lodging move earns its friction cost.",
                 car_strategy="Compare rental-car coverage against private transfers and day-trip operators.",
                 country_prior_signals=signals,
                 map_seed_queries=map_seed_queries,
@@ -266,6 +257,7 @@ class TripPlannerService:
             options=options,
             recommended_option_id=recommended,
             assumptions=[
+                f"Draft generated in {depth} mode; advisor metadata records model, latency, and cache status when LLM is enabled.",
                 "Generic selected-destination draft uses canonical TripGeography so connector inputs separate airports from map/search locations.",
                 "Enrich TripGeography with scanner evidence before connector-specific searches that require resolved facts.",
             ],
@@ -296,12 +288,8 @@ def _normalize_loaded_draft(draft: TripPlanDraft) -> TripPlanDraft:
     for option in draft.options:
         if option.option_id == "single-base-easy" and len(option.regions) > 1:
             primary = option.regions[0]
-            total_nights = sum(option.nights_by_region.values()) or max(
-                1, option.duration_days - 1
-            )
-            option.title = option.title.replace(
-                ", ".join(option.regions), primary, 1
-            )
+            total_nights = sum(option.nights_by_region.values()) or max(1, option.duration_days - 1)
+            option.title = option.title.replace(", ".join(option.regions), primary, 1)
             option.regions = [primary]
             option.nights_by_region = {primary: total_nights}
         if option.option_id == "two-region-balanced" and option.nights_by_region:
