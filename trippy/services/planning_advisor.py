@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import anthropic
-
 from trippy import config
 from trippy.memory.store import MemoryStore
 from trippy.models.ideas import TripComparison, TripIdeaRequest
@@ -15,9 +13,11 @@ from trippy.models.preferences import FamilyTravelPreferences
 from trippy.models.shortlists import ResearchShortlistState
 from trippy.models.trip_planning import TripIntake, TripPlanDraft, TripPlanOption
 from trippy.services.country_priors import CountryPriorService
+from trippy.services.llm_client import TrippyLLMClient
 
-_PROMPT_VERSION = "planning-advisor-v1"
-_MAX_TOKENS = 1800
+_PROMPT_VERSION = "planning-advisor-v2-fast-deep"
+_MAX_TOKENS_FAST = 1200
+_MAX_TOKENS_DEEP = 2200
 
 
 class PlanningAdvisorService:
@@ -33,15 +33,20 @@ class PlanningAdvisorService:
         preferences: FamilyTravelPreferences | None = None,
         memory: MemoryStore | None = None,
         anthropic_client: Any | None = None,
+        llm_client: TrippyLLMClient | None = None,
         enabled: bool | None = None,
         model: str | None = None,
+        depth: str = "fast",
     ) -> None:
         self._prefs = preferences or FamilyTravelPreferences()
         self._memory = memory or MemoryStore(config.MEMORY_PATH)
-        self._client = anthropic_client
+        self._depth = "deep" if depth == "deep" else "fast"
+        self._mode = config.PLANNING_LLM_MODE
         self._enabled = config.PLANNING_LLM_ENABLED if enabled is None else enabled
-        self._model = model or config.PLANNING_LLM_MODEL
+        self._model = model or _model_for_depth(self._depth)
+        self._max_tokens = _MAX_TOKENS_DEEP if self._depth == "deep" else _MAX_TOKENS_FAST
         self._country_priors = CountryPriorService()
+        self._llm = llm_client or TrippyLLMClient(anthropic_client=anthropic_client)
 
     def advise_trip_ideas(
         self,
@@ -61,6 +66,11 @@ class PlanningAdvisorService:
             PlanningAdviceKind.TRIP_IDEAS,
             prompt,
             fallback="Use the highest scoring duration-fit concept, then ask the user to confirm or reject it before detailed intake.",
+            cache_payload={
+                "request": request.model_dump(mode="json"),
+                "comparison": _compact_dump(comparison.model_dump(mode="json"), ["advisor"]),
+                "depth": self._depth,
+            },
         )
 
     def advise_trip_shape(
@@ -81,6 +91,12 @@ class PlanningAdvisorService:
             PlanningAdviceKind.TRIP_SHAPE,
             prompt,
             fallback="Use the recommended plan option until exact flights, lodging, and local logistics prove a better structure.",
+            trip_id=intake.trip_id,
+            cache_payload={
+                "intake": _intake_payload(intake),
+                "draft": _compact_dump(draft.model_dump(mode="json"), ["advisor"]),
+                "depth": self._depth,
+            },
         )
 
     def advise_lodging_structure(
@@ -103,6 +119,13 @@ class PlanningAdvisorService:
             PlanningAdviceKind.LODGING_STRUCTURE,
             prompt,
             fallback="Keep the selected plan's stay structure, but only split stays when reduced backtracking clearly beats check-in, luggage, and bed-validation friction.",
+            trip_id=intake.trip_id,
+            cache_payload={
+                "intake": _intake_payload(intake),
+                "option": option.model_dump(mode="json"),
+                "shortlist": _shortlist_summary(state) if state is not None else {},
+                "depth": self._depth,
+            },
         )
 
     def advise_island_experience(
@@ -123,6 +146,12 @@ class PlanningAdvisorService:
             PlanningAdviceKind.ISLAND_EXPERIENCE,
             prompt,
             fallback="Experience the island through a small number of strong geographic clusters with downtime and weather backups, not by chasing every sight.",
+            trip_id=intake.trip_id,
+            cache_payload={
+                "intake": _intake_payload(intake),
+                "draft": _compact_dump(draft.model_dump(mode="json"), ["advisor"]),
+                "depth": self._depth,
+            },
         )
 
     def advise_next_steps(
@@ -148,6 +177,16 @@ class PlanningAdvisorService:
             PlanningAdviceKind.NEXT_STEPS,
             prompt,
             fallback="Resolve the earliest high-impact unknown: exact flights, lodging structure, lodging fit, car need, or dated activities.",
+            trip_id=intake.trip_id if intake is not None else None,
+            cache_payload={
+                "intake": _intake_payload(intake) if intake is not None else {},
+                "draft": _compact_dump(draft.model_dump(mode="json"), ["advisor"])
+                if draft is not None
+                else {},
+                "shortlists": [_shortlist_summary(state) for state in shortlists or []],
+                "user_question": user_question,
+                "depth": self._depth,
+            },
         )
 
     def _prompt(
@@ -167,20 +206,18 @@ class PlanningAdvisorService:
             signal = self._country_priors.fit_for_country(intake.geography.country)
             if signal:
                 country_signals.append(signal.model_dump(mode="json"))
-        memory_context = self._memory.to_context_string()
+        memory_context = "" if self._depth == "fast" else self._memory.to_context_string()
         parts = [
-            f"# Trippy Planning Advisor ({_PROMPT_VERSION})",
+            f"# Trippy Planning Advisor ({_PROMPT_VERSION}, depth={self._depth})",
             "You are Trippy's senior trip-strategy LLM for the Chapman family.",
             "",
             "## Non-Negotiables",
             "- Optimize comfort, convenience, safety, family smoothness, and food quality above raw lowest price.",
             "- Never invent prices, availability, flight numbers, bed layouts, drive times, or booking facts.",
             "- If evidence is missing, say what must be verified and keep confidence appropriately limited.",
-            "- Treat memory and country priors as directional evidence, not rigid rules.",
             "- Keep recommendations practical: one or two strong calls beat a menu of weak possibilities.",
-            "- Preserve review-gated learning: propose lessons only as recommendations for review, never mutate memory.",
             "",
-            self._prefs.to_context_string(),
+            _preference_context(self._prefs, self._depth),
         ]
         if memory_context:
             parts.extend(["", memory_context])
@@ -233,80 +270,107 @@ class PlanningAdvisorService:
         prompt: str,
         *,
         fallback: str,
+        trip_id: str | None = None,
+        cache_payload: Any | None = None,
     ) -> PlanningAdviceResult:
         if not self._enabled:
-            return PlanningAdviceResult(
-                kind=kind,
+            return _fallback_result(
+                kind,
                 status="disabled",
                 model=self._model,
-                prompt_version=_PROMPT_VERSION,
                 prompt=prompt,
-                summary=fallback,
-                recommendation=fallback,
-                next_actions=[
-                    "Enable TRIPPY_PLANNING_LLM_ENABLED with ANTHROPIC_API_KEY for LLM strategy calls."
-                ],
+                fallback=fallback,
                 confidence=0.35,
+                next_action="Enable TRIPPY_PLANNING_LLM_ENABLED with ANTHROPIC_API_KEY for LLM strategy calls.",
+                raw_status={"depth": self._depth, "model": self._model, "cache_hit": False},
             )
-        if not config.ANTHROPIC_API_KEY and self._client is None:
-            return PlanningAdviceResult(
-                kind=kind,
-                status="skipped_no_api_key",
+        parsed = self._llm.complete_json(
+            service="planning_advisor",
+            trip_id=trip_id,
+            model=self._model,
+            prompt=prompt,
+            system="You are a concise, evidence-bound travel planning strategist. Return valid JSON only.",
+            prompt_version=_PROMPT_VERSION,
+            cache_payload=cache_payload or prompt,
+            max_tokens=self._max_tokens,
+            mode=self._mode,
+        )
+        llm_status = parsed.get("_llm_status") if isinstance(parsed.get("_llm_status"), dict) else {}
+        status_text = str(llm_status.get("status") or parsed.get("status") or "llm_success")
+        if status_text in {"llm_failed", "skipped", "skipped_no_api_key"}:
+            return _fallback_result(
+                kind,
+                status=status_text,
                 model=self._model,
-                prompt_version=_PROMPT_VERSION,
                 prompt=prompt,
-                summary=fallback,
-                recommendation=fallback,
-                next_actions=[
-                    "Set ANTHROPIC_API_KEY to enable preference-rich LLM planning advice."
-                ],
-                confidence=0.35,
-            )
-
-        try:
-            client = self._client or anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-            response = client.messages.create(
-                model=self._model,
-                max_tokens=_MAX_TOKENS,
-                system=(
-                    "You are a concise, evidence-bound travel planning strategist. "
-                    "Return valid JSON only."
-                ),
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = _response_text(response)
-            parsed = _parse_json_response(text)
-            return PlanningAdviceResult(
-                kind=kind,
-                status="llm_success",
-                model=self._model,
-                prompt_version=_PROMPT_VERSION,
-                prompt=prompt,
-                summary=str(parsed.get("summary") or ""),
-                recommendation=str(parsed.get("recommendation") or ""),
-                rationale=_string_list(parsed.get("rationale")),
-                next_actions=_string_list(parsed.get("next_actions")),
-                questions_for_user=_string_list(parsed.get("questions_for_user")),
-                warnings=_string_list(parsed.get("warnings")),
-                evidence_needed=_string_list(parsed.get("evidence_needed")),
-                stay_strategy=str(parsed.get("stay_strategy") or ""),
-                night_plan=_dict_list(parsed.get("night_plan")),
-                confidence=_float(parsed.get("confidence"), 0.55),
-                raw_response=text,
-            )
-        except Exception as exc:
-            return PlanningAdviceResult(
-                kind=kind,
-                status="llm_failed",
-                model=self._model,
-                prompt_version=_PROMPT_VERSION,
-                prompt=prompt,
-                summary=fallback,
-                recommendation=fallback,
-                next_actions=["Retry the planning-advisor call after checking the LLM setup."],
+                fallback=fallback,
                 confidence=0.25,
-                error=str(exc),
+                next_action="Retry after checking the LLM setup, or keep working from deterministic fallback guidance.",
+                raw_status={**llm_status, "depth": self._depth},
+                error=str(parsed.get("error") or ""),
             )
+        return PlanningAdviceResult(
+            kind=kind,
+            status="cache_hit" if status_text == "cache_hit" else "llm_success",
+            model=self._model,
+            prompt_version=_PROMPT_VERSION,
+            prompt=prompt,
+            summary=str(parsed.get("summary") or fallback),
+            recommendation=str(parsed.get("recommendation") or fallback),
+            rationale=_string_list(parsed.get("rationale")),
+            next_actions=_string_list(parsed.get("next_actions")),
+            questions_for_user=_string_list(parsed.get("questions_for_user")),
+            warnings=_string_list(parsed.get("warnings")),
+            evidence_needed=_string_list(parsed.get("evidence_needed")),
+            stay_strategy=str(parsed.get("stay_strategy") or ""),
+            night_plan=_dict_list(parsed.get("night_plan")),
+            confidence=_float(parsed.get("confidence"), 0.55),
+            raw_response=_json({"llm_status": llm_status, "depth": self._depth}),
+        )
+
+
+def _model_for_depth(depth: str) -> str:
+    return config.PLANNING_ADVISOR_DEEP_MODEL if depth == "deep" else config.PLANNING_ADVISOR_MODEL
+
+
+def _preference_context(preferences: FamilyTravelPreferences, depth: str) -> str:
+    if depth == "deep":
+        return preferences.to_context_string()
+    return "\n".join(
+        [
+            "## Compact Family Preferences",
+            "- Home airport/default origin: YYZ unless overridden.",
+            "- Optimize for low-friction family travel, real comfort, food quality, and realistic pacing.",
+            "- Avoid overpacked trips, weak lodging fit, unclear beds, stressful transfers, and hidden logistics.",
+        ]
+    )
+
+
+def _fallback_result(
+    kind: PlanningAdviceKind,
+    *,
+    status: str,
+    model: str,
+    prompt: str,
+    fallback: str,
+    confidence: float,
+    next_action: str,
+    raw_status: dict[str, Any],
+    error: str = "",
+) -> PlanningAdviceResult:
+    return PlanningAdviceResult(
+        kind=kind,
+        status=status,
+        model=model,
+        prompt_version=_PROMPT_VERSION,
+        prompt=prompt,
+        summary=fallback,
+        recommendation=fallback,
+        next_actions=[next_action],
+        confidence=confidence,
+        raw_response=_json({"llm_status": raw_status}),
+        error=error,
+    )
 
 
 def _intake_payload(intake: TripIntake) -> dict[str, Any]:
@@ -378,33 +442,6 @@ def _compact_dump(payload: Any, excluded_keys: list[str]) -> Any:
     if isinstance(payload, list):
         return [_compact_dump(value, excluded_keys) for value in payload]
     return payload
-
-
-def _response_text(response: Any) -> str:
-    parts: list[str] = []
-    for block in getattr(response, "content", []):
-        if getattr(block, "type", "") == "text":
-            parts.append(str(getattr(block, "text", "")))
-    return "\n".join(part for part in parts if part).strip()
-
-
-def _parse_json_response(text: str) -> dict[str, Any]:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = stripped.strip("`")
-        if stripped.startswith("json"):
-            stripped = stripped.removeprefix("json").strip()
-    try:
-        data = json.loads(stripped)
-    except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise
-        data = json.loads(stripped[start : end + 1])
-    if not isinstance(data, dict):
-        raise ValueError("Planning advisor response must be a JSON object")
-    return data
 
 
 def _string_list(value: Any) -> list[str]:
