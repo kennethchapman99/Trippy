@@ -32,7 +32,9 @@ from trippy.models.shortlists import (
 from trippy.models.source_research import (
     EvidenceArtifact,
     SourceAdapterCapability,
+    SourceExtractedField,
     SourceObservation,
+    SourceResearchExtraction,
     SourceResearchMode,
     SourceResearchRequest,
     SourceResearchResult,
@@ -41,6 +43,7 @@ from trippy.models.source_research import (
 from trippy.models.web_research import WebResearchResult
 from trippy.services.firecrawl import FirecrawlService
 from trippy.services.learning import LearningEventStore
+from trippy.services.llm_client import TrippyLLMClient
 
 HtmlFetchResult = tuple[str, str, list[str]]
 HtmlFetcher = Callable[[str, float], HtmlFetchResult]
@@ -63,6 +66,70 @@ class SourceResearchAdapter(Protocol):
     ) -> SourceResearchResult:
         """Return structured observations and evidence for the request."""
         ...
+
+
+class SourceResearchLLMExtractor:
+    """Strict JSON extractor over observed source text."""
+
+    def __init__(
+        self,
+        *,
+        anthropic_client: Any | None = None,
+        enabled: bool | None = None,
+        model: str | None = None,
+    ) -> None:
+        self._enabled = (
+            config.TRIPPY_SOURCE_RESEARCH_LLM_ENABLED if enabled is None else enabled
+        )
+        self._model = model or config.TRIPPY_SOURCE_RESEARCH_EXTRACTOR_MODEL
+        self._llm = TrippyLLMClient(anthropic_client=anthropic_client)
+
+    def extract(
+        self,
+        *,
+        category: str,
+        candidate_name: str,
+        source_url: str,
+        raw_text: str,
+        expected_fields: list[str] | None = None,
+        trip_id: str | None = None,
+    ) -> SourceResearchExtraction:
+        fields = expected_fields or _missing_fields_for_category(category)
+        if not self._enabled:
+            return SourceResearchExtraction(
+                status="failed",
+                category=category,
+                source_url=source_url,
+                candidate_name=candidate_name,
+                missing_fields=fields,
+                warnings=["Source-research LLM extraction is disabled."],
+            )
+        prompt = _source_extractor_prompt(category, candidate_name, source_url, raw_text, fields)
+        result = self._llm.complete_json(
+            service="source_research",
+            model=self._model,
+            prompt=prompt,
+            system=(
+                "Extract only source-grounded travel facts into strict JSON. "
+                "Every extracted field must include a short evidence snippet. Do not infer missing facts."
+            ),
+            max_tokens=2200,
+            trip_id=trip_id,
+            prompt_version="source-research-extractor-v1",
+            metadata={"category": category, "candidate_name": candidate_name},
+        )
+        if result.status != "success" or result.json is None:
+            return SourceResearchExtraction(
+                status="failed",
+                category=category,
+                source_url=source_url,
+                candidate_name=candidate_name,
+                missing_fields=fields,
+                warnings=[result.error or result.status],
+            )
+        return _source_extraction_from_payload(
+            result.json, category, source_url, candidate_name, fields
+        )
 
 
 class SourceResearchService:
@@ -227,7 +294,7 @@ class SourceResearchService:
                     return result
                 continue
             if adapter.capability == SourceAdapterCapability.OPENCLAW:
-                return first_result
+                return first_result or result
         if first_result is not None:
             return first_result
         return _result(
@@ -377,6 +444,17 @@ class FirecrawlResearchAdapter:
             )
         text = first.raw_markdown_excerpt
         evidence_url = first.source_url or request.source_url
+        llm_extraction = SourceResearchLLMExtractor().extract(
+            category=request.category,
+            candidate_name=request.candidate_name,
+            source_url=evidence_url,
+            raw_text=text,
+            expected_fields=_missing_fields_for_category(request.category),
+            trip_id=request.trip_id,
+        )
+        llm_observations = _observations_from_extraction(llm_extraction)
+        if llm_observations:
+            observations = _merge_observations(observations, llm_observations)
         if not observations:
             observations = [
                 SourceObservation(field="raw_markdown_excerpt", value=text[:400], confidence=0.4)
@@ -407,7 +485,9 @@ class FirecrawlResearchAdapter:
             ],
             notes=[
                 "Firecrawl provided public-web enrichment only; live inventory and booking truth remain official APIs.",
+                f"LLM extraction status: {llm_extraction.status}.",
                 *first.warnings,
+                *llm_extraction.warnings,
             ],
             missing_fields=missing_fields,
         )
@@ -1319,14 +1399,44 @@ def _apply_flight_observations(option: Any, result: SourceResearchResult, *, run
         option.live_data_status = LiveDataStatus.HANDOFF_REQUIRED
 
     observations = validation.extracted_fields
+    original_departure_date = str(getattr(option, "departure_date", "") or "")
+    original_arrival_date = str(getattr(option, "arrival_date", "") or "")
     if isinstance(observations.get("airline"), str):
         option.airline = str(observations["airline"])
     if isinstance(observations.get("flight_numbers"), list):
         option.flight_numbers = [str(value) for value in observations["flight_numbers"]]
-    if isinstance(observations.get("departure_date"), str):
-        option.departure_date = str(observations["departure_date"])
-    if isinstance(observations.get("arrival_date"), str):
-        option.arrival_date = str(observations["arrival_date"])
+    observed_departure_date = (
+        str(observations["departure_date"])
+        if isinstance(observations.get("departure_date"), str)
+        else ""
+    )
+    observed_arrival_date = (
+        str(observations["arrival_date"])
+        if isinstance(observations.get("arrival_date"), str)
+        else ""
+    )
+    if observed_departure_date and _plausible_flight_date_span(
+        observed_departure_date,
+        observed_arrival_date or original_arrival_date,
+        str(getattr(option, "total_travel_duration", "") or ""),
+    ):
+        option.departure_date = observed_departure_date
+    if observed_arrival_date and _plausible_flight_date_span(
+        observed_departure_date or original_departure_date,
+        observed_arrival_date,
+        str(getattr(option, "total_travel_duration", "") or ""),
+    ):
+        option.arrival_date = observed_arrival_date
+    elif observed_arrival_date:
+        validation.notes = _dedupe_notes(
+            [
+                *validation.notes,
+                (
+                    "Ignored source-research arrival date because it implied an impossible "
+                    "flight span for the provider duration."
+                ),
+            ]
+        )
     if isinstance(observations.get("departure_time"), str):
         option.departure_time = str(observations["departure_time"])
     if isinstance(observations.get("arrival_time"), str):
@@ -1340,8 +1450,17 @@ def _apply_flight_observations(option: Any, result: SourceResearchResult, *, run
     if isinstance(observations.get("layover_duration"), str):
         option.layover_duration = str(observations["layover_duration"])
     if isinstance(observations.get("price_signal"), str):
-        option.fare_estimate_cad = str(observations["price_signal"])
-        option.price_band = str(observations["price_signal"])
+        price_signal = str(observations["price_signal"])
+        if _plausible_flight_price_signal(price_signal):
+            option.fare_estimate_cad = price_signal
+            option.price_band = price_signal
+        else:
+            validation.notes = _dedupe_notes(
+                [
+                    *validation.notes,
+                    "Ignored source-research price signal because it was implausibly low for a flight fare.",
+                ]
+            )
     notes = []
     if isinstance(observations.get("cabin_signal"), str):
         notes.append(str(observations["cabin_signal"]))
@@ -1358,6 +1477,47 @@ def _apply_flight_observations(option: Any, result: SourceResearchResult, *, run
             ]
         )
     option.validation = validation
+
+
+def _plausible_flight_date_span(departure_date: str, arrival_date: str, duration: str) -> bool:
+    try:
+        departure = datetime.fromisoformat(departure_date).date()
+        arrival = datetime.fromisoformat(arrival_date).date()
+    except ValueError:
+        return True
+    offset_days = (arrival - departure).days
+    if offset_days <= 2:
+        return True
+    duration_hours = _duration_hours(duration)
+    if duration_hours is None:
+        return True
+    return duration_hours + 12 >= offset_days * 24
+
+
+def _duration_hours(value: str) -> float | None:
+    text = value.lower()
+    hours = 0.0
+    matched = False
+    hour_match = re.search(r"(\d+(?:\.\d+)?)\s*h", text)
+    minute_match = re.search(r"(\d+)\s*m", text)
+    if hour_match:
+        hours += float(hour_match.group(1))
+        matched = True
+    if minute_match:
+        hours += int(minute_match.group(1)) / 60
+        matched = True
+    if matched:
+        return hours
+    decimal_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:hour|hr)", text)
+    return float(decimal_match.group(1)) if decimal_match else None
+
+
+def _plausible_flight_price_signal(value: str) -> bool:
+    match = re.search(r"([\d][\d,]*(?:\.\d{2})?)", value or "")
+    if not match:
+        return True
+    amount = float(match.group(1).replace(",", ""))
+    return amount >= 50
 
 
 def _apply_activity_observations(option: Any, result: SourceResearchResult, *, run_id: str) -> None:
@@ -2769,6 +2929,131 @@ def _coerce_mode(value: SourceResearchMode | str) -> SourceResearchMode:
 
 def _new_run_id() -> str:
     return f"research-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
+
+def _source_extractor_prompt(
+    category: str,
+    candidate_name: str,
+    source_url: str,
+    raw_text: str,
+    expected_fields: list[str],
+) -> str:
+    schema = {
+        "status": "success|partial|no_relevant_evidence|failed",
+        "category": category,
+        "source_url": source_url,
+        "candidate_name": candidate_name,
+        "extracted_fields": {
+            "field_name": {
+                "value": "string|number|boolean|null",
+                "confidence": 0.0,
+                "evidence": "short source-grounded snippet",
+                "evidence_ref": "url/path/adapter artifact",
+            }
+        },
+        "missing_fields": expected_fields,
+        "warnings": ["string"],
+        "summary": "string",
+        "confidence": 0.0,
+    }
+    return "\n".join(
+        [
+            "# Trippy Source Research Extractor (source-research-extractor-v1)",
+            f"Category: {category}",
+            f"Candidate: {candidate_name}",
+            f"Source URL: {source_url}",
+            "Expected fields: " + ", ".join(expected_fields),
+            "Extract a field only when the source text contains evidence for it.",
+            "Do not infer unavailable facts. Keep missing fields missing.",
+            "",
+            "## Source Text",
+            raw_text[:12000],
+            "",
+            "## Output JSON Schema",
+            json.dumps(schema, indent=2, sort_keys=True),
+        ]
+    )
+
+
+def _source_extraction_from_payload(
+    payload: dict[str, Any],
+    category: str,
+    source_url: str,
+    candidate_name: str,
+    expected_fields: list[str],
+) -> SourceResearchExtraction:
+    extracted: dict[str, SourceExtractedField] = {}
+    raw_fields = payload.get("extracted_fields")
+    if isinstance(raw_fields, dict):
+        for field_name, raw_field in raw_fields.items():
+            if not isinstance(raw_field, dict):
+                continue
+            evidence = str(raw_field.get("evidence") or "").strip()
+            if not evidence:
+                continue
+            extracted[str(field_name)] = SourceExtractedField(
+                value=raw_field.get("value"),
+                confidence=_float(raw_field.get("confidence"), 0.5),
+                evidence=evidence[:500],
+                evidence_ref=str(raw_field.get("evidence_ref") or source_url),
+            )
+    missing = _string_list(payload.get("missing_fields"))
+    if not missing:
+        missing = [field for field in expected_fields if field not in extracted]
+    return SourceResearchExtraction(
+        status=str(payload.get("status") or ("success" if extracted else "no_relevant_evidence")),
+        category=str(payload.get("category") or category),
+        source_url=str(payload.get("source_url") or source_url),
+        candidate_name=str(payload.get("candidate_name") or candidate_name),
+        extracted_fields=extracted,
+        missing_fields=missing,
+        warnings=_string_list(payload.get("warnings")),
+        summary=str(payload.get("summary") or ""),
+        confidence=_float(payload.get("confidence"), 0.0),
+    )
+
+
+def _observations_from_extraction(extraction: SourceResearchExtraction) -> list[SourceObservation]:
+    return [
+        SourceObservation(
+            field=field,
+            value=extracted.value,
+            confidence=extracted.confidence,
+            source_url=extraction.source_url,
+            evidence_refs=[extracted.evidence_ref],
+            notes=[extracted.evidence],
+        )
+        for field, extracted in extraction.extracted_fields.items()
+    ]
+
+
+def _merge_observations(
+    original: list[SourceObservation],
+    extracted: list[SourceObservation],
+) -> list[SourceObservation]:
+    by_field = {observation.field: observation for observation in original}
+    for observation in extracted:
+        current = by_field.get(observation.field)
+        if current is None or observation.confidence >= current.confidence:
+            by_field[observation.field] = observation
+    return list(by_field.values())
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _aggregate_status(results: list[SourceResearchResult]) -> str:

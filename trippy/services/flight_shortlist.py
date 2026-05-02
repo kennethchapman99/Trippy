@@ -37,6 +37,11 @@ from trippy.services.shortlist_store import (
     source_plan,
     source_plan_payload,
 )
+from trippy.services.flight_trip_envelope import (
+    apply_trip_envelope_artifacts,
+    select_flight_for_envelope,
+    split_options_by_phase,
+)
 from trippy.services.source_research import SourceResearchService
 from trippy.services.trip_intake import TripIntakeService
 from trippy.services.trip_planner import TripPlannerService
@@ -59,6 +64,7 @@ class FlightShortlistService:
         self,
         trip_id: str,
         *,
+        flight_phase: str = "departure",
         validate_live: bool | None = None,
         deep_research: bool = False,
         adapter_mode: str = "auto",
@@ -68,41 +74,53 @@ class FlightShortlistService:
             intake_service=self._intakes,
             planner_service=self._planner,
         )
+        phase = _normalize_flight_phase(flight_phase)
         plan = source_plan(TravelSourceCategory.FLIGHTS)
         profile = profile_for_intake(ctx.intake)
         gateway = profile.gateway_airports[0] if profile.gateway_airports else ""
         live_options: list[FlightOption] = []
         live_notes: list[str] = []
         if gateway:
-            live_options, live_notes = _duffel_live_options(ctx, gateway)
+            live_options, live_notes = _duffel_live_options(ctx, gateway, flight_phase=phase)
         if not live_options:
             serp_options: list[FlightOption] = []
             serp_notes: list[str] = []
             if gateway:
-                serp_options, serp_notes = _serpapi_live_flights(ctx, gateway)
+                serp_options, serp_notes = _serpapi_live_flights(ctx, gateway, flight_phase=phase)
                 live_notes = [*live_notes, *serp_notes]
                 if serp_options:
                     live_options = serp_options
         options = live_options
-        scanner_fallback = bool(gateway and not live_options and scanner_fallback_available())
+        scanner_fallback = bool(
+            gateway and not live_options and phase == "departure" and scanner_fallback_available()
+        )
         if scanner_fallback:
             fallback_option = _scanner_fallback_option(ctx, gateway)
             if fallback_option is not None:
                 options = [fallback_option]
+        for option in options:
+            option.flight_phase = phase
         if gateway and not options:
             live_notes.append(
                 "No flight options were created because configured flight providers returned no usable live rows; add a user-supplied candidate or configure a live provider."
             )
+        existing = self._store.load(trip_id, ShortlistCategory.FLIGHTS)
+        if existing is not None and phase == "return":
+            departure_options, _ = split_options_by_phase(existing)
+            merged_options = [*departure_options, *options]
+        else:
+            merged_options = options
         state = ResearchShortlistState(
             trip_id=trip_id,
             category=ShortlistCategory.FLIGHTS,
             selected_plan_option_id=ctx.draft.selected_option_id or ctx.draft.recommended_option_id,
             source_routing=source_plan_payload(plan),
-            flight_options=options,
-            recommended_option_id=options[0].option_id if options else None,
+            flight_options=merged_options,
+            recommended_option_id=merged_options[0].option_id if merged_options else None,
             recommendation_summary=(
                 "Flight options require explicit origin and destination airport codes plus live provider rows or user-supplied itinerary evidence."
             ),
+            artifacts=existing.artifacts if existing is not None else {},
             warnings=[
                 (
                     "Live Duffel offers populated exact flight rows."
@@ -122,6 +140,16 @@ class FlightShortlistService:
                 "Reject multi-ticket routings unless airport, baggage, and delay protection are clearly acceptable.",
             ],
         )
+        if phase == "departure":
+            state.next_actions.insert(
+                0,
+                "After selecting an outbound flight, call build(flight_phase='return') to search return options.",
+            )
+        elif phase == "return":
+            state.next_actions.insert(
+                0,
+                "Select a return flight to lock the trip envelope and unlock workspace finalization.",
+            )
         LiveValidationService().validate_state(state, attempt_network=validate_live)
         if deep_research:
             SourceResearchService().research_state(state, adapter_mode=adapter_mode)
@@ -135,6 +163,7 @@ class FlightShortlistService:
                 ),
             )
         _refresh_flight_recommendations(state, ctx)
+        apply_trip_envelope_artifacts(state)
         return self._store.save(state)
 
     def add_candidate(
@@ -205,23 +234,8 @@ class FlightShortlistService:
         option_ids = {option.option_id for option in state.flight_options}
         if option_id not in option_ids:
             raise ValueError(f"Flight option {option_id!r} was not found for trip {trip_id!r}")
+        state = select_flight_for_envelope(state, option_id, selection_kind=selection_kind)
         kind = _normalize_selection_kind(selection_kind)
-        selection = dict(state.artifacts.get("flight_selection") or {})
-        selection[f"selected_{kind}_option_id"] = option_id
-        state.artifacts["flight_selection"] = selection
-        if kind == "outbound":
-            state.recommended_option_id = option_id
-        for option in state.flight_options:
-            if option.option_id == option_id:
-                option.row_status = ShortlistRowStatus.APPROVED
-                option.recommendation_label = (
-                    "Departure selected" if kind == "outbound" else "Return selected"
-                )
-                option.planning_next_step = (
-                    "Use this departure timing to verify lodging check-in, car pickup, and first-day pacing."
-                    if kind == "outbound"
-                    else "Use this return timing to constrain final-night lodging, checkout, car dropoff, and last-day pacing."
-                )
         _refresh_flight_recommendations(state, ctx, preserve_selection=True)
         _write_flight_selection_artifact(state)
         state.next_actions.insert(
@@ -303,25 +317,35 @@ def _scanner_fallback_option(
     )
 
 
+def _normalize_flight_phase(value: str) -> str:
+    normalized = (value or "departure").strip().lower()
+    return "return" if normalized in {"return", "inbound", "homebound"} else "departure"
+
+
 def _duffel_live_options(
     ctx: ShortlistContext,
     gateway: str,
+    *,
+    flight_phase: str = "departure",
 ) -> tuple[list[FlightOption], list[str]]:
     token = config.DUFFEL_ACCESS_TOKEN.strip()
     if not token:
         return [], ["DUFFEL_ACCESS_TOKEN is not configured, so flight rows are search handoffs."]
-    origin = _iata_or_text(
+    home = _iata_or_text(
         ctx.intake.departure_airports[0] if ctx.intake.departure_airports else "YYZ"
     )
-    destination = _iata_or_text(gateway)
-    if not _looks_like_iata(origin) or not _looks_like_iata(destination):
+    dest = _iata_or_text(gateway)
+    if not _looks_like_iata(home) or not _looks_like_iata(dest):
         return [], [
-            f"Duffel live search skipped because route codes are not IATA: {origin} to {destination}."
+            f"Duffel live search skipped because route codes are not IATA: {home} to {dest}."
         ]
+    origin = dest if flight_phase == "return" else home
+    destination = home if flight_phase == "return" else dest
     departure_date, return_date = _flight_dates(ctx)
+    search_date = return_date if flight_phase == "return" else departure_date
     try:
         payload = _duffel_offer_request_payload(
-            ctx, origin, destination, departure_date, return_date
+            ctx, origin, destination, search_date
         )
         response = _post_duffel_offer_request(token, payload)
     except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
@@ -385,8 +409,7 @@ def _duffel_offer_request_payload(
     ctx: ShortlistContext,
     origin: str,
     destination: str,
-    departure_date: date,
-    return_date: date,
+    search_date: date,
 ) -> dict[str, object]:
     return {
         "data": {
@@ -394,12 +417,7 @@ def _duffel_offer_request_payload(
                 {
                     "origin": origin,
                     "destination": destination,
-                    "departure_date": departure_date.isoformat(),
-                },
-                {
-                    "origin": destination,
-                    "destination": origin,
-                    "departure_date": return_date.isoformat(),
+                    "departure_date": search_date.isoformat(),
                 },
             ],
             "passengers": _duffel_passengers(ctx),
@@ -915,6 +933,12 @@ def _duffel_price(offer: dict[str, object]) -> str:
     currency = str(offer.get("total_currency") or "")
     if not amount:
         return "live fare returned; amount unavailable"
+    try:
+        amount_value = float(amount.replace(",", ""))
+    except ValueError:
+        amount_value = 0.0
+    if 0 < amount_value < 50:
+        return "live fare returned; verify price before booking"
     if currency.upper() == "CAD":
         return f"CAD {amount} total"
     return f"{currency} {amount} total".strip()
@@ -1595,21 +1619,26 @@ def _timing_fit(arrival: str, departure: str) -> str:
 def _serpapi_live_flights(
     ctx: ShortlistContext,
     gateway: str,
+    *,
+    flight_phase: str = "departure",
 ) -> tuple[list[FlightOption], list[str]]:
     if not serpapi_client.is_configured():
         return [], ["SERPAPI_KEY is not configured, so SerpAPI flight fallback is unavailable."]
-    origin = _iata_or_text(ctx.intake.departure_airports[0] if ctx.intake.departure_airports else "YYZ")
-    destination = _iata_or_text(gateway)
-    if not _looks_like_iata(origin) or not _looks_like_iata(destination):
+    home = _iata_or_text(ctx.intake.departure_airports[0] if ctx.intake.departure_airports else "YYZ")
+    dest = _iata_or_text(gateway)
+    if not _looks_like_iata(home) or not _looks_like_iata(dest):
         return [], [
-            f"SerpAPI flight search skipped because route codes are not IATA: {origin} to {destination}."
+            f"SerpAPI flight search skipped because route codes are not IATA: {home} to {dest}."
         ]
+    origin = dest if flight_phase == "return" else home
+    destination = home if flight_phase == "return" else dest
     departure_date, return_date = _flight_dates(ctx)
+    search_date = return_date if flight_phase == "return" else departure_date
     offers, notes = serpapi_client.search_flights(
         origin=origin,
         destination=destination,
-        departure_date=departure_date,
-        return_date=return_date,
+        departure_date=search_date,
+        return_date=None,
         adults=max(1, ctx.intake.party.adults or 1),
         children=max(0, ctx.intake.party.children or 0),
     )

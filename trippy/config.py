@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -20,6 +21,24 @@ def _bool(key: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _llm_mode(key: str = "TRIPPY_LLM_MODE", default: str = "advisory") -> str:
+    raw = os.environ.get(key, default).strip().lower()
+    return raw if raw in {"off", "advisory", "required", "test"} else default
+
+
+def _json_dict(key: str, default: dict[str, Any]) -> dict[str, Any]:
+    import json
+
+    raw = os.environ.get(key)
+    if not raw:
+        return default
+    try:
+        loaded = json.loads(raw)
+    except json.JSONDecodeError:
+        return default
+    return loaded if isinstance(loaded, dict) else default
 
 
 # Core storage paths
@@ -42,8 +61,43 @@ GOOGLE_TOKEN_PATH: Path = _expand("GOOGLE_TOKEN_PATH", "~/.trippy/google_token.j
 
 # API keys
 ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")
-PLANNING_LLM_MODEL: str = os.environ.get("TRIPPY_PLANNING_LLM_MODEL", "claude-sonnet-4-6")
-PLANNING_LLM_ENABLED: bool = _bool("TRIPPY_PLANNING_LLM_ENABLED", bool(ANTHROPIC_API_KEY))
+TRIPPY_LLM_MODE: str = _llm_mode()
+TRIPPY_AGENT_LLM_MODEL: str = os.environ.get("TRIPPY_AGENT_LLM_MODEL", "claude-sonnet-4-6")
+TRIPPY_PLANNING_ADVISOR_MODEL: str = os.environ.get(
+    "TRIPPY_PLANNING_ADVISOR_MODEL", "claude-opus-4-7"
+)
+TRIPPY_TRIP_IDEATION_MODEL: str = os.environ.get("TRIPPY_TRIP_IDEATION_MODEL", "claude-opus-4-7")
+TRIPPY_TRIP_PLANNER_MODEL: str = os.environ.get("TRIPPY_TRIP_PLANNER_MODEL", "claude-opus-4-7")
+TRIPPY_GEOGRAPHY_RESOLVER_MODEL: str = os.environ.get(
+    "TRIPPY_GEOGRAPHY_RESOLVER_MODEL", "claude-sonnet-4-6"
+)
+TRIPPY_CONFIRMATION_PARSER_MODEL: str = os.environ.get(
+    "TRIPPY_CONFIRMATION_PARSER_MODEL", "claude-sonnet-4-6"
+)
+TRIPPY_SOURCE_RESEARCH_EXTRACTOR_MODEL: str = os.environ.get(
+    "TRIPPY_SOURCE_RESEARCH_EXTRACTOR_MODEL", "claude-sonnet-4-6"
+)
+TRIPPY_FRICTION_LLM_MODEL: str = os.environ.get("TRIPPY_FRICTION_LLM_MODEL", "claude-haiku-4-5")
+TRIPPY_LLM_MODEL_PRICING_USD_PER_M_TOKEN: dict[str, Any] = _json_dict(
+    "TRIPPY_LLM_MODEL_PRICING_USD_PER_M_TOKEN",
+    {
+        TRIPPY_FRICTION_LLM_MODEL: [1.0, 5.0],
+        TRIPPY_AGENT_LLM_MODEL: [3.0, 15.0],
+        TRIPPY_PLANNING_ADVISOR_MODEL: [15.0, 75.0],
+    },
+)
+
+TRIPPY_PLANNING_LLM_ENABLED: bool = _bool("TRIPPY_PLANNING_LLM_ENABLED", True)
+TRIPPY_IDEATION_LLM_ENABLED: bool = _bool("TRIPPY_IDEATION_LLM_ENABLED", True)
+TRIPPY_TRIP_PLANNER_LLM_ENABLED: bool = _bool("TRIPPY_TRIP_PLANNER_LLM_ENABLED", True)
+TRIPPY_LODGING_LLM_ENABLED: bool = _bool("TRIPPY_LODGING_LLM_ENABLED", True)
+TRIPPY_GEOGRAPHY_LLM_ENABLED: bool = _bool("TRIPPY_GEOGRAPHY_LLM_ENABLED", True)
+TRIPPY_SOURCE_RESEARCH_LLM_ENABLED: bool = _bool("TRIPPY_SOURCE_RESEARCH_LLM_ENABLED", True)
+TRIPPY_FRICTION_LLM_ENABLED: bool = _bool("TRIPPY_FRICTION_LLM_ENABLED", False)
+
+# Backward-compatible aliases.
+PLANNING_LLM_MODEL: str = TRIPPY_PLANNING_ADVISOR_MODEL
+PLANNING_LLM_ENABLED: bool = TRIPPY_PLANNING_LLM_ENABLED
 GOOGLE_SHEETS_API_KEY: str = os.environ.get("GOOGLE_SHEETS_API_KEY", "")
 SHERPA_API_KEY: str = os.environ.get("SHERPA_API_KEY", "")
 DUFFEL_ACCESS_TOKEN: str = os.environ.get("DUFFEL_ACCESS_TOKEN", "")

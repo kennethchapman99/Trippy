@@ -87,6 +87,71 @@ def test_azores_golden_path_services(
     selected = planner.select_option(intake.trip_id, "two-region-balanced")
     assert selected.selected_option_id == "two-region-balanced"
 
+    # Seed a flight shortlist with both outbound and return selections so the
+    # two-step envelope lock is satisfied before workspace finalization.
+    store = ShortlistStore()
+    flight_svc = FlightShortlistService(intake_service, planner, store)
+    flight_state = flight_svc.build(intake.trip_id, validate_live=False)
+    if not flight_state.flight_options:
+        from trippy.models.shortlists import (
+            FlightOption,
+            LiveDataStatus,
+            RecommendationGrade,
+            SourceValidation,
+        )
+        flight_state.flight_options = [
+            FlightOption(
+                option_id="test-dep-1",
+                rank=1,
+                flight_phase="departure",
+                airline="Test Air",
+                flight_numbers=["TA100"],
+                departure_airport="YYZ",
+                arrival_airport="PDL",
+                stops=1,
+                total_travel_duration="9h",
+                fare_estimate_cad="CAD 1000",
+                price_band="CAD 1000",
+                baggage_cabin_notes="verify",
+                booking_source="test",
+                deep_link="",
+                friction_score=20,
+                family_comfort_score=80,
+                recommendation_grade=RecommendationGrade.GOOD,
+                live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
+                validation=SourceValidation(source_name="test", confidence=0.5),
+            ),
+            FlightOption(
+                option_id="test-ret-1",
+                rank=2,
+                flight_phase="return",
+                airline="Test Air",
+                flight_numbers=["TA101"],
+                departure_airport="PDL",
+                arrival_airport="YYZ",
+                stops=1,
+                total_travel_duration="9h",
+                fare_estimate_cad="CAD 1000",
+                price_band="CAD 1000",
+                baggage_cabin_notes="verify",
+                booking_source="test",
+                deep_link="",
+                friction_score=20,
+                family_comfort_score=80,
+                recommendation_grade=RecommendationGrade.GOOD,
+                live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
+                validation=SourceValidation(source_name="test", confidence=0.5),
+            ),
+        ]
+        store.save(flight_state)
+    dep_id = next(o.option_id for o in flight_state.flight_options if o.flight_phase == "departure")
+    ret_id = next(
+        (o.option_id for o in flight_state.flight_options if o.flight_phase == "return"),
+        flight_state.flight_options[-1].option_id,
+    )
+    flight_svc.select_flight(intake.trip_id, dep_id, selection_kind="outbound")
+    flight_svc.select_flight(intake.trip_id, ret_id, selection_kind="return")
+
     state = workspace.prepare(intake.trip_id, create_google_sheet=False)
     assert state.status == WorkspaceStatus.PREPARED_LOCAL
     assert state.local_workspace_path is not None
@@ -102,8 +167,8 @@ def test_azores_golden_path_services(
         "Risks",
     }
     tabs = {tab.name: tab for tab in state.tabs}
-    assert tabs["Flights"].rows[0][1] in {"seeded", "researched", "verified_live"}
-    assert tabs["Flights"].rows[0][2] == ""
+    assert tabs["Flights"].rows[0][1] in {"seeded", "researched", "verified_live", "approved"}
+    assert tabs["Flights"].rows[0][2] in {"", "departure", "return", "departure + return", "yes", "no"}
     assert tabs["Lodging"].rows[0][1] in {"recommended", "researched"}
     assert tabs["Cars"].rows[0][8] >= 5
     timeline = tabs["Master Timeline"].rows

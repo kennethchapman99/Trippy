@@ -81,11 +81,11 @@ const Cars = () => {
         stageNumber={5}
         flagCount={flagCount}
       />
-      <div className="px-6 md:px-10 py-5 border-b-2 border-foreground/10 bg-card/60 backdrop-blur sticky top-0 z-30">
+      <div className="px-4 md:px-6 lg:px-8 py-4 border-b-2 border-foreground/10 bg-card/60 backdrop-blur sticky top-0 z-30">
         <StageNav stages={stages} />
       </div>
 
-      <div className="px-6 md:px-10 py-8">
+      <div className="px-4 md:px-6 lg:px-8 py-6">
         <div className="flex items-end justify-between flex-wrap gap-3 mb-4">
           <div>
             <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">
@@ -227,6 +227,16 @@ function priceAmount(value: string): number {
   return m ? parseFloat(m[1].replace(/,/g, "")) : Number.POSITIVE_INFINITY;
 }
 
+function displayCarFare(value: string): string {
+  const text = (value || "").trim();
+  if (!text) return "not live-quoted yet";
+  const price = text.match(/(?:CAD\s*)?(?:CA\$|C\$|\$)\s*[\d,]+(?:\.\d{1,2})?(?:\s*\/\s*(?:day|week|rental))?/i);
+  if (price) return price[0].replace(/\s+/g, " ");
+  if (/not\s+live|live\s+price|required|quote|verify/i.test(text)) return "not live-quoted yet";
+  if (text.length > 42 || /compare|deals|available|search|find|book/i.test(text)) return "live price required";
+  return text;
+}
+
 function CarRow({
   option,
   isRecommended,
@@ -246,7 +256,8 @@ function CarRow({
 }) {
   const label = deriveRowLabel("", isRecommended, option.recommendation_grade);
   const pill = deriveLivePill(option);
-  const fare = option.current_price_signal || option.price_band;
+  const fare = displayCarFare(option.current_price_signal || option.price_band);
+  const seatsLabel = option.seating_capacity ? `${option.seating_capacity} seats` : "Verify seats";
 
   return (
     <article
@@ -266,12 +277,12 @@ function CarRow({
         }
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-[168px_1fr_1fr_minmax(180px,_auto)] gap-5 px-5 py-5">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(340px,38%)_minmax(0,0.85fr)_minmax(0,1fr)_minmax(180px,_auto)] gap-4 px-4 py-4 md:px-5 md:py-5">
         <CarImage option={option} />
         <div className="flex items-start gap-2">
           <Users className="h-5 w-5 text-foreground/50 mt-0.5" />
           <div>
-            <div className="font-[Fredoka] text-2xl font-bold leading-none">{option.seating_capacity ?? "—"} seats</div>
+            <div className="font-[Fredoka] text-2xl font-bold leading-none">{seatsLabel}</div>
             <div className="text-xs text-muted-foreground mt-1.5">{option.passenger_fit}</div>
           </div>
         </div>
@@ -357,13 +368,13 @@ function CarImage({ option }: { option: CarOption }) {
   const imageUrl = option.photo_urls?.find((url) => url.startsWith("http"));
   if (!imageUrl || imgFailed) {
     return (
-      <div className="h-32 md:h-full min-h-32 rounded-2xl border-2 border-foreground/10 bg-muted/60 flex items-center justify-center text-muted-foreground">
+      <div className="h-72 lg:h-full min-h-72 rounded-2xl border-2 border-foreground/10 bg-muted/60 flex items-center justify-center text-muted-foreground">
         <Camera className="h-7 w-7" />
       </div>
     );
   }
   return (
-    <div className="h-32 md:h-full min-h-32 rounded-2xl overflow-hidden border-2 border-foreground/10 bg-muted">
+    <div className="h-72 lg:h-full min-h-72 rounded-2xl overflow-hidden border-2 border-foreground/10 bg-muted">
       <img
         src={imageUrl}
         alt={option.vehicle_class}

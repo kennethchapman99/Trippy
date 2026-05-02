@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import anthropic
-
 from trippy import config
 from trippy.memory.store import MemoryStore
 from trippy.models.ideas import TripComparison, TripIdeaRequest
@@ -15,6 +13,7 @@ from trippy.models.preferences import FamilyTravelPreferences
 from trippy.models.shortlists import ResearchShortlistState
 from trippy.models.trip_planning import TripIntake, TripPlanDraft, TripPlanOption
 from trippy.services.country_priors import CountryPriorService
+from trippy.services.llm_client import TrippyLLMClient
 
 _PROMPT_VERSION = "planning-advisor-v1"
 _MAX_TOKENS = 1800
@@ -38,9 +37,9 @@ class PlanningAdvisorService:
     ) -> None:
         self._prefs = preferences or FamilyTravelPreferences()
         self._memory = memory or MemoryStore(config.MEMORY_PATH)
-        self._client = anthropic_client
-        self._enabled = config.PLANNING_LLM_ENABLED if enabled is None else enabled
-        self._model = model or config.PLANNING_LLM_MODEL
+        self._llm = TrippyLLMClient(anthropic_client=anthropic_client)
+        self._enabled = config.TRIPPY_PLANNING_LLM_ENABLED if enabled is None else enabled
+        self._model = model or config.TRIPPY_PLANNING_ADVISOR_MODEL
         self._country_priors = CountryPriorService()
 
     def advise_trip_ideas(
@@ -248,34 +247,35 @@ class PlanningAdvisorService:
                 ],
                 confidence=0.35,
             )
-        if not config.ANTHROPIC_API_KEY and self._client is None:
-            return PlanningAdviceResult(
-                kind=kind,
-                status="skipped_no_api_key",
-                model=self._model,
-                prompt_version=_PROMPT_VERSION,
-                prompt=prompt,
-                summary=fallback,
-                recommendation=fallback,
-                next_actions=[
-                    "Set ANTHROPIC_API_KEY to enable preference-rich LLM planning advice."
-                ],
-                confidence=0.35,
-            )
-
         try:
-            client = self._client or anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-            response = client.messages.create(
+            result = self._llm.complete_json(
+                service="planning_advisor",
                 model=self._model,
-                max_tokens=_MAX_TOKENS,
+                prompt=prompt,
                 system=(
                     "You are a concise, evidence-bound travel planning strategist. "
                     "Return valid JSON only."
                 ),
-                messages=[{"role": "user", "content": prompt}],
+                max_tokens=_MAX_TOKENS,
+                prompt_version=_PROMPT_VERSION,
+                metadata={"kind": kind.value},
             )
-            text = _response_text(response)
-            parsed = _parse_json_response(text)
+            if result.status != "success" or result.json is None:
+                status = "skipped_no_api_key" if "API_KEY" in result.error else "llm_failed"
+                return PlanningAdviceResult(
+                    kind=kind,
+                    status=status,
+                    model=self._model,
+                    prompt_version=_PROMPT_VERSION,
+                    prompt=prompt,
+                    summary=fallback,
+                    recommendation=fallback,
+                    next_actions=["Retry the planning-advisor call after checking the LLM setup."],
+                    confidence=0.25,
+                    error=result.error,
+                )
+            text = result.text
+            parsed = result.json
             return PlanningAdviceResult(
                 kind=kind,
                 status="llm_success",

@@ -112,6 +112,7 @@ class ActivityShortlistService:
                 ),
             )
         _write_activity_schedule_artifact(state)
+        _annotate_flight_envelope_status(state, trip_id, self._store)
         return self._store.save(state)
 
     def select_activity(self, trip_id: str, option_id: str) -> ResearchShortlistState:
@@ -547,3 +548,28 @@ def _serpapi_activity_key(item: dict[str, Any]) -> str:
         str(item.get(key) or "").strip().lower()
         for key in ("place_id", "data_id", "title", "address")
     )
+
+
+def _annotate_flight_envelope_status(
+    state: ResearchShortlistState,
+    trip_id: str,
+    store: ShortlistStore,
+) -> None:
+    from trippy.models.shortlists import ShortlistCategory
+    from trippy.services.flight_trip_envelope import (
+        TripEnvelopeNotLockedError,
+        assert_trip_envelope_locked,
+    )
+
+    flight_state = store.load(trip_id, ShortlistCategory.FLIGHTS)
+    if flight_state is None:
+        state.warnings.append(
+            "No flight shortlist found; activity scheduling dates are provisional until flights are selected."
+        )
+        return
+    try:
+        assert_trip_envelope_locked(flight_state)
+    except TripEnvelopeNotLockedError as exc:
+        state.warnings.append(
+            f"Activity dates are provisional: {exc} Select both flights before treating scheduled days as fixed."
+        )

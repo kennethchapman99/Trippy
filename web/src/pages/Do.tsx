@@ -99,11 +99,11 @@ const Do = () => {
         stageNumber={6}
         flagCount={flagCount}
       />
-      <div className="px-6 md:px-10 py-5 border-b-2 border-foreground/10 bg-card/60 backdrop-blur sticky top-0 z-30">
+      <div className="px-4 md:px-6 lg:px-8 py-4 border-b-2 border-foreground/10 bg-card/60 backdrop-blur sticky top-0 z-30">
         <StageNav stages={stages} />
       </div>
 
-      <div className="px-6 md:px-10 py-8">
+      <div className="px-4 md:px-6 lg:px-8 py-6">
         <div className="flex items-end justify-between flex-wrap gap-3 mb-4">
           <div>
             <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">
@@ -347,7 +347,7 @@ function ActivityRow({
         }
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-[180px_1fr_minmax(220px,_auto)] gap-5 px-5 py-5">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(360px,40%)_minmax(0,1fr)_minmax(200px,_auto)] gap-4 px-4 py-4 md:px-5 md:py-5">
         <ActivityImage option={option} />
         <div className="space-y-2">
           <div className="flex items-center gap-1.5 text-sm font-medium text-foreground/85">
@@ -509,7 +509,7 @@ function ActivityImage({ option }: { option: ActivityOption }) {
   };
 
   return (
-    <div className="group relative h-32 md:h-full min-h-28 rounded-2xl overflow-hidden bg-muted border-2 border-foreground/10">
+    <div className="group relative h-72 lg:h-full min-h-72 rounded-2xl overflow-hidden bg-muted border-2 border-foreground/10">
       {active && !imgFailed && (
         <img
           src={active}

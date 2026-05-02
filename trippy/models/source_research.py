@@ -85,3 +85,32 @@ class SourceResearchResult(BaseModel):
     @classmethod
     def _confidence_range(cls, value: float) -> float:
         return max(0.0, min(1.0, value))
+
+
+class SourceExtractedField(BaseModel):
+    value: Any = None
+    confidence: float = 0.0
+    evidence: str = ""
+    evidence_ref: str = ""
+
+    @field_validator("confidence")
+    @classmethod
+    def _extracted_confidence_range(cls, value: float) -> float:
+        return max(0.0, min(1.0, value))
+
+
+class SourceResearchExtraction(BaseModel):
+    status: str
+    category: str
+    source_url: str = ""
+    candidate_name: str = ""
+    extracted_fields: dict[str, SourceExtractedField] = Field(default_factory=dict)
+    missing_fields: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    summary: str = ""
+    confidence: float = 0.0
+
+    @field_validator("confidence")
+    @classmethod
+    def _extraction_confidence_range(cls, value: float) -> float:
+        return max(0.0, min(1.0, value))

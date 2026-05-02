@@ -63,15 +63,16 @@ export function deriveLiveBanner(
     activities: "activity",
   };
   const title = missingProvider
-    ? `No live ${labels[category]} provider connected — rows are search handoffs.`
+    ? `Live ${labels[category]} search is not connected yet.`
     : provider
-      ? `No live ${labels[category]} rows returned — showing search handoffs.`
-      : `No live ${labels[category]} rows in this shortlist — showing search handoffs.`;
+      ? `No live ${labels[category]} rows returned yet.`
+      : `No live ${labels[category]} rows in this shortlist yet.`;
   return {
     title,
     detail:
-      provider ||
-      "Set SERPAPI_KEY (and optionally DUFFEL_ACCESS_TOKEN for flights) in .env, then click Re-research.",
+      missingProvider
+        ? `Use Re-research after live ${labels[category]} search is connected, or add a candidate manually.`
+        : provider || `Try Re-research, or add a ${labels[category]} candidate manually.`,
   };
 }
 

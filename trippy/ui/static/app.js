@@ -219,10 +219,20 @@ function renderHeader() {
     : "";
   document.getElementById("activeTripTitle").textContent = title;
   document.getElementById("activeTripSubhead").textContent = subhead;
+  renderFinanceManagerLink();
   document.getElementById("logsJsonLink").href = state.activeTripId
     ? `/api/logs?trip_id=${encodeURIComponent(state.activeTripId)}`
     : "/api/logs";
   document.getElementById("planningProgress").innerHTML = planningProgressBar();
+}
+
+function renderFinanceManagerLink() {
+  const link = document.getElementById("financeManagerLink");
+  if (!link) return;
+  link.hidden = !state.activeTripId;
+  link.href = state.activeTripId
+    ? `/api/finance-manager?trip_id=${encodeURIComponent(state.activeTripId)}`
+    : "/api/state";
 }
 
 function normalizeActiveStage() {
@@ -1839,7 +1849,9 @@ function suggestionCard(concept) {
   const requestedDuration = Number(state.ideaComparison?.request?.duration_days || state.ideaRequest?.duration_days || 0);
   const durationOff = requestedDuration && concept.recommended_duration_days > requestedDuration;
   return `<article class="suggestion-card">
-    ${imageBlock(`${destinations.join(" ")} ${concept.title}`, concept.title)}
+    <div class="option-map-thumb suggestion-map">
+      <iframe title="${escapeHtml(concept.title)} map" loading="lazy" src="${mapsEmbedUrl(destinations.join(" ") || concept.title)}"></iframe>
+    </div>
     <div class="suggestion-body">
       <div class="option-head">
         <h3>${escapeHtml(concept.title)}</h3>
@@ -2064,11 +2076,12 @@ function numberOrDefault(value, fallback) {
 
 function planOptionCard(option) {
   const selected = state.trip?.draft?.selected_option_id === option.option_id;
+  const title = userFacingPlanTitle(option);
   return `<article class="option-card ${selected ? "selected" : ""}">
     ${optionVisual(option)}
     <div class="option-card-body">
       <div class="option-head">
-        <h3>${escapeHtml(option.title)}</h3>
+        <h3>${escapeHtml(title)}</h3>
         <span class="metric live">${escapeHtml((option.regions || []).join(" + "))}</span>
       </div>
       <p>${escapeHtml(option.summary)}</p>
@@ -2091,6 +2104,7 @@ function optionVisual(option) {
   const nightEntries = Object.entries(option.nights_by_region || {});
   const stayCount = nightEntries.filter(([, nights]) => Number(nights) > 0).length || regions.length || 1;
   return `<div class="option-map-thumb option-${Math.min(stayCount, 3)}">
+    <iframe title="${escapeHtml(userFacingPlanTitle(option))} map" loading="lazy" src="${mapsEmbedUrl(regions.join(" ") || option.title)}"></iframe>
     <div class="map-route-line"></div>
     <div class="map-pin-row">
       ${regions.slice(0, 4).map((region, index) => `<span class="map-pin" style="--pin-index:${index}">${escapeHtml(region)}</span>`).join("")}
@@ -2099,6 +2113,32 @@ function optionVisual(option) {
       ${nightEntries.map(([region, nights]) => `<article><strong>${escapeHtml(region)}</strong><span>${escapeHtml(nights)} night(s)</span></article>`).join("") || `<article><strong>${escapeHtml(regions.join(" + ") || "Base")}</strong><span>nights TBD</span></article>`}
     </div>
   </div>`;
+}
+
+function userFacingPlanTitle(option) {
+  const title = String(option.title || "");
+  const regions = option.regions || [];
+  if (option.option_id === "single-base-easy") {
+    return regions[0] ? `Unpack Once in ${regions[0]}` : "Unpack Once";
+  }
+  if (option.option_id === "two-region-balanced") {
+    return regions.length > 1 ? `${regions[0]} + ${regions[1]} Without the Rush` : "Two Good Bases";
+  }
+  if (option.option_id === "multi-spot-fuller-version") {
+    return regions[0] ? `${regions[0]} and the Best Side Trips` : "The Big Sampler";
+  }
+  if (/one-island|easy version/i.test(title)) {
+    return regions[0] ? `Unpack Once in ${regions[0]}` : "Unpack Once";
+  }
+  if (/more ambitious|sampler/i.test(title)) {
+    return regions[0] ? `${regions[0]} and the Best Side Trips` : "The Big Sampler";
+  }
+  return title
+    .replace(new RegExp("\\bPrimary base resolved from " + "scanner evidence\\b", "gi"), "Best stay area")
+    .replace(/\bNearby activity cluster from user-approved JSON\b/gi, "Nearby activity cluster")
+    .replace(/\bSingle-Base Easy Version\b/gi, "Unpack Once")
+    .replace(/\bTwo-Region Balanced Version\b/gi, "Two Good Bases")
+    .replace(/\bFuller Multi-Spot Version\b/gi, "Best-Of Sampler");
 }
 
 function shortlistCards() {

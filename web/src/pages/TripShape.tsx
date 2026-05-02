@@ -5,12 +5,11 @@ import { AppShell } from "@/components/AppShell";
 import { StageNav } from "@/components/StageNav";
 import { Button } from "@/components/ui/button";
 import {
-  AlertTriangle, ArrowLeft, Check, ChevronDown, Loader2, RefreshCcw, Sparkles,
+  AlertTriangle, ArrowLeft, Check, ChevronDown, Loader2, MapPin, RefreshCcw, Sparkles,
   ThumbsUp, AlertCircle,
 } from "lucide-react";
 import { api, type TripPlanOption } from "@/lib/api";
 import { buildStages } from "@/lib/stages";
-import { useDestinationImage } from "@/lib/destinationImages";
 
 const SEGMENT_COLORS = [
   "hsl(178 70% 60%)",
@@ -37,6 +36,45 @@ function burdenToRisk(burden: string, risks: string[]): { label: string; tone: "
     return { label: risks[0] ?? "moderate friction", tone: "warn" };
   }
   return { label: "low risk", tone: "ok" };
+}
+
+function cleanPlanningText(value: string): string {
+  return value
+    .replace(/\b(?:primary|first|second) confirmed base\b/gi, "chosen stay area")
+    .replace(/\bprimary base\b/gi, "main stay area")
+    .replace(/\bscanner evidence\b/gi, "location research")
+    .replace(/\buser-approved JSON\b/gi, "your trip details")
+    .replace(/\btrip JSON\b/gi, "your trip details")
+    .replace(/\bresolver evidence\b/gi, "location research")
+    .replace(/\bprovider\/scanner evidence\b/gi, "source research")
+    .replace(/\s+·\s+/g, " · ")
+    .trim();
+}
+
+function userFacingShapeTitle(option: TripPlanOption): string {
+  const regions = option.regions.filter(Boolean);
+  const title = option.title.toLowerCase();
+  if (option.option_id.includes("single") || title.includes("single-base")) {
+    return regions[0] ? `Unpack Once in ${regions[0]}` : "Unpack Once";
+  }
+  if (option.option_id.includes("two") || title.includes("two-region")) {
+    return regions.length >= 2 ? `${regions[0]} + ${regions[1]} Without the Rush` : "Two Good Bases";
+  }
+  if (option.option_id.includes("multi") || title.includes("multi-spot")) {
+    return regions.length ? `${regions[0]} and the Best Side Trips` : "The Big Sampler";
+  }
+  if (title.includes("one-island") || title.includes("easy version")) {
+    return regions[0] ? `Unpack Once in ${regions[0]}` : "Unpack Once";
+  }
+  if (title.includes("more ambitious") || title.includes("sampler")) {
+    return regions.length ? `${regions[0]} and the Best Side Trips` : "The Big Sampler";
+  }
+  return cleanPlanningText(option.title);
+}
+
+function mapEmbedUrl(regions: string[]): string {
+  const query = regions.filter(Boolean).join(" to ") || "trip map";
+  return `https://www.google.com/maps?q=${encodeURIComponent(query)}&output=embed`;
 }
 
 const TripShape = () => {
@@ -101,7 +139,7 @@ const TripShape = () => {
   return (
     <AppShell>
       {/* Hero */}
-      <div className="bg-gradient-hero border-b-2 border-foreground/10 px-6 md:px-10 pt-8 pb-10 relative">
+      <div className="bg-gradient-hero border-b-2 border-foreground/10 px-4 md:px-6 lg:px-8 pt-6 pb-7 relative">
         <Link
           to="/"
           className="inline-flex items-center gap-1.5 text-sm font-bold text-foreground/70 hover:text-foreground transition-colors mb-4"
@@ -146,12 +184,12 @@ const TripShape = () => {
       </div>
 
       {/* Stage nav */}
-      <div className="px-6 md:px-10 py-5 border-b-2 border-foreground/10 bg-card/60 backdrop-blur sticky top-0 z-30">
+      <div className="px-4 md:px-6 lg:px-8 py-4 border-b-2 border-foreground/10 bg-card/60 backdrop-blur sticky top-0 z-30">
         <StageNav stages={stages} />
       </div>
 
       {/* Body */}
-      <div className="px-6 md:px-10 py-8">
+      <div className="px-4 md:px-6 lg:px-8 py-6">
         <div className="flex items-end justify-between flex-wrap gap-3 mb-6">
           <div>
             <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">
@@ -205,7 +243,7 @@ const TripShape = () => {
         {/* Options grid */}
         {!isGenerating && options.length > 0 && (
           <>
-            <div id="friction-review" className="grid scroll-mt-32 lg:grid-cols-3 gap-5">
+            <div id="friction-review" className="grid scroll-mt-32 xl:grid-cols-2 gap-5">
               {options.map((o) => {
                 const isSelected = selected === o.option_id;
                 const isRecommended = draft?.recommended_option_id === o.option_id;
@@ -316,13 +354,6 @@ function TripShapeCard({
   totalNights: number;
   onChoose: () => void;
 }) {
-  const imageUrl = useDestinationImage({
-    title: option.title,
-    destinations: option.regions,
-    location: Object.keys(option.nights_by_region).join(", "),
-  });
-  const [imgFailed, setImgFailed] = useState(false);
-
   return (
     <article
       className={`rounded-3xl border-2 bg-card overflow-hidden transition-bounce flex flex-col ${
@@ -331,17 +362,17 @@ function TripShapeCard({
           : "border-foreground/10 shadow-card hover:-translate-y-0.5"
       }`}
     >
-      <div className="relative h-32 overflow-hidden bg-muted">
-        {imageUrl && !imgFailed && (
-          <img
-            src={imageUrl}
-            alt={option.regions.join(", ") || option.title}
-            loading="lazy"
-            onError={() => setImgFailed(true)}
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/10 to-transparent" />
+      <div className="relative h-72 md:h-80 overflow-hidden bg-muted">
+        <iframe
+          title={`${userFacingShapeTitle(option)} map`}
+          src={mapEmbedUrl(option.regions)}
+          loading="eager"
+          className="absolute inset-0 h-full w-full border-0"
+        />
+        <div className="pointer-events-none absolute left-3 bottom-3 inline-flex items-center gap-1.5 rounded-full bg-background/95 px-2.5 py-1 text-[11px] font-bold text-foreground border-2 border-foreground/15">
+          <MapPin className="h-3.5 w-3.5 text-primary" />
+          {option.regions.filter(Boolean).join(" + ") || "Map"}
+        </div>
         {isRecommended && (
           <span className="absolute top-3 right-3 inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-background/95 text-foreground text-[10px] font-bold uppercase tracking-wider border-2 border-foreground/20">
             <Sparkles className="h-3 w-3 text-primary" /> Trippy pick
@@ -387,7 +418,7 @@ function TripShapeCard({
       </div>
 
       <div className="p-5 pt-4 flex-1 flex flex-col">
-        <h3 className="font-[Fredoka] text-xl font-bold leading-tight">{option.title}</h3>
+        <h3 className="font-[Fredoka] text-xl font-bold leading-tight">{userFacingShapeTitle(option)}</h3>
 
         <div className="flex flex-wrap items-center gap-2 mt-2">
           <span
@@ -425,7 +456,7 @@ function TripShapeCard({
         </div>
 
         <ul className="mt-4 space-y-1.5">
-          {option.rationale.slice(0, 3).map((p) => (
+          {option.rationale.slice(0, 3).map((p) => cleanPlanningText(p)).map((p) => (
             <li key={p} className="flex items-start gap-2 text-sm">
               <Check className="h-4 w-4 text-palm shrink-0 mt-0.5" />
               <span className="text-foreground/85 leading-snug">{p}</span>
@@ -435,7 +466,7 @@ function TripShapeCard({
 
         {option.major_risks.length > 0 && (
           <div className="mt-3 rounded-xl border-2 border-coral/40 bg-coral/10 p-3 space-y-1">
-            {option.major_risks.slice(0, 2).map((w) => (
+            {option.major_risks.slice(0, 2).map((w) => cleanPlanningText(w)).map((w) => (
               <div key={w} className="flex items-start gap-2 text-xs">
                 <AlertTriangle className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
                 <span className="font-medium text-foreground/85 leading-snug">{w}</span>

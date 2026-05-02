@@ -7,13 +7,17 @@ planning flow before resolver/provider evidence has populated trip JSON.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from typing import Any
 
+from trippy import config
 from trippy.memory.store import MemoryStore
 from trippy.models.ideas import TripComparison, TripConcept, TripIdeaRequest
 from trippy.models.preferences import FamilyTravelPreferences
-from trippy.services.planning_advisor import PlanningAdvisorService
+from trippy.services.llm_client import TrippyLLMClient
 
+_PROMPT_VERSION = "trip-ideation-v2"
 
 @dataclass(frozen=True)
 class _ConceptArchetype:
@@ -35,10 +39,10 @@ class _ConceptArchetype:
 _ARCHETYPES = [
     _ConceptArchetype(
         concept_id="json-first-low-friction-single-base",
-        title="Low-Friction Single-Base Search",
+        title="Unpack Once, Easy Pace",
         destination_slots=[
-            "Primary base resolved from scanner evidence",
-            "Nearby activity cluster from user-approved JSON",
+            "Best stay area from your trip details",
+            "Nearby food, beach, or activity cluster",
         ],
         recommended_duration_days=6,
         travel_burden_hours=5.0,
@@ -69,10 +73,10 @@ _ARCHETYPES = [
     ),
     _ConceptArchetype(
         concept_id="json-first-food-culture-base",
-        title="Food + Culture Base Search",
+        title="Walkable Food + Culture Base",
         destination_slots=[
-            "Walkable food/culture base resolved from evidence",
-            "Optional nearby culture or market area from confirmed map locations",
+            "Walkable food and culture base",
+            "Nearby market, old-town, or neighborhood area",
         ],
         recommended_duration_days=6,
         travel_burden_hours=6.0,
@@ -92,10 +96,10 @@ _ARCHETYPES = [
     ),
     _ConceptArchetype(
         concept_id="json-first-nature-water-base",
-        title="Nature + Water Base Search",
+        title="Nature + Water Reset",
         destination_slots=[
-            "Nature or water base resolved from provider/scanner evidence",
-            "Weather-backup activity area from confirmed JSON",
+            "Nature or water base",
+            "Weather-backup activity area",
         ],
         recommended_duration_days=6,
         travel_burden_hours=6.0,
@@ -115,10 +119,10 @@ _ARCHETYPES = [
     ),
     _ConceptArchetype(
         concept_id="json-first-two-region-balanced",
-        title="Two-Region Balanced Search",
+        title="Two Bases, More Variety",
         destination_slots=[
-            "First confirmed base from trip JSON",
-            "Second confirmed base only if evidence justifies the move",
+            "Main stay area",
+            "Second base only if it earns the move",
         ],
         recommended_duration_days=9,
         travel_burden_hours=7.0,
@@ -138,10 +142,10 @@ _ARCHETYPES = [
     ),
     _ConceptArchetype(
         concept_id="json-first-activity-led-sampler",
-        title="Activity-Led Sampler Search",
+        title="Best-Of Activity Sampler",
         destination_slots=[
-            "Primary lodging base from JSON",
-            "One or two activity clusters with provider evidence",
+            "Main lodging base",
+            "One or two activity clusters",
         ],
         recommended_duration_days=10,
         travel_burden_hours=8.0,
@@ -171,10 +175,10 @@ _ARCHETYPES = [
     ),
     _ConceptArchetype(
         concept_id="json-first-value-flexible-search",
-        title="Value + Flexibility Search",
+        title="Value Finder",
         destination_slots=[
-            "Any destination candidate with explicit evidence",
-            "Lodging/search area confirmed by user before connectors run",
+            "Flexible destination candidate",
+            "Practical lodging/search area",
         ],
         recommended_duration_days=6,
         travel_burden_hours=7.0,
@@ -211,11 +215,106 @@ class TripIdeationService:
         self,
         preferences: FamilyTravelPreferences | None = None,
         memory: MemoryStore | None = None,
+        anthropic_client: Any | None = None,
+        enabled: bool | None = None,
+        model: str | None = None,
     ) -> None:
         self._prefs = preferences or FamilyTravelPreferences()
         self._memory = memory
+        self._enabled = config.TRIPPY_IDEATION_LLM_ENABLED if enabled is None else enabled
+        self._model = model or config.TRIPPY_TRIP_IDEATION_MODEL
+        self._llm = TrippyLLMClient(anthropic_client=anthropic_client)
 
     def compare(self, request: TripIdeaRequest, *, limit: int = 5) -> TripComparison:
+        if self._enabled:
+            comparison = self._compare_with_llm(request, limit=limit)
+            if comparison is not None and comparison.concepts:
+                return comparison
+            if self._llm.mode == "required":
+                raise RuntimeError("Trip ideation LLM is required but unavailable")
+            fallback = self._compare_with_fallback(request, limit=limit)
+            fallback.scoring_notes.insert(0, "LLM ideation was unavailable; deterministic emergency fallback was used explicitly.")
+            fallback.advisor["status"] = "fallback_used"
+            fallback.advisor["llm_status"] = comparison.advisor if comparison is not None else {}
+            return fallback
+        return self._compare_with_fallback(request, limit=limit)
+
+    def _compare_with_llm(self, request: TripIdeaRequest, *, limit: int) -> TripComparison | None:
+        prompt = _ideation_prompt(request, self._prefs, self._memory, limit)
+        result = self._llm.complete_json(
+            service="trip_ideation",
+            model=self._model,
+            prompt=prompt,
+            system=(
+                "You are Trippy's senior AI trip ideation agent. Return strict JSON only. "
+                "Do not invent prices, availability, booking links, flight numbers, drive times, or confirmations."
+            ),
+            max_tokens=2800,
+            prompt_version=_PROMPT_VERSION,
+        )
+        if result.status != "success" or result.json is None:
+            return TripComparison(
+                request=request,
+                concepts=[],
+                recommended_concept_id=None,
+                scoring_notes=[
+                    f"Ideation LLM unavailable: {result.error or result.status}.",
+                    "No destination concepts were fabricated by the LLM path.",
+                ],
+                advisor={
+                    "status": "llm_unavailable",
+                    "model": self._model,
+                    "prompt_version": _PROMPT_VERSION,
+                    "error": result.error,
+                    "fallback_available": self._llm.mode == "advisory",
+                },
+            )
+        try:
+            payload = result.json
+            concepts = [
+                _concept_from_llm(item)
+                for item in payload.get("concepts", [])[:limit]
+                if isinstance(item, dict)
+            ]
+            if not concepts:
+                raise ValueError("Ideation LLM returned no concepts")
+            recommended = str(payload.get("recommended_concept_id") or concepts[0].concept_id)
+            return TripComparison(
+                request=request,
+                concepts=concepts,
+                recommended_concept_id=recommended,
+                scoring_notes=_string_list(payload.get("warnings"))
+                + [
+                    f"status={payload.get('status') or 'llm_success'}",
+                    "LLM ideation generated real destination concepts from user constraints; source facts still require provider or user evidence before booking.",
+                ],
+                advisor={
+                    "status": payload.get("status") or "llm_success",
+                    "model": payload.get("model") or self._model,
+                    "prompt_version": _PROMPT_VERSION,
+                    "request_summary": payload.get("request_summary") or "",
+                    "assumptions": _string_list(payload.get("assumptions")),
+                    "questions_for_user": _string_list(payload.get("questions_for_user")),
+                    "next_actions": _string_list(payload.get("next_actions")),
+                    "warnings": _string_list(payload.get("warnings")),
+                    "raw_response": result.text,
+                },
+            )
+        except Exception as exc:
+            return TripComparison(
+                request=request,
+                concepts=[],
+                scoring_notes=[f"Ideation LLM response failed validation: {exc}."],
+                advisor={
+                    "status": "llm_unavailable",
+                    "model": self._model,
+                    "prompt_version": _PROMPT_VERSION,
+                    "error": str(exc),
+                    "fallback_available": self._llm.mode == "advisory",
+                },
+            )
+
+    def _compare_with_fallback(self, request: TripIdeaRequest, *, limit: int) -> TripComparison:
         experience_intents = _required_experience_intents(request)
         archetypes = _experience_filtered_archetypes(_ARCHETYPES, experience_intents)
         concepts = [self._score_archetype(archetype, request) for archetype in archetypes]
@@ -250,15 +349,14 @@ class TripIdeationService:
             recommended_concept_id=recommendation,
             scoring_notes=scoring_notes,
         )
-        comparison.advisor = (
-            PlanningAdvisorService(
-                preferences=self._prefs,
-                memory=self._memory,
-                enabled=False,
-            )
-            .advise_trip_ideas(request, comparison)
-            .model_dump(mode="json")
-        )
+        comparison.advisor = {
+            "kind": "trip_ideas",
+            "status": "fallback_used",
+            "model": self._model,
+            "prompt_version": _PROMPT_VERSION,
+            "prompt": _ideation_prompt(request, self._prefs, self._memory, limit),
+            "summary": "Emergency deterministic ideation fallback used because LLM ideation was disabled or unavailable.",
+        }
         return comparison
 
     def _score_archetype(
@@ -337,11 +435,16 @@ class TripIdeationService:
             "Entry requirements, passport validity rules, health precautions, and local cash guidance from official/current sources.",
         ]
 
+        recommended_duration = (
+            min(archetype.recommended_duration_days, request.duration_days)
+            if request.duration_days
+            else archetype.recommended_duration_days
+        )
         return TripConcept(
             concept_id=archetype.concept_id,
             title=archetype.title,
             destinations=archetype.destination_slots,
-            recommended_duration_days=archetype.recommended_duration_days,
+            recommended_duration_days=recommended_duration,
             best_season="requires resolver/provider evidence",
             estimated_cost_band_cad="not estimated until destination, dates, party, and providers are resolved",
             estimated_travel_burden=_travel_burden(archetype.travel_burden_hours),
@@ -366,6 +469,109 @@ def _travel_burden(flight_hours: float) -> str:
     if flight_hours <= 9:
         return "meaningful"
     return "high"
+
+
+def _ideation_prompt(
+    request: TripIdeaRequest,
+    prefs: FamilyTravelPreferences,
+    memory: MemoryStore | None,
+    limit: int,
+) -> str:
+    memory_context = memory.to_context_string() if memory is not None else ""
+    output_schema = {
+        "status": "llm_success",
+        "model": "model name",
+        "request_summary": "plain English summary",
+        "recommended_concept_id": "string",
+        "concepts": [
+            {
+                "concept_id": "string",
+                "title": "string",
+                "destination_candidates": [
+                    {
+                        "name": "string",
+                        "country": "string",
+                        "region": "string",
+                        "gateway_airports": ["IATA"],
+                        "why_it_fits": ["string"],
+                        "concerns": ["string"],
+                        "evidence_needed": ["string"],
+                        "confidence": 0.0,
+                    }
+                ],
+                "recommended_duration_days": 0,
+                "best_season": "string",
+                "estimated_travel_burden": "string",
+                "family_fit_score": 0,
+                "comfort_convenience_score": 0,
+                "food_score": 0,
+                "crowd_risk": 0,
+                "total_score": 0,
+                "rationale": ["string"],
+                "why_it_may_not_fit": ["string"],
+                "major_risks": ["string"],
+                "required_research": ["string"],
+            }
+        ],
+        "questions_for_user": ["string"],
+        "next_actions": ["string"],
+        "warnings": ["string"],
+    }
+    parts = [
+        f"# Trippy Trip Ideation ({_PROMPT_VERSION})",
+        "Generate real trip concepts for Ken/Sue/family from the request, preferences, memory, constraints, goals, avoidances, travel window, party, and flight burden.",
+        "Use judgment. Do not return templates like single-base search placeholders.",
+        "Separate known user input from assumptions. Gateway airports may be candidates only and must be marked as evidence needed before booking.",
+        "Never invent prices, availability, booking links, flight numbers, drive times, bed layouts, or confirmation details.",
+        f"Return up to {limit} concepts.",
+        "",
+        "## Request",
+        json.dumps(request.model_dump(mode="json"), indent=2, sort_keys=True),
+        "",
+        prefs.to_context_string(),
+    ]
+    if memory_context:
+        parts.extend(["", memory_context])
+    parts.extend(["", "## Output JSON Schema", json.dumps(output_schema, indent=2)])
+    return "\n".join(parts)
+
+
+def _concept_from_llm(item: dict[str, Any]) -> TripConcept:
+    candidates = [c for c in item.get("destination_candidates", []) if isinstance(c, dict)]
+    destinations = []
+    for candidate in candidates:
+        label_parts = [
+            str(candidate.get("name") or "").strip(),
+            str(candidate.get("region") or "").strip(),
+            str(candidate.get("country") or "").strip(),
+        ]
+        label = ", ".join(part for part in label_parts if part)
+        if label:
+            destinations.append(label)
+    return TripConcept(
+        concept_id=str(item.get("concept_id") or _slug(str(item.get("title") or "llm-concept"))),
+        title=str(item.get("title") or "LLM Trip Concept"),
+        destinations=destinations or ["Destination candidates require user confirmation"],
+        recommended_duration_days=max(1, _int(item.get("recommended_duration_days"), 7)),
+        best_season=str(item.get("best_season") or "requires current source verification"),
+        estimated_cost_band_cad="not estimated until dated provider evidence exists",
+        estimated_travel_burden=str(item.get("estimated_travel_burden") or "requires flight evidence"),
+        estimated_flight_hours=0.0,
+        direct_flight_friendliness=0,
+        family_fit_score=_score(item.get("family_fit_score")),
+        comfort_convenience_score=_score(item.get("comfort_convenience_score")),
+        food_score=_score(item.get("food_score")),
+        crowd_risk=_score(item.get("crowd_risk")),
+        total_score=_score(item.get("total_score")),
+        country_prior_signals=[],
+        rationale=_string_list(item.get("rationale")),
+        why_it_may_not_fit=_string_list(item.get("why_it_may_not_fit")),
+        major_risks=_string_list(item.get("major_risks")),
+        required_research=_string_list(item.get("required_research"))
+        or [
+            "Validate gateway airport, flight timing, lodging locations, dated activity availability, and local logistics from source evidence."
+        ],
+    )
 
 
 def _required_experience_intents(request: TripIdeaRequest) -> set[str]:
@@ -434,3 +640,30 @@ def _duration_filtered_concepts(
         concept for concept in concepts if concept.recommended_duration_days <= max_days
     ]
     return duration_fit
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _score(value: Any) -> int:
+    return max(0, min(100, _int(value, 0)))
+
+
+def _int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _slug(value: str) -> str:
+    import re
+
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-") or "llm-concept"

@@ -147,6 +147,7 @@ class FlightOption(BaseModel):
     tradeoffs: list[str] = Field(default_factory=list)
     friction_flags: list[str] = Field(default_factory=list)
     confidence_notes: list[str] = Field(default_factory=list)
+    flight_phase: str = "departure"
     live_data_status: LiveDataStatus = LiveDataStatus.HANDOFF_REQUIRED
     row_status: ShortlistRowStatus = ShortlistRowStatus.RESEARCHED
     validation: SourceValidation = Field(default_factory=SourceValidation)

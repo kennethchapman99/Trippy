@@ -9,6 +9,8 @@ from typing import Any
 
 from pydantic import BaseModel, field_validator
 
+from trippy import config
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -214,7 +216,7 @@ class ConfirmationParser:
         tool_choice: ToolChoiceToolParam = {"type": "tool", "name": "extract_confirmation"}
 
         message = self._client.messages.create(
-            model="claude-opus-4-7",
+            model=config.TRIPPY_CONFIRMATION_PARSER_MODEL,
             max_tokens=1024,
             system=_SYSTEM_PROMPT,
             tools=[tool],

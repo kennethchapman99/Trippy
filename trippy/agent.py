@@ -37,7 +37,7 @@ from trippy.skills import get_all_skill_summaries
 logger = logging.getLogger(__name__)
 console = Console()
 
-_MODEL = "claude-sonnet-4-6"
+_MODEL = config.TRIPPY_AGENT_LLM_MODEL
 _MAX_TOKENS = 4096
 
 _OPERATIONS_MODE_PROMPT = """

@@ -67,7 +67,7 @@ function TripTile({ trip: t, index: i, cover }: { trip: DashboardTripTile; index
       style={{ animationDelay: `${i * 0.05}s` }}
     >
       {/* Cover */}
-      <div className="relative h-32 overflow-hidden" style={{ background: cover }}>
+      <div className="relative h-52 md:h-60 overflow-hidden" style={{ background: cover }}>
         {imageUrl && !imgFailed && (
           <img
             src={imageUrl}
@@ -83,7 +83,7 @@ function TripTile({ trip: t, index: i, cover }: { trip: DashboardTripTile; index
         </span>
       </div>
 
-      <div className="p-5">
+      <div className="p-4 md:p-5">
         <h3 className="font-[Fredoka] text-xl font-bold leading-tight">{t.name}</h3>
         <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-sm text-muted-foreground font-semibold">
           {t.date_label && (
@@ -163,9 +163,9 @@ const Index = () => {
 
   return (
     <AppShell>
-      <div className="max-w-6xl mx-auto px-6 py-10 md:py-12">
+      <div className="w-full px-4 md:px-6 lg:px-8 py-6 md:py-8">
         {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-5 mb-7">
           <div>
             <p className="font-bold text-sm uppercase tracking-widest text-primary mb-2 flex items-center gap-1.5">
               <Plane className="h-4 w-4" /> Welcome back
@@ -232,7 +232,7 @@ const Index = () => {
 
         {/* Spotlight card */}
         {spotlight && !isLoading && !error && (
-          <div className="relative mb-10 rounded-[2rem] overflow-hidden border-2 border-foreground shadow-sticker bg-gradient-hero p-7 md:p-9">
+          <div className="relative mb-8 rounded-[2rem] overflow-hidden border-2 border-foreground shadow-sticker bg-gradient-hero p-5 md:p-7">
             <div className="grid md:grid-cols-[1fr_auto] gap-6 items-center">
               <div>
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-coral/40 border-2 border-foreground/20 text-xs font-bold uppercase tracking-wider">
@@ -278,7 +278,7 @@ const Index = () => {
               </div>
             </div>
 
-            <div className="grid sm:grid-cols-2 gap-5">
+            <div className="grid lg:grid-cols-2 2xl:grid-cols-3 gap-5">
               {allTrips.map((t, i) => {
                 const cover = COVER_GRADIENTS[i % COVER_GRADIENTS.length];
                 return <TripTile key={t.trip_id} trip={t} index={i} cover={cover} />;
@@ -287,7 +287,7 @@ const Index = () => {
               {/* New trip card */}
               <Link
                 to="/new"
-                className="group rounded-3xl border-2 border-dashed border-foreground/25 hover:border-primary bg-muted/30 hover:bg-card flex flex-col items-center justify-center text-center p-10 min-h-[280px] transition-bounce"
+                className="group rounded-3xl border-2 border-dashed border-foreground/25 hover:border-primary bg-muted/30 hover:bg-card flex flex-col items-center justify-center text-center p-8 min-h-[360px] transition-bounce"
               >
                 <div className="h-16 w-16 rounded-2xl bg-gradient-sunset border-2 border-foreground shadow-sticker flex items-center justify-center group-hover:rotate-6 transition-bounce">
                   <Plus className="h-8 w-8 text-primary-foreground" />

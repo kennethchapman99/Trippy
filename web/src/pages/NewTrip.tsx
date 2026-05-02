@@ -38,17 +38,58 @@ function inferDestinationFromTripName(value: string): string {
   return text;
 }
 
-function conceptToIdeaPayload(concept: TripConcept): Record<string, unknown> {
+type PartyDraft = {
+  travelers: number;
+  adults: number;
+  children: number;
+  party_type: "whole_family" | "couple" | "adults_only";
+};
+
+function parseParty(value: string): PartyDraft {
+  const text = value.toLowerCase();
+  const adults = Number(text.match(/(\d+)\s*(?:adult|adults)\b/)?.[1] ?? 0);
+  const children = Number(text.match(/(\d+)\s*(?:kid|kids|child|children)\b/)?.[1] ?? 0);
+  const total =
+    Number(text.match(/(?:family of|party of|group of|for)\s*(\d+)/)?.[1] ?? 0) ||
+    Number(text.match(/(\d+)\s*(?:people|travelers|travellers|passengers|pax)\b/)?.[1] ?? 0) ||
+    adults + children ||
+    5;
+  const resolvedAdults = adults || Math.min(2, total);
+  const resolvedChildren = children || Math.max(0, total - resolvedAdults);
+  return {
+    travelers: total,
+    adults: resolvedAdults,
+    children: resolvedChildren,
+    party_type: resolvedChildren > 0 ? "whole_family" : total === 2 ? "couple" : "adults_only",
+  };
+}
+
+function parseDurationDays(value: string): number | undefined {
+  const text = value.toLowerCase();
+  const range = text.match(/(\d+)\s*(?:-|to)\s*(\d+)\s*(?:day|days|d)\b/);
+  if (range) return Math.round((Number(range[1]) + Number(range[2])) / 2);
+  const exact = text.match(/(\d+)\s*(?:day|days|d)\b/);
+  return exact ? Number(exact[1]) : undefined;
+}
+
+function hasOnlyGenericDestinations(destinations: string[]): boolean {
+  return destinations.length === 0 || destinations.every((destination) =>
+    /\b(base|stay area|activity cluster|destination candidate|lodging|search area|weather-backup)\b/i.test(destination),
+  );
+}
+
+function conceptToIdeaPayload(concept: TripConcept, party: PartyDraft): Record<string, unknown> {
+  const genericDestinations = hasOnlyGenericDestinations(concept.destinations);
   return {
     trip_name: concept.title,
-    destinations: concept.destinations,
-    mode: "selected_destination",
+    destinations: genericDestinations ? undefined : concept.destinations,
+    mode: genericDestinations ? "idea" : "selected_destination",
     goals: concept.rationale.slice(0, 3),
     avoidances: concept.why_it_may_not_fit.slice(0, 2),
-    travelers: 5,
-    adults: 2,
-    children: 3,
-    party_type: "whole_family",
+    travelers: party.travelers,
+    adults: party.adults,
+    children: party.children,
+    party_type: party.party_type,
     duration_days: concept.recommended_duration_days,
   };
 }
@@ -59,6 +100,7 @@ const NewTrip = () => {
   const [prompt, setPrompt] = useState("");
   const [pickedVibes, setPickedVibes] = useState<string[]>(["Beach + chill", "Food + culture"]);
   const [concepts, setConcepts] = useState<TripConcept[]>([]);
+  const [ideaParty, setIdeaParty] = useState<PartyDraft>(() => parseParty(""));
 
   // Form fields
   const [tripName, setTripName] = useState("");
@@ -99,18 +141,22 @@ const NewTrip = () => {
   });
 
   const handleGetIdeas = () => {
+    const party = parseParty(prompt);
+    const durationDays = parseDurationDays(prompt);
+    setIdeaParty(party);
     ideaMutation.mutate({
       desired_vibe: pickedVibes.join(", ") || undefined,
       goals: prompt || undefined,
-      travelers: 5,
-      adults: 2,
-      children: 3,
-      party_type: "whole_family",
+      duration_days: durationDays,
+      travelers: party.travelers,
+      adults: party.adults,
+      children: party.children,
+      party_type: party.party_type,
     });
   };
 
   const handlePickConcept = (concept: TripConcept) => {
-    intakeMutation.mutate(conceptToIdeaPayload(concept));
+    intakeMutation.mutate(conceptToIdeaPayload(concept, ideaParty));
   };
 
   const handleFormSubmit = () => {
@@ -118,16 +164,19 @@ const NewTrip = () => {
     const goals = [...pickedVibes, ...(wishes.trim() ? [wishes.trim()] : [])];
     const destinationText = destination.trim() || inferDestinationFromTripName(tripName);
     const cleanTripName = tripName.trim();
+    const party = parseParty(who);
+    const durationDays = parseDurationDays(dates);
     const payload: Record<string, unknown> = {
       trip_name: cleanTripName || (destinationText ? `${destinationText} trip` : "New trip"),
       mode: destinationText ? "selected_destination" : "idea",
       destinations: destinationText || undefined,
       goals,
       avoidances: hardNos ? [hardNos] : [],
-      travelers: 5,
-      adults: 2,
-      children: 3,
-      party_type: "whole_family",
+      duration_days: durationDays,
+      travelers: party.travelers,
+      adults: party.adults,
+      children: party.children,
+      party_type: party.party_type,
       budget_cad: budgetNum,
       departure_airports: origin ? [origin] : ["YYZ"],
       notes: wishes.trim() || undefined,
@@ -140,7 +189,7 @@ const NewTrip = () => {
 
   return (
     <AppShell>
-      <div className="max-w-5xl mx-auto px-6 py-8 md:py-10">
+      <div className="w-full px-4 md:px-6 lg:px-8 py-6 md:py-8">
         {/* Back */}
         <Link to="/" className="inline-flex items-center gap-1.5 text-sm font-bold text-muted-foreground hover:text-foreground transition-colors mb-6">
           <ArrowLeft className="h-4 w-4" /> Back to trips
@@ -154,9 +203,6 @@ const NewTrip = () => {
           <h1 className="font-[Fredoka] text-4xl md:text-5xl font-bold leading-tight mt-3">
             Let's <span className="text-gradient-sunset">dream up</span> your next trip.
           </h1>
-          <p className="text-muted-foreground mt-2 max-w-2xl">
-            Tell Trippy what you're craving, or fill the form if you already know. Either way, we'll come back with ranked, family-fit ideas.
-          </p>
         </div>
 
         {/* Mode toggle */}
@@ -272,7 +318,7 @@ const NewTrip = () => {
                     {ideaMutation.isPending ? "Refreshing…" : "Refresh →"}
                   </button>
                 </div>
-                <div className="grid md:grid-cols-3 gap-5">
+                <div className="grid lg:grid-cols-2 2xl:grid-cols-3 gap-5">
                   {concepts.map((concept, i) => (
                     <IdeaCard
                       key={concept.concept_id}
@@ -524,7 +570,7 @@ function IdeaCard({
       className="group relative rounded-3xl overflow-hidden border-2 border-foreground/10 bg-card shadow-card hover:-translate-y-1 hover:shadow-glow transition-bounce animate-fade-up"
       style={{ animationDelay: `${index * 0.08}s` }}
     >
-      <div className="relative h-36 overflow-hidden" style={{ background: COVER_GRADIENTS[index % COVER_GRADIENTS.length] }}>
+      <div className="relative h-56 md:h-64 overflow-hidden" style={{ background: COVER_GRADIENTS[index % COVER_GRADIENTS.length] }}>
         {imageUrl && !imgFailed && (
           <img
             src={imageUrl}
