@@ -85,6 +85,95 @@ def run_ui(
     serve_ui(host=host, port=port, open_browser=open_browser)
 
 
+
+@app.command("web")
+def run_web(
+    api_host: str = typer.Option("127.0.0.1", "--api-host", help="Host for the Trippy backend API"),
+    api_port: int = typer.Option(8787, "--api-port", help="Port for the Trippy backend API"),
+    web_host: str = typer.Option("127.0.0.1", "--web-host", help="Host for the Vite web UI"),
+    web_port: int = typer.Option(8788, "--web-port", help="Port for the Vite web UI"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the new web UI"),
+    install: bool = typer.Option(True, "--install/--no-install", help="Run npm install if web/node_modules is missing"),
+) -> None:
+    """Start the backend API and the new React/Vite Trippy UI with one command."""
+    import os
+    import subprocess
+    import sys
+    import time
+    import webbrowser
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[1]
+    web_dir = project_root / "web"
+    package_json = web_dir / "package.json"
+    node_modules = web_dir / "node_modules"
+
+    if not package_json.exists():
+        console.print(f"[red]Missing web/package.json at {package_json}[/red]")
+        raise typer.Exit(1)
+
+    if install and not node_modules.exists():
+        console.print("[bold]Installing web dependencies...[/bold]")
+        install_result = subprocess.run(["npm", "install"], cwd=web_dir)
+        if install_result.returncode != 0:
+            console.print("[red]npm install failed[/red]")
+            raise typer.Exit(install_result.returncode)
+
+    api_url = f"http://{api_host}:{api_port}"
+    web_url = f"http://{web_host}:{web_port}"
+
+    env = os.environ.copy()
+    env["TRIPPY_API_PROXY_TARGET"] = api_url
+    env["VITE_TRIPPY_API_TARGET"] = api_url
+
+    backend_code = (
+        "from trippy.ui.server import serve_ui; "
+        f"serve_ui(host={api_host!r}, port={api_port!r}, open_browser=False)"
+    )
+
+    backend = subprocess.Popen(
+        [sys.executable, "-c", backend_code],
+        cwd=project_root,
+        env=env,
+    )
+    frontend = subprocess.Popen(
+        ["npm", "run", "dev", "--", "--host", web_host, "--port", str(web_port)],
+        cwd=web_dir,
+        env=env,
+    )
+
+    try:
+        time.sleep(2)
+        console.print(f"[green]Trippy backend API:[/green] {api_url}")
+        console.print(f"[green]Trippy web UI:[/green] {web_url}")
+        console.print("[dim]Press Ctrl-C to stop backend and frontend.[/dim]")
+        if open_browser:
+            webbrowser.open(web_url)
+
+        while True:
+            backend_code_return = backend.poll()
+            frontend_code_return = frontend.poll()
+            if backend_code_return is not None:
+                console.print(f"[red]Backend exited with code {backend_code_return}[/red]")
+                raise typer.Exit(backend_code_return or 1)
+            if frontend_code_return is not None:
+                console.print(f"[red]Frontend exited with code {frontend_code_return}[/red]")
+                raise typer.Exit(frontend_code_return or 1)
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        console.print("\nStopping Trippy web...")
+    finally:
+        for process in (frontend, backend):
+            if process.poll() is None:
+                process.terminate()
+        for process in (frontend, backend):
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+
+
+
 @app.command("thin-slice")
 def thin_slice(
     real_google: bool = typer.Option(False, "--real-google", help="Use real Google credentials"),
