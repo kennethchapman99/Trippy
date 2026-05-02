@@ -141,6 +141,7 @@ export interface FlightOption {
   airline: string;
   airline_logo_url?: string;
   flight_numbers: string[];
+  flight_phase?: "departure" | "return" | string;
   departure_date: string;
   arrival_date: string;
   departure_airport: string;
@@ -395,13 +396,14 @@ export const api = {
   buildShortlist: (
     tripId: string,
     category: ShortlistCategory,
-    opts?: { validate_live?: boolean; deep_research?: boolean }
+    opts?: { validate_live?: boolean; deep_research?: boolean; flight_phase?: "departure" | "return" }
   ) =>
     post<ShortlistResponse>("/api/shortlist", {
       trip_id: tripId,
       category,
       validate_live: opts?.validate_live ?? false,
       deep_research: opts?.deep_research ?? false,
+      flight_phase: opts?.flight_phase ?? "departure",
     }),
   selectFlight: (tripId: string, optionId: string, selectionKind: "outbound" | "return" = "outbound") =>
     post<ShortlistResponse>("/api/select-flight", {

@@ -337,11 +337,13 @@ class TrippyUIService:
         validate_live: bool = False,
         deep_research: bool = False,
         adapter: str = "auto",
+        flight_phase: str = "departure",
     ) -> dict[str, Any]:
         shortlist_category = ShortlistCategory(category)
         if shortlist_category == ShortlistCategory.FLIGHTS:
             state = FlightShortlistService(self._intakes, self._planner).build(
                 trip_id,
+                flight_phase=flight_phase,
                 validate_live=validate_live,
                 deep_research=deep_research,
                 adapter_mode=adapter,
