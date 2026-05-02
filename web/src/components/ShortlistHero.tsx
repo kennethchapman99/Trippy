@@ -34,7 +34,7 @@ export function ShortlistHero({
   const pins = buildSeedPins(seeds, lookup);
 
   return (
-    <div className="bg-gradient-hero border-b-2 border-foreground/10 px-6 md:px-10 pt-8 pb-10 relative">
+    <div className="bg-gradient-hero border-b-2 border-foreground/10 px-4 md:px-6 lg:px-8 pt-6 pb-7 relative">
       <Link
         to="/"
         className="inline-flex items-center gap-1.5 text-sm font-bold text-foreground/70 hover:text-foreground transition-colors mb-4"
@@ -83,12 +83,12 @@ export function ShortlistHero({
         <p className="text-foreground/70 italic mt-2 font-medium">{destination}</p>
       )}
       {showMap && pins.length > 0 && (
-        <div className="mt-5 max-w-3xl">
+        <div className="mt-5 max-w-5xl">
           <TripMap
             pins={pins}
             variant="compact"
             showScrubber={false}
-            height="200px"
+            height="260px"
             zoom={5}
           />
         </div>

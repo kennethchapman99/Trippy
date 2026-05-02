@@ -6,6 +6,7 @@ import re
 from datetime import date, datetime, timedelta
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
+from trippy import config
 from trippy.models.shortlists import (
     AvailabilityStatus,
     FreshnessStatus,
@@ -145,7 +146,7 @@ class LodgingShortlistService:
                 "lodging_structure": _lodging_structure_guidance(ctx.option, ctx.intake),
             },
         )
-        advisor = PlanningAdvisorService(enabled=False).advise_lodging_structure(
+        advisor = PlanningAdvisorService(enabled=config.TRIPPY_LODGING_LLM_ENABLED).advise_lodging_structure(
             ctx.intake,
             ctx.option,
             state,
@@ -182,6 +183,7 @@ class LodgingShortlistService:
         if deep_research:
             _review_lodging_discovery_sources(state, ctx.intake)
             state.recommended_option_id = _recommended_lodging_option_id(state.lodging_options)
+        _annotate_flight_envelope_status(state, trip_id, self._store)
         return self._store.save(state)
 
     def select_lodging(self, trip_id: str, option_id: str) -> ResearchShortlistState:
@@ -2274,3 +2276,28 @@ def _serpapi_lodging_dates(ctx: ShortlistContext) -> tuple[date, date]:
         return window.start_date, window.start_date + timedelta(days=max(1, nights))
     fallback_start = today + timedelta(days=60)
     return fallback_start, fallback_start + timedelta(days=max(1, nights))
+
+
+def _annotate_flight_envelope_status(
+    state: ResearchShortlistState,
+    trip_id: str,
+    store: ShortlistStore,
+) -> None:
+    from trippy.models.shortlists import ShortlistCategory
+    from trippy.services.flight_trip_envelope import (
+        TripEnvelopeNotLockedError,
+        assert_trip_envelope_locked,
+    )
+
+    flight_state = store.load(trip_id, ShortlistCategory.FLIGHTS)
+    if flight_state is None:
+        state.warnings.append(
+            "No flight shortlist found; lodging dates are provisional until flights are selected."
+        )
+        return
+    try:
+        assert_trip_envelope_locked(flight_state)
+    except TripEnvelopeNotLockedError as exc:
+        state.warnings.append(
+            f"Lodging dates are provisional: {exc} Select both flights before treating check-in/out as fixed."
+        )

@@ -37,6 +37,10 @@ from trippy.models.trip_planning import (
     WorkspaceStatus,
     WorkspaceTab,
 )
+from trippy.services.flight_trip_envelope import (
+    TripEnvelopeNotLockedError,
+    assert_trip_envelope_locked,
+)
 from trippy.services.trip_intake import TripIntakeService
 from trippy.services.trip_planner import TripPlannerService
 from trippy.services.trip_state import TripStateService
@@ -101,6 +105,26 @@ class TripWorkspaceService:
             validate_live=validate_live,
         )
         packet = _load_trip_packet(intake.trip_id)
+        flight_state = shortlists.get("flights")
+        if flight_state is not None:
+            try:
+                assert_trip_envelope_locked(flight_state)
+            except TripEnvelopeNotLockedError as exc:
+                return TripWorkspaceState(
+                    trip_id=trip_id,
+                    plan_option_id=option.option_id,
+                    status=WorkspaceStatus.PROVISIONAL,
+                    canonical_trip_path="",
+                    warnings=[
+                        f"Workspace is provisional: {exc}",
+                        "Select both outbound and return flights before finalizing dates.",
+                    ],
+                    next_actions=[
+                        "Select a departure flight.",
+                        "Select a return flight.",
+                        "Re-run workspace preparation once both flights are selected.",
+                    ],
+                )
         trip = self._build_canonical_trip(intake, option, shortlists)
         if existing_sync is not None:
             trip.sync = existing_sync.model_copy(deep=True)

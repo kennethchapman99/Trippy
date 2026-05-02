@@ -16,12 +16,12 @@ describe("deriveLiveBanner", () => {
   it("distinguishes missing credentials from providers that returned no rows", () => {
     expect(
       deriveLiveBanner(["SERPAPI_KEY is not configured"], [], "cars")?.title,
-    ).toContain("provider connected");
+    ).toContain("Live car search is not connected yet");
 
     expect(
       deriveLiveBanner(["SerpAPI Google Flights returned no offers for this route/date."], [], "flights")
         ?.title,
-    ).toContain("No live flight rows returned");
+    ).toContain("No live flight rows returned yet");
   });
 });
 

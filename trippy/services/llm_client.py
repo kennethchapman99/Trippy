@@ -1,17 +1,29 @@
-"""Shared Anthropic LLM wrapper with caching and accounting."""
+"""Shared Anthropic LLM wrapper for Trippy services."""
 
 from __future__ import annotations
 
 import json
-import time
+import os
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 import anthropic
 
 from trippy import config
-from trippy.services.llm_accountant import LLMAccountant
-from trippy.services.llm_cache import LLMCache
+from trippy.models.llm_accounting import LLMAccountingRecord
+from trippy.services.llm_accountant import LLMAccountant, estimate_cost_usd, usage_from_response
+
+
+@dataclass
+class LLMResult:
+    status: str
+    model: str
+    text: str = ""
+    json: dict[str, Any] | None = None
+    error: str = ""
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class TrippyLLMClient:
@@ -19,84 +31,85 @@ class TrippyLLMClient:
         self,
         *,
         anthropic_client: Any | None = None,
-        cache: LLMCache | None = None,
+        mode: str | None = None,
         accountant: LLMAccountant | None = None,
     ) -> None:
         self._client = anthropic_client
-        self._cache = cache or LLMCache()
+        self._mode = mode or config.TRIPPY_LLM_MODE
         self._accountant = accountant or LLMAccountant()
+
+    @property
+    def mode(self) -> str:
+        return self._mode
 
     def complete_json(
         self,
         *,
         service: str,
-        trip_id: str | None,
         model: str,
         prompt: str,
         system: str,
-        prompt_version: str,
-        cache_payload: Any | None = None,
         max_tokens: int = 1800,
-        mode: str = "advisory",
-    ) -> dict[str, Any]:
-        started = datetime.utcnow()
-        start_perf = time.perf_counter()
-        cache_key = self._cache.key_for(
+        trip_id: str | None = None,
+        prompt_version: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> LLMResult:
+        result = self.complete_text(
             service=service,
             model=model,
+            prompt=prompt,
+            system=system,
+            max_tokens=max_tokens,
+            trip_id=trip_id,
             prompt_version=prompt_version,
-            payload=cache_payload if cache_payload is not None else prompt,
+            metadata=metadata,
         )
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            duration_ms = int((time.perf_counter() - start_perf) * 1000)
-            self._accountant.record(
-                trip_id=trip_id,
+        if result.status != "success":
+            return result
+        try:
+            result.json = parse_json_object(result.text)
+            return result
+        except Exception as exc:
+            result.status = "failed"
+            result.error = str(exc)
+            self._record(
                 service=service,
                 model=model,
-                mode=mode,
+                status="failed",
+                trip_id=trip_id,
                 prompt_version=prompt_version,
-                status="cache_hit",
-                cache_hit=True,
-                duration_ms=duration_ms,
-                started_at=started,
+                started_at=datetime.utcnow(),
                 ended_at=datetime.utcnow(),
-                metadata={"cache_key": cache_key},
+                error=str(exc),
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                metadata=metadata or {},
             )
-            result = dict(cached)
-            result.setdefault("_llm_status", {})
-            if isinstance(result["_llm_status"], dict):
-                result["_llm_status"].update(
-                    {"cache_hit": True, "duration_ms": duration_ms, "model": model}
-                )
             return result
 
-        if mode in {"off", "test"} or not config.ANTHROPIC_API_KEY and self._client is None:
-            duration_ms = int((time.perf_counter() - start_perf) * 1000)
-            status = "skipped_no_api_key" if mode not in {"off", "test"} else "skipped"
-            self._accountant.record(
-                trip_id=trip_id,
-                service=service,
-                model=model,
-                mode=mode,
-                prompt_version=prompt_version,
-                status=status,
-                duration_ms=duration_ms,
-                started_at=started,
-                ended_at=datetime.utcnow(),
-            )
-            return {
-                "status": status,
-                "_llm_status": {
-                    "status": status,
-                    "model": model,
-                    "duration_ms": duration_ms,
-                    "cache_hit": False,
-                },
-            }
-
-        input_tokens = 0
-        output_tokens = 0
+    def complete_text(
+        self,
+        *,
+        service: str,
+        model: str,
+        prompt: str,
+        system: str,
+        max_tokens: int = 1800,
+        trip_id: str | None = None,
+        prompt_version: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> LLMResult:
+        started = datetime.utcnow()
+        if self._mode in {"off", "test"} or (
+            "PYTEST_CURRENT_TEST" in os.environ and self._client is None
+        ):
+            self._record(service, model, "skipped", trip_id, prompt_version, started, datetime.utcnow(), metadata=metadata or {})
+            return LLMResult(status="skipped", model=model, error=f"LLM mode is {self._mode}")
+        if not config.ANTHROPIC_API_KEY and self._client is None:
+            status = "failed" if self._mode == "required" else "skipped"
+            error = "ANTHROPIC_API_KEY is missing"
+            self._record(service, model, status, trip_id, prompt_version, started, datetime.utcnow(), error=error, metadata=metadata or {})
+            return LLMResult(status=status, model=model, error=error)
         try:
             client = self._client or anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
             response = client.messages.create(
@@ -105,75 +118,70 @@ class TrippyLLMClient:
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
             )
-            text = _response_text(response)
-            parsed = _parse_json_response(text)
-            usage = getattr(response, "usage", None)
-            input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-            output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-            duration_ms = int((time.perf_counter() - start_perf) * 1000)
-            parsed.setdefault("_llm_status", {})
-            if isinstance(parsed["_llm_status"], dict):
-                parsed["_llm_status"].update(
-                    {
-                        "status": "llm_success",
-                        "model": model,
-                        "duration_ms": duration_ms,
-                        "cache_hit": False,
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                    }
-                )
-            self._cache.set(
-                cache_key,
-                parsed,
-                metadata={"service": service, "model": model, "prompt_version": prompt_version},
+            text = response_text(response)
+            input_tokens, output_tokens = usage_from_response(response)
+            self._record(
+                service,
+                model,
+                "success",
+                trip_id,
+                prompt_version,
+                started,
+                datetime.utcnow(),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                metadata=metadata or {},
             )
-            self._accountant.record(
-                trip_id=trip_id,
-                service=service,
-                model=model,
-                mode=mode,
-                prompt_version=prompt_version,
+            return LLMResult(
                 status="success",
-                duration_ms=duration_ms,
+                model=model,
+                text=text,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                started_at=started,
-                ended_at=datetime.utcnow(),
-                metadata={"cache_key": cache_key},
             )
-            return parsed
         except Exception as exc:
-            duration_ms = int((time.perf_counter() - start_perf) * 1000)
-            self._accountant.record(
+            self._record(service, model, "failed", trip_id, prompt_version, started, datetime.utcnow(), error=str(exc), metadata=metadata or {})
+            if self._mode == "required":
+                raise
+            return LLMResult(status="failed", model=model, error=str(exc))
+
+    def _record(
+        self,
+        service: str,
+        model: str,
+        status: str,
+        trip_id: str | None,
+        prompt_version: str,
+        started_at: datetime,
+        ended_at: datetime,
+        *,
+        error: str = "",
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        cost = estimate_cost_usd(model, input_tokens, output_tokens)
+        self._accountant.record(
+            LLMAccountingRecord(
                 trip_id=trip_id,
                 service=service,
                 model=model,
-                mode=mode,
+                mode=self._mode,
                 prompt_version=prompt_version,
-                status="failed",
-                duration_ms=duration_ms,
+                status=status,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                started_at=started,
-                ended_at=datetime.utcnow(),
-                error=str(exc),
-                metadata={"cache_key": cache_key},
+                estimated_cost_usd=cost,
+                estimate_incomplete=cost is None,
+                started_at=started_at,
+                ended_at=ended_at,
+                error=error,
+                metadata=metadata or {},
             )
-            return {
-                "status": "llm_failed",
-                "error": str(exc),
-                "_llm_status": {
-                    "status": "llm_failed",
-                    "model": model,
-                    "duration_ms": duration_ms,
-                    "cache_hit": False,
-                    "error": str(exc),
-                },
-            }
+        )
 
 
-def _response_text(response: Any) -> str:
+def response_text(response: Any) -> str:
     parts: list[str] = []
     for block in getattr(response, "content", []):
         if getattr(block, "type", "") == "text":
@@ -181,7 +189,7 @@ def _response_text(response: Any) -> str:
     return "\n".join(part for part in parts if part).strip()
 
 
-def _parse_json_response(text: str) -> dict[str, Any]:
+def parse_json_object(text: str) -> dict[str, Any]:
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = stripped.strip("`")

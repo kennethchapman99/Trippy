@@ -5,9 +5,12 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Iterable
+from typing import Any
 
+from trippy import config
 from trippy.models.geography import ResolvedAirport, ResolvedPlace, TripGeography
 from trippy.models.trip_planning import TripIntake
+from trippy.services.llm_client import TrippyLLMClient
 
 IATA_RE = re.compile(r"^[A-Z]{3}$")
 
@@ -15,7 +18,24 @@ IATA_RE = re.compile(r"^[A-Z]{3}$")
 class GeographyResolverService:
     """Resolve raw intake text into typed airport/place buckets."""
 
+    def __init__(
+        self,
+        *,
+        anthropic_client: Any | None = None,
+        enabled: bool | None = None,
+        model: str | None = None,
+    ) -> None:
+        self._enabled = config.TRIPPY_GEOGRAPHY_LLM_ENABLED if enabled is None else enabled
+        self._model = model or config.TRIPPY_GEOGRAPHY_RESOLVER_MODEL
+        self._llm = TrippyLLMClient(anthropic_client=anthropic_client)
+
     def resolve(self, intake: TripIntake) -> TripGeography:
+        if self._enabled:
+            geography = self._resolve_with_llm(intake)
+            if geography is not None:
+                return geography
+            if self._llm.mode == "required":
+                raise RuntimeError("Geography resolver LLM is required but unavailable")
         raw_destinations = _dedupe_strings(intake.destination_seeds)
         origins = self._resolve_origins(intake.departure_airports)
         destinations = self._resolve_destinations(raw_destinations)
@@ -46,6 +66,27 @@ class GeographyResolverService:
             evidence=evidence,
         )
 
+    def _resolve_with_llm(self, intake: TripIntake) -> TripGeography | None:
+        prompt = _geography_prompt(intake)
+        result = self._llm.complete_json(
+            service="geography_resolver",
+            model=self._model,
+            prompt=prompt,
+            system=(
+                "Resolve travel geography into strict JSON. Only include valid IATA airport codes in airport arrays. "
+                "Mark ambiguity and confirmation needs clearly."
+            ),
+            max_tokens=1800,
+            trip_id=intake.trip_id,
+            prompt_version="geography-resolver-v2",
+        )
+        if result.status != "success" or result.json is None:
+            return None
+        try:
+            return _geography_from_payload(result.json)
+        except Exception:
+            return None
+
     def _resolve_origins(self, values: list[str]) -> list[ResolvedAirport]:
         airports = [
             airport
@@ -60,6 +101,8 @@ class GeographyResolverService:
             for value in _destination_pieces(raw_destinations)
             if (airport := self._airport_from_explicit_code(value, role="gateway"))
         ]
+        if not airports:
+            airports.extend(_fallback_gateway_hints(raw_destinations))
         return _dedupe_airports(airports)
 
     def _airport_from_explicit_code(self, value: str, *, role: str) -> ResolvedAirport | None:
@@ -185,3 +228,162 @@ def _dedupe_places(values: list[ResolvedPlace]) -> list[ResolvedPlace]:
             seen.add(key)
             result.append(place)
     return result
+
+
+def _geography_prompt(intake: TripIntake) -> str:
+    schema = {
+        "primary_destination_name": "string",
+        "country": "string",
+        "destination_airports": [
+            {
+                "iata_code": "string",
+                "role": "gateway|regional|unknown",
+                "confidence": 0.0,
+                "source": "llm",
+                "matched_text": "string",
+                "requires_user_confirmation": True,
+            }
+        ],
+        "origin_airports": [],
+        "places": [
+            {
+                "name": "string",
+                "kind": "country|city|region|neighborhood|beach|park|place",
+                "country": "string",
+                "confidence": 0.0,
+                "source": "llm",
+                "use_for": ["planning", "map", "lodging", "activity", "car"],
+                "raw_text": "string",
+                "requires_user_confirmation": True,
+            }
+        ],
+        "planning_regions": ["string"],
+        "map_locations": ["string"],
+        "lodging_search_locations": ["string"],
+        "car_search_locations": ["string"],
+        "activity_search_locations": ["string"],
+        "warnings": ["string"],
+        "evidence": ["string"],
+    }
+    return "\n".join(
+        [
+            "# Trippy Geography Resolver (geography-resolver-v2)",
+            "Resolve raw destination input into connector-safe geography.",
+            "Never put a freeform city, neighborhood, or itinerary string into airport arrays.",
+            "If a gateway is only likely, include it with requires_user_confirmation=true.",
+            "",
+            "## Intake",
+            str(intake.model_dump(mode="json")),
+            "",
+            "## Output JSON Schema",
+            str(schema),
+        ]
+    )
+
+
+def _geography_from_payload(payload: dict[str, Any]) -> TripGeography:
+    airports = []
+    for item in payload.get("destination_airports", []):
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("iata_code") or "").strip().upper()
+        if not IATA_RE.fullmatch(code):
+            continue
+        airports.append(
+            ResolvedAirport(
+                iata_code=code,
+                role=str(item.get("role") or "gateway"),
+                confidence=_float(item.get("confidence"), 0.5),
+                source=str(item.get("source") or "llm"),
+                matched_text=str(item.get("matched_text") or ""),
+                requires_user_confirmation=bool(item.get("requires_user_confirmation", True)),
+            )
+        )
+    origins = []
+    for item in payload.get("origin_airports", []):
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("iata_code") or "").strip().upper()
+        if IATA_RE.fullmatch(code):
+            origins.append(
+                ResolvedAirport(
+                    iata_code=code,
+                    role="origin",
+                    confidence=_float(item.get("confidence"), 0.8),
+                    source=str(item.get("source") or "llm"),
+                    matched_text=str(item.get("matched_text") or code),
+                    requires_user_confirmation=bool(item.get("requires_user_confirmation", False)),
+                )
+            )
+    places = []
+    for item in payload.get("places", []):
+        if isinstance(item, dict) and str(item.get("name") or "").strip():
+            places.append(
+                ResolvedPlace(
+                    name=str(item.get("name")),
+                    kind=str(item.get("kind") or "place"),
+                    country=str(item.get("country") or payload.get("country") or ""),
+                    confidence=_float(item.get("confidence"), 0.5),
+                    source=str(item.get("source") or "llm"),
+                    use_for=_string_list(item.get("use_for")),
+                    raw_text=str(item.get("raw_text") or ""),
+                )
+            )
+    warnings = _string_list(payload.get("warnings"))
+    if not airports:
+        warnings.append("No valid IATA destination airport resolved; flight providers must fail closed.")
+    return TripGeography(
+        primary_destination_name=str(payload.get("primary_destination_name") or ""),
+        origin_airports=origins,
+        destination_airports=airports,
+        places=places,
+        planning_regions=_string_list(payload.get("planning_regions")),
+        map_locations=_string_list(payload.get("map_locations")),
+        lodging_search_locations=_string_list(payload.get("lodging_search_locations")),
+        car_search_locations=_string_list(payload.get("car_search_locations")),
+        activity_search_locations=_string_list(payload.get("activity_search_locations")),
+        warnings=warnings,
+        evidence=_string_list(payload.get("evidence")),
+    )
+
+
+def _fallback_gateway_hints(raw_destinations: list[str]) -> list[ResolvedAirport]:
+    text = " ".join(raw_destinations).casefold()
+    hints = {
+        "chile": ("SCL", "Chile likely international gateway candidate"),
+        "santiago": ("SCL", "Santiago likely international gateway candidate"),
+        "azores": ("PDL", "Azores likely gateway candidate"),
+        "costa rica": ("SJO", "Costa Rica likely gateway candidate"),
+    }
+    airports = []
+    for needle, (code, _evidence) in hints.items():
+        if needle in text:
+            airports.append(
+                ResolvedAirport(
+                    iata_code=code,
+                    role="gateway",
+                    confidence=0.55,
+                    source="fallback",
+                    matched_text=needle,
+                    requires_user_confirmation=True,
+                )
+            )
+            break
+    return airports
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _float(value: Any, default: float) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return default

@@ -609,7 +609,7 @@ class SheetImporter:
         tool_choice: ToolChoiceToolParam = {"type": "tool", "name": "extract_trips"}
 
         message = self._client.messages.create(
-            model="claude-opus-4-7",
+            model=config.TRIPPY_CONFIRMATION_PARSER_MODEL,
             max_tokens=8192,
             system=SYSTEM_PROMPT,
             tools=[tool],

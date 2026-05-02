@@ -1,120 +1,83 @@
-"""Best-effort per-trip LLM latency and cost accounting."""
+"""Best-effort LLM usage accounting."""
 
 from __future__ import annotations
 
 import json
-import uuid
-from collections import Counter
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from trippy import config
-from trippy.models.llm_accounting import LLMCallRecord, LLMTripAccountingSummary
-
-# Approximate USD per million tokens. Keep this conservative and configurable later.
-_MODEL_PRICING_USD_PER_MTOK = {
-    "haiku": {"input": 1.0, "output": 5.0},
-    "sonnet": {"input": 3.0, "output": 15.0},
-    "opus": {"input": 15.0, "output": 75.0},
-}
+from trippy.models.llm_accounting import LLMAccountingRecord, LLMTripUsageSummary
 
 
 class LLMAccountant:
-    def __init__(self, root: Path | None = None) -> None:
-        self._root = root or config.LLM_ACCOUNTING_PATH
+    """Store small JSONL records without blocking user flows."""
 
-    def record(
-        self,
-        *,
-        trip_id: str | None,
-        service: str,
-        model: str,
-        mode: str,
-        prompt_version: str,
-        status: str,
-        cache_hit: bool = False,
-        duration_ms: int = 0,
-        input_tokens: int = 0,
-        output_tokens: int = 0,
-        started_at: datetime | None = None,
-        ended_at: datetime | None = None,
-        error: str = "",
-        metadata: dict[str, Any] | None = None,
-    ) -> LLMCallRecord:
-        record = LLMCallRecord(
-            id=str(uuid.uuid4()),
-            trip_id=trip_id,
-            service=service,
-            model=model,
-            mode=mode,
-            prompt_version=prompt_version,
-            status=status,
-            cache_hit=cache_hit,
-            duration_ms=duration_ms,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            estimated_cost_usd=_estimate_cost(model, input_tokens, output_tokens),
-            started_at=started_at or datetime.utcnow(),
-            ended_at=ended_at or datetime.utcnow(),
-            error=error,
-            metadata=metadata or {},
-        )
-        if not config.LLM_ACCOUNTING_ENABLED:
-            return record
+    def __init__(self, path: Path | None = None) -> None:
+        self._path = path or (config.LEARNING_PATH / "llm_accounting.jsonl")
+
+    def record(self, record: LLMAccountingRecord) -> None:
         try:
-            path = self._path(trip_id)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8") as handle:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            with self._path.open("a", encoding="utf-8") as handle:
                 handle.write(record.model_dump_json() + "\n")
-        except OSError:
-            return record
-        return record
+        except Exception:
+            return
 
-    def records_for_trip(self, trip_id: str) -> list[LLMCallRecord]:
-        path = self._path(trip_id)
-        if not path.exists():
-            return []
-        records: list[LLMCallRecord] = []
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                records.append(LLMCallRecord.model_validate(json.loads(line)))
-            except (ValueError, TypeError, json.JSONDecodeError):
-                continue
+    def records_for_trip(self, trip_id: str) -> list[LLMAccountingRecord]:
+        records: list[LLMAccountingRecord] = []
+        try:
+            if not self._path.exists():
+                return []
+            for line in self._path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                data = json.loads(line)
+                if data.get("trip_id") == trip_id:
+                    records.append(LLMAccountingRecord.model_validate(data))
+        except Exception:
+            return records
         return records
 
-    def summary_for_trip(self, trip_id: str) -> LLMTripAccountingSummary:
+    def summary_for_trip(self, trip_id: str) -> LLMTripUsageSummary:
         records = self.records_for_trip(trip_id)
-        by_service = Counter(record.service for record in records)
-        by_model = Counter(record.model for record in records)
-        return LLMTripAccountingSummary(
-            trip_id=trip_id,
-            total_calls=len(records),
-            cache_hits=sum(1 for record in records if record.cache_hit),
-            total_duration_ms=sum(record.duration_ms for record in records),
-            estimated_cost_usd=sum(record.estimated_cost_usd for record in records),
-            by_service=dict(by_service),
-            by_model=dict(by_model),
-            recent_calls=records[-20:],
-        )
-
-    def _path(self, trip_id: str | None) -> Path:
-        safe_id = trip_id or "unscoped"
-        return self._root / f"{safe_id}.jsonl"
+        summary = LLMTripUsageSummary(trip_id=trip_id, records=records, total_calls=len(records))
+        for record in records:
+            summary.by_service[record.service] = summary.by_service.get(record.service, 0) + 1
+            summary.by_model[record.model] = summary.by_model.get(record.model, 0) + 1
+            if record.estimated_cost_usd is None:
+                summary.estimate_incomplete = True
+            else:
+                summary.total_estimated_cost_usd += record.estimated_cost_usd
+            if record.estimate_incomplete:
+                summary.estimate_incomplete = True
+        return summary
 
 
-def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    family = "sonnet"
-    lower = model.lower()
-    if "haiku" in lower:
-        family = "haiku"
-    elif "opus" in lower:
-        family = "opus"
-    pricing = _MODEL_PRICING_USD_PER_MTOK[family]
-    return round(
-        (input_tokens / 1_000_000) * pricing["input"]
-        + (output_tokens / 1_000_000) * pricing["output"],
-        6,
-    )
+def estimate_cost_usd(model: str, input_tokens: int | None, output_tokens: int | None) -> float | None:
+    if input_tokens is None or output_tokens is None:
+        return None
+    pricing = config.TRIPPY_LLM_MODEL_PRICING_USD_PER_M_TOKEN.get(model)
+    if pricing is None:
+        return None
+    try:
+        input_price, output_price = float(pricing[0]), float(pricing[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    return (input_tokens / 1_000_000 * input_price) + (output_tokens / 1_000_000 * output_price)
+
+
+def usage_from_response(response: Any) -> tuple[int | None, int | None]:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None, None
+    input_tokens = getattr(usage, "input_tokens", None)
+    output_tokens = getattr(usage, "output_tokens", None)
+    return _int_or_none(input_tokens), _int_or_none(output_tokens)
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

@@ -103,6 +103,7 @@ class CarShortlistService:
                 )
             else:
                 SourceResearchService().research_state(state, adapter_mode=adapter_mode)
+        _annotate_flight_envelope_status(state, trip_id, self._store)
         return self._store.save(state)
 
     def select_car(self, trip_id: str, option_id: str) -> ResearchShortlistState:
@@ -293,3 +294,28 @@ def _car_dates_for_intake(intake: TripIntake) -> tuple[date, date]:
 
 def _serpapi_car_dates(ctx: ShortlistContext) -> tuple[date, date]:
     return _car_dates_for_intake(ctx.intake)
+
+
+def _annotate_flight_envelope_status(
+    state: ResearchShortlistState,
+    trip_id: str,
+    store: ShortlistStore,
+) -> None:
+    from trippy.models.shortlists import ShortlistCategory
+    from trippy.services.flight_trip_envelope import (
+        TripEnvelopeNotLockedError,
+        assert_trip_envelope_locked,
+    )
+
+    flight_state = store.load(trip_id, ShortlistCategory.FLIGHTS)
+    if flight_state is None:
+        state.warnings.append(
+            "No flight shortlist found; car pickup/dropoff dates are provisional until flights are selected."
+        )
+        return
+    try:
+        assert_trip_envelope_locked(flight_state)
+    except TripEnvelopeNotLockedError as exc:
+        state.warnings.append(
+            f"Car dates are provisional: {exc} Select both flights before treating pickup/dropoff as fixed."
+        )

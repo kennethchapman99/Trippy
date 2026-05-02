@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from trippy import config
-from trippy.models.ideas import TripIdeaRequest
+from trippy.models.ideas import TripComparison, TripIdeaRequest
 from trippy.models.shortlists import ShortlistCategory
 from trippy.models.trip_planning import (
     CarRentalExpectation,
@@ -43,6 +43,7 @@ from trippy.services.learning import (
     WorkflowOutcome,
     WorkflowStatus,
 )
+from trippy.services.llm_accountant import LLMAccountant
 from trippy.services.lodging_shortlist import LodgingShortlistService
 from trippy.services.planning_advisor import PlanningAdvisorService
 from trippy.services.shortlist_store import ShortlistStore
@@ -74,7 +75,14 @@ class TrippyUIService:
         self._learning = learning_store or LearningEventStore()
 
     def app_state(self) -> dict[str, Any]:
-        dashboard = DashboardService().build()
+        dashboard = DashboardService().build(
+            TripComparison(
+                request=TripIdeaRequest(),
+                concepts=[],
+                recommended_concept_id=None,
+                scoring_notes=[],
+            )
+        )
         intakes = self._intakes.list_intakes()
         workflows = self._learning.list_workflows()[-12:]
         logs = self.logs(limit=16)
@@ -92,7 +100,6 @@ class TrippyUIService:
         intake = self._intakes.load(trip_id)
         draft = self._planner.load_draft(trip_id)
         workspace = TripWorkspaceService(self._intakes, self._planner).load(trip_id)
-        trip_packet = TripExecutionService().build(trip_id, save=False) if intake else None
         shortlists = ShortlistStore().load_all(trip_id)
         workflows = [
             workflow for workflow in self._learning.list_workflows() if workflow.trip_id == trip_id
@@ -104,12 +111,13 @@ class TrippyUIService:
             "draft": draft.model_dump(mode="json") if draft else None,
             "workspace": workspace.model_dump(mode="json") if workspace else None,
             "map_artifact": _load_map_artifact(trip_id),
-            "trip_packet": trip_packet.model_dump(mode="json") if trip_packet else None,
+            "trip_packet": None,
             "shortlists": [shortlist.model_dump(mode="json") for shortlist in shortlists],
             "recent_workflows": [workflow.model_dump(mode="json") for workflow in workflows],
             "run_log": logs["events"],
             "backend_log_path": logs["events_path"],
             "pending_learning_proposals": logs["pending_proposals"],
+            "llm_usage": LLMAccountant().summary_for_trip(trip_id).model_dump(mode="json"),
             "next_step": _next_step_for_state(
                 bool(intake),
                 bool(draft),
@@ -117,6 +125,17 @@ class TrippyUIService:
                 {shortlist.category.value for shortlist in shortlists},
                 bool(workspace),
             ),
+        }
+
+    def finance_manager_info(self, trip_id: str) -> dict[str, Any]:
+        usage = LLMAccountant().summary_for_trip(trip_id)
+        return {
+            "trip_id": trip_id,
+            "finance_manager": {
+                "llm_usage": usage.model_dump(mode="json"),
+                "source": str(config.LEARNING_PATH / "llm_accounting.jsonl"),
+            },
+            "next_step": "Review finance-manager usage records here.",
         }
 
     def export_trip_json(self, trip_id: str) -> dict[str, Any]:
@@ -863,6 +882,14 @@ class TrippyUIHandler(BaseHTTPRequestHandler):
                     self._send_error("trip_id is required", HTTPStatus.BAD_REQUEST)
                     return
                 self._send_json(self._ui.export_trip_json(trip_id))
+                return
+            if path == "/api/finance-manager":
+                query = parse_qs(urlparse(self.path).query)
+                trip_id = query.get("trip_id", [""])[0]
+                if not trip_id:
+                    self._send_error("trip_id is required", HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(self._ui.finance_manager_info(trip_id))
                 return
             if path == "/api/map-file":
                 query = parse_qs(urlparse(self.path).query)

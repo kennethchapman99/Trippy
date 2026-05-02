@@ -61,6 +61,24 @@ def test_explicit_iata_destination_code_is_accepted_without_invented_place_facts
     assert profile.gateway_airports == ["SCL"]
 
 
+def test_curated_azores_gateway_hint_restores_live_flight_route() -> None:
+    intake = TripIntake(
+        mode=TripIntakeMode.SELECTED_DESTINATION,
+        trip_name="Azores 2026",
+        destination_seeds=["Azores"],
+        departure_airports=["YYZ"],
+    )
+
+    assert intake.geography is not None
+    assert [airport.iata_code for airport in intake.geography.destination_airports] == ["PDL"]
+    assert intake.geography.destination_airports[0].source == "curated_gateway_hint"
+    assert intake.geography.destination_airports[0].requires_user_confirmation is True
+
+    profile = profile_for_intake(intake)
+    assert profile.gateway_airports == ["PDL"]
+    assert all("fail closed" not in note.lower() for note in profile.flight_notes)
+
+
 def test_pre_enriched_trip_json_drives_connector_targets() -> None:
     intake = TripIntake(
         mode=TripIntakeMode.SELECTED_DESTINATION,

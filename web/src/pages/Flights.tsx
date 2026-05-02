@@ -126,11 +126,11 @@ const Flights = () => {
         stageNumber={3}
         flagCount={flagCount}
       />
-      <div className="px-6 md:px-10 py-5 border-b-2 border-foreground/10 bg-card/60 backdrop-blur sticky top-0 z-30">
+      <div className="px-4 md:px-6 lg:px-8 py-4 border-b-2 border-foreground/10 bg-card/60 backdrop-blur sticky top-0 z-30">
         <StageNav stages={stages} />
       </div>
 
-      <div className="px-6 md:px-10 py-8">
+      <div className="px-4 md:px-6 lg:px-8 py-6">
         <div className="flex items-end justify-between flex-wrap gap-3 mb-4">
           <div>
             <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">

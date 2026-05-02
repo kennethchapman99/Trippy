@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Iterable
 from datetime import date, datetime
 from enum import StrEnum
@@ -51,6 +52,7 @@ class TravelerAgeBand(StrEnum):
 
 
 class WorkspaceStatus(StrEnum):
+    PROVISIONAL = "provisional"
     PREPARED_LOCAL = "prepared_local"
     SHEET_CREATED = "sheet_created"
     SHEET_FAILED = "sheet_failed"
@@ -521,6 +523,23 @@ class TripIntake(BaseModel):
             ]
         if not self.geography.primary_destination_name and self.destination_seeds:
             self.geography.primary_destination_name = self.destination_seeds[0]
+        if not self.geography.destination_airports:
+            gateway_hints = _curated_gateway_hints(
+                [*_destination_seed_chunks(self.destination_seeds), self.trip_name]
+            )
+            if gateway_hints:
+                self.geography.destination_airports = gateway_hints
+                if not self.geography.country:
+                    self.geography.country = gateway_hints[0].country
+                self.geography.warnings = [
+                    warning
+                    for warning in self.geography.warnings
+                    if "No canonical gateway airport resolved" not in warning
+                    and "No destination airport resolved" not in warning
+                ]
+                self.geography.warnings.append(
+                    f"Resolved likely destination gateway {gateway_hints[0].iata_code} from curated trip geography; confirm before booking."
+                )
 
     def duration_display(self) -> str:
         if self.duration_label:
@@ -610,10 +629,11 @@ class TripWorkspaceState(BaseModel):
 def canonicalize_trip_geography(intake: TripIntake) -> TripGeography:
     """Create connector-safe geography from raw intake strings.
 
-    This bootstrap is intentionally conservative and destination-agnostic. It only
-    validates explicit three-letter airport codes supplied by the user. Every other
-    destination chunk remains an unresolved place candidate for scanners or the UI to
-    resolve and write back into the canonical trip JSON.
+    This bootstrap is intentionally conservative. It accepts explicit three-letter
+    airport codes and a small set of curated gateway hints for trips we already know
+    how to route safely. Every other destination chunk remains an unresolved place
+    candidate for scanners or the UI to resolve and write back into the canonical
+    trip JSON.
     """
     origin_airports = [
         TravelAirportRef(
@@ -638,12 +658,18 @@ def canonicalize_trip_geography(intake: TripIntake) -> TripGeography:
         for seed in seeds
         if _looks_like_iata(seed)
     ]
+    if not destination_airports:
+        destination_airports = _curated_gateway_hints([*seeds, intake.trip_name])
     non_airport_seeds = [seed for seed in seeds if not _looks_like_iata(seed)]
     destination = ", ".join(non_airport_seeds or seeds) or intake.trip_name
     warnings = []
     if not destination_airports:
         warnings.append(
             "No canonical gateway airport resolved yet; live flight adapters must fail closed until a valid IATA destination is known."
+        )
+    elif any(airport.requires_user_confirmation for airport in destination_airports):
+        warnings.append(
+            f"Resolved likely destination gateway {destination_airports[0].iata_code} from curated trip geography; confirm before booking."
         )
     map_locations = [
         TripMapLocation(
@@ -657,6 +683,7 @@ def canonicalize_trip_geography(intake: TripIntake) -> TripGeography:
     ]
     return TripGeography(
         primary_destination_name=destination,
+        country=destination_airports[0].country if destination_airports else None,
         departure_airports=origin_airports,
         destination_airports=destination_airports,
         map_locations=map_locations,
@@ -667,6 +694,35 @@ def canonicalize_trip_geography(intake: TripIntake) -> TripGeography:
 
 def _looks_like_iata(value: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z]{3}", value.strip()))
+
+
+def _curated_gateway_hints(values: list[str]) -> list[TravelAirportRef]:
+    normalized = " ".join(_normalize_for_gateway_hint(value) for value in values)
+    hints = [
+        {
+            "needles": ("azores", "sao miguel", "ponta delgada"),
+            "airport": TravelAirportRef(
+                iata_code="PDL",
+                name="Joao Paulo II Airport",
+                city="Ponta Delgada",
+                country="Portugal",
+                role="gateway",
+                confidence=0.72,
+                source="curated_gateway_hint",
+                requires_user_confirmation=True,
+            ),
+        },
+    ]
+    for hint in hints:
+        if any(needle in normalized for needle in hint["needles"]):
+            airport = hint["airport"]
+            return [airport] if isinstance(airport, TravelAirportRef) else []
+    return []
+
+
+def _normalize_for_gateway_hint(value: str) -> str:
+    ascii_value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    return " ".join(re.sub(r"[^a-zA-Z0-9]+", " ", ascii_value).lower().split())
 
 
 def _destination_seed_chunks(values: list[str]) -> list[str]:

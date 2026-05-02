@@ -108,6 +108,21 @@ def test_ui_can_export_and_import_enriched_trip_json(
     ] == ["User Supplied District"]
 
 
+def test_ui_finance_manager_info_exposes_llm_usage_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_ui_paths(tmp_path, monkeypatch)
+    service = TrippyUIService()
+    trip_id = _create_selected_trip(service)
+
+    info = service.finance_manager_info(trip_id)
+
+    assert info["trip_id"] == trip_id
+    assert info["finance_manager"]["llm_usage"]["trip_id"] == trip_id
+    assert info["finance_manager"]["source"].endswith("llm_accounting.jsonl")
+
+
 def test_ui_logs_capture_backend_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
