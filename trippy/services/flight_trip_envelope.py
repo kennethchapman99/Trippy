@@ -183,7 +183,7 @@ def derive_trip_envelope(state: ResearchShortlistState) -> dict[str, object] | N
     }
 
 
-def assert_trip_envelope_locked(state: ResearchShortlistState) -> dict[str, object] | None:
+def assert_trip_envelope_locked(state: ResearchShortlistState, *, strict: bool = False) -> dict[str, object] | None:
     """Return the envelope or fail fast once flight selection has started.
 
     Early workspace prep may still build provisional research tabs before the user has
@@ -215,6 +215,9 @@ def assert_trip_envelope_locked(state: ResearchShortlistState) -> dict[str, obje
     if not state.flight_options or not (
         user_started_flight_choice or flow_started or approved_flight_exists
     ):
+        return None
+
+    if not strict:
         return None
 
     raise TripEnvelopeNotLockedError(

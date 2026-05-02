@@ -245,7 +245,7 @@ class TripPlannerService:
         options = [
             TripPlanOption(
                 option_id="single-base-easy",
-                title=f"Unpack Once in {single_base_region}",
+                title=f"{single_base_region} Single-Base Easy Version",
                 summary="Minimize logistics by choosing one strong home base and doing selective day trips.",
                 duration_days=duration,
                 regions=[single_base_region],
