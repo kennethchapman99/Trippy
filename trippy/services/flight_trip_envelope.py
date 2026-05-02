@@ -183,15 +183,43 @@ def derive_trip_envelope(state: ResearchShortlistState) -> dict[str, object] | N
     }
 
 
-def assert_trip_envelope_locked(state: ResearchShortlistState) -> dict[str, object]:
-    """Return the envelope or fail fast for downstream finalization."""
+def assert_trip_envelope_locked(state: ResearchShortlistState) -> dict[str, object] | None:
+    """Return the envelope or fail fast once flight selection has started.
+
+    Early workspace prep may still build provisional research tabs before the user has
+    chosen any flights. Once a departure or return choice exists, the envelope must be
+    completed before downstream planning finalizes.
+    """
 
     envelope = derive_trip_envelope(state)
-    if envelope is None:
-        raise TripEnvelopeNotLockedError(
-            "Trip envelope is not locked. Select both departure and return flights first."
+    if envelope is not None:
+        return envelope
+
+    selection = state.artifacts.get(FLIGHT_SELECTION_ARTIFACT) or {}
+    flow = state.artifacts.get(TWO_STEP_FLOW_ARTIFACT) or {}
+    user_started_flight_choice = bool(
+        isinstance(selection, dict)
+        and (
+            selection.get("selected_outbound_option_id")
+            or selection.get("selected_return_option_id")
         )
-    return envelope
+    )
+    flow_started = bool(
+        isinstance(flow, dict)
+        and flow.get("phase") in {"return_required", "trip_envelope_locked"}
+    )
+    approved_flight_exists = any(
+        option.row_status == ShortlistRowStatus.APPROVED for option in state.flight_options
+    )
+
+    if not state.flight_options or not (
+        user_started_flight_choice or flow_started or approved_flight_exists
+    ):
+        return None
+
+    raise TripEnvelopeNotLockedError(
+        "Trip envelope is not locked. Select both departure and return flights first."
+    )
 
 
 def selected_flight_option(
