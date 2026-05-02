@@ -105,8 +105,16 @@ class FlightShortlistService:
                 "No flight options were created because configured flight providers returned no usable live rows; add a user-supplied candidate or configure a live provider."
             )
         existing = self._store.load(trip_id, ShortlistCategory.FLIGHTS)
+        if phase == "return" and not options and existing is not None:
+            fallback_return_options = _return_search_handoff_options(ctx, existing)
+            if fallback_return_options:
+                options = fallback_return_options
+                live_notes.append(
+                    "No exact live return offers were returned; created date-specific return search rows from the selected departure and flexible trip window."
+                )
         if existing is not None and phase == "return":
-            departure_options, _ = split_options_by_phase(existing)
+            phase_options = split_options_by_phase(existing)
+            departure_options = list(phase_options.get("departure_options") or [])
             merged_options = [*departure_options, *options]
         else:
             merged_options = options

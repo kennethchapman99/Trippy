@@ -52,8 +52,8 @@ const Flights = () => {
     mutationFn: ({ phase }: { phase: FlightPhase }) =>
       api.buildShortlist(tripId!, "flights", {
         flight_phase: phase,
-        validate_live: true,
-        deep_research: true,
+        validate_live: phase === "departure",
+        deep_research: phase === "departure",
       }),
     onSuccess: (response) => {
       queryClient.setQueryData<TripState>(["trip", tripId], (current) =>
