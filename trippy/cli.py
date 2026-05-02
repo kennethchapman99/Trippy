@@ -94,6 +94,7 @@ def run_web(
     web_port: int = typer.Option(8788, "--web-port", help="Port for the Vite web UI"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the new web UI"),
     install: bool = typer.Option(True, "--install/--no-install", help="Run npm install if web/node_modules is missing"),
+    kill_ports: bool = typer.Option(True, "--kill-ports/--no-kill-ports", help="Kill stale processes on the backend/frontend ports before starting"),
 ) -> None:
     """Start the backend API and the new React/Vite Trippy UI with one command."""
     import os
@@ -122,6 +123,14 @@ def run_web(
     api_url = f"http://{api_host}:{api_port}"
     web_url = f"http://{web_host}:{web_port}"
 
+    if kill_ports:
+        for port in (api_port, web_port):
+            subprocess.run(
+                ["bash", "-lc", f"kill -9 $(lsof -t -i :{port}) 2>/dev/null || true"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
     env = os.environ.copy()
     env["TRIPPY_API_PROXY_TARGET"] = api_url
     env["VITE_TRIPPY_API_TARGET"] = api_url
@@ -135,6 +144,8 @@ def run_web(
         [sys.executable, "-c", backend_code],
         cwd=project_root,
         env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT,
     )
     frontend = subprocess.Popen(
         ["npm", "run", "dev", "--", "--host", web_host, "--port", str(web_port)],
@@ -144,6 +155,13 @@ def run_web(
 
     try:
         time.sleep(2)
+        if backend.poll() is not None:
+            console.print(f"[red]Backend exited with code {backend.returncode}[/red]")
+            raise typer.Exit(backend.returncode or 1)
+        if frontend.poll() is not None:
+            console.print(f"[red]Frontend exited with code {frontend.returncode}[/red]")
+            raise typer.Exit(frontend.returncode or 1)
+
         console.print(f"[green]Trippy backend API:[/green] {api_url}")
         console.print(f"[green]Trippy web UI:[/green] {web_url}")
         console.print("[dim]Press Ctrl-C to stop backend and frontend.[/dim]")
