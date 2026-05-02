@@ -27,6 +27,10 @@ class FlightEnvelopeError(ValueError):
     """Raised when a downstream planning step tries to skip the flight gate."""
 
 
+class TripEnvelopeNotLockedError(FlightEnvelopeError):
+    """Raised when downstream planning is attempted before the flight envelope is locked."""
+
+
 def is_iata_code(value: str) -> bool:
     """Return True only for valid three-letter IATA-style airport codes."""
 
@@ -184,7 +188,7 @@ def assert_trip_envelope_locked(state: ResearchShortlistState) -> dict[str, obje
 
     envelope = derive_trip_envelope(state)
     if envelope is None:
-        raise FlightEnvelopeError(
+        raise TripEnvelopeNotLockedError(
             "Trip envelope is not locked. Select both departure and return flights first."
         )
     return envelope
