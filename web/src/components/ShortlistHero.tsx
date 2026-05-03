@@ -103,19 +103,45 @@ export function deriveTripDateRangeLabel(
 ): string {
   const selectedFlight = findSelectedFlight(shortlists);
   const selectedReturnFlight = findSelectedReturnFlight(shortlists);
-  const flightStart = parseIsoDateOnly(selectedFlight?.departure_date);
-  const flightEnd = flightStart
-    ? findExplicitReturnDate(selectedReturnFlight, flightStart) ??
-      (selectedFlight ? findFlightReturnDate(selectedFlight, flightStart) : null)
-    : null;
+  const lockedEnvelope = findLockedTripEnvelope(shortlists);
+
+  if (lockedEnvelope) {
+    const envelopeStart = parseDatePrefix(lockedEnvelope.trip_start_datetime);
+    const envelopeEnd = parseDatePrefix(lockedEnvelope.trip_end_datetime);
+    if (envelopeStart && envelopeEnd) return formatDateRange(envelopeStart, envelopeEnd);
+  }
+
+  if (selectedFlight && !selectedReturnFlight) {
+    const arrival = parseIsoDateOnly(selectedFlight.arrival_date);
+    return arrival ? `Departure selected · return pending after ${formatSingleDate(arrival)}` : "Departure selected · return pending";
+  }
+
+  if (selectedFlight && selectedReturnFlight) {
+    const flightStart = parseIsoDateOnly(selectedFlight.arrival_date) ?? parseIsoDateOnly(selectedFlight.departure_date);
+    const flightEnd = findExplicitReturnDate(selectedReturnFlight, flightStart ?? new Date(0));
+    if (flightStart && flightEnd) return formatDateRange(flightStart, flightEnd);
+  }
+
   const intakeStart = parseIsoDateOnly(intake?.travel_window?.start_date);
   const intakeEnd = parseIsoDateOnly(intake?.travel_window?.end_date);
-  const start = flightStart ?? intakeStart;
-  const end = flightEnd ?? intakeEnd;
-
-  if (start && end) return formatDateRange(start, end);
-  if (start) return formatSingleDate(start);
+  if (intakeStart && intakeEnd) return `Target window · ${formatDateRange(intakeStart, intakeEnd)}`;
+  if (intakeStart) return `Target window · ${formatSingleDate(intakeStart)}`;
   return "";
+}
+
+function findLockedTripEnvelope(shortlists?: ShortlistState[]): { trip_start_datetime?: string; trip_end_datetime?: string } | null {
+  const flights = shortlists?.find((shortlist) => shortlist.category === "flights");
+  const envelope = flights?.artifacts?.trip_envelope;
+  if (!envelope || typeof envelope !== "object") return null;
+  const data = envelope as Record<string, unknown>;
+  if (data.status !== "locked") return null;
+  if (typeof data.trip_start_datetime !== "string" || typeof data.trip_end_datetime !== "string") {
+    return null;
+  }
+  return {
+    trip_start_datetime: data.trip_start_datetime,
+    trip_end_datetime: data.trip_end_datetime,
+  };
 }
 
 function findSelectedFlight(shortlists?: ShortlistState[]): FlightOption | null {
@@ -150,22 +176,9 @@ function findExplicitReturnDate(option: FlightOption | null, start: Date): Date 
   return candidates.sort((a, b) => b.getTime() - a.getTime())[0];
 }
 
-function findFlightReturnDate(option: FlightOption, start: Date): Date | null {
-  const candidates = [
-    ...isoDatesFromText(option.deep_link),
-    ...Object.values(option.comparison_links ?? {}).flatMap(isoDatesFromText),
-  ]
-    .map(parseIsoDateOnly)
-    .filter((date): date is Date => Boolean(date))
-    .filter((date) => date.getTime() >= start.getTime());
-
-  if (candidates.length === 0) return null;
-  return candidates.sort((a, b) => b.getTime() - a.getTime())[0];
-}
-
-function isoDatesFromText(value: unknown): string[] {
-  if (typeof value !== "string") return [];
-  return value.match(/\b\d{4}-\d{2}-\d{2}\b/g) ?? [];
+function parseDatePrefix(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  return parseIsoDateOnly(value.slice(0, 10));
 }
 
 function parseIsoDateOnly(value: unknown): Date | null {
