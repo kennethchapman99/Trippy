@@ -1,14 +1,18 @@
-"""Runtime patches for local Trippy development.
+"""Runtime compatibility hooks for local Trippy development.
 
-This module is imported automatically by Python when the repository root is on
-sys.path. It keeps the current local UI server compatible while flights are
-being refactored from a generic shortlist into a backend-owned two-step flow.
+The real flight state machine now lives in :mod:`trippy.services.flight_flow`.
+This file only wires the existing lightweight local HTTP server to the new
+flight-flow endpoints without forcing a large server.py rewrite in this PR.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 
 def _install_two_step_return_patch() -> None:
@@ -285,10 +289,7 @@ def _install_two_step_return_patch() -> None:
         if existing is None:
             return False
         selection = existing.artifacts.get("flight_selection") or {}
-        return bool(
-            selection.get("selected_outbound_option_id")
-            and not selection.get("selected_return_option_id")
-        )
+        return bool(selection.get("selected_outbound_option_id") and not selection.get("selected_return_option_id"))
 
     def _selected_outbound(existing: ResearchShortlistState) -> FlightOption | None:
         selection = existing.artifacts.get("flight_selection") or {}
@@ -337,4 +338,101 @@ def _install_two_step_return_patch() -> None:
     cls._trippy_two_step_return_patch = True
 
 
+def _install_flight_flow_routes() -> None:
+    try:
+        import trippy.ui.server as ui_server
+        from trippy.services.flight_flow import FlightFlowService
+    except Exception:
+        return
+
+    for value in vars(ui_server).values():
+        if not isinstance(value, type):
+            continue
+        if not issubclass(value, BaseHTTPRequestHandler):
+            continue
+        if getattr(value, "_trippy_flight_flow_routes", False):
+            continue
+        _patch_handler(value, FlightFlowService)
+
+
+def _patch_handler(handler_cls: type[BaseHTTPRequestHandler], service_cls: type[Any]) -> None:
+    original_get = getattr(handler_cls, "do_GET", None)
+    original_post = getattr(handler_cls, "do_POST", None)
+
+    def do_GET(self: BaseHTTPRequestHandler) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/flights/state":
+            query = parse_qs(parsed.query)
+            trip_id = (query.get("trip_id") or [""])[0]
+            _write_json(self, service_cls().get_state(trip_id))
+            return
+        if original_get is not None:
+            return original_get(self)
+        self.send_error(HTTPStatus.NOT_FOUND)
+
+    def do_POST(self: BaseHTTPRequestHandler) -> None:
+        parsed = urlparse(self.path)
+        if not parsed.path.startswith("/api/flights/"):
+            if original_post is not None:
+                return original_post(self)
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        try:
+            payload = _read_json(self)
+            trip_id = str(payload.get("trip_id") or "")
+            option_id = str(payload.get("option_id") or "")
+            service = service_cls()
+            if parsed.path == "/api/flights/search-departures":
+                result = service.search_departures(
+                    trip_id,
+                    validate_live=bool(payload.get("validate_live", True)),
+                    deep_research=bool(payload.get("deep_research", True)),
+                    adapter_mode=str(payload.get("adapter") or "auto"),
+                )
+            elif parsed.path == "/api/flights/select-departure":
+                result = service.select_departure(trip_id, option_id)
+            elif parsed.path == "/api/flights/search-returns":
+                result = service.search_returns(
+                    trip_id,
+                    validate_live=bool(payload.get("validate_live", True)),
+                    deep_research=bool(payload.get("deep_research", False)),
+                    adapter_mode=str(payload.get("adapter") or "auto"),
+                )
+            elif parsed.path == "/api/flights/select-return":
+                result = service.select_return(trip_id, option_id)
+            elif parsed.path == "/api/flights/reset-departure":
+                result = service.reset_departure(trip_id)
+            else:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            _write_json(self, result)
+        except Exception as exc:
+            _write_json(self, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+
+    handler_cls.do_GET = do_GET
+    handler_cls.do_POST = do_POST
+    handler_cls._trippy_flight_flow_routes = True
+
+
+def _read_json(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    length = int(handler.headers.get("Content-Length") or "0")
+    if length <= 0:
+        return {}
+    raw = handler.rfile.read(length).decode("utf-8")
+    if not raw.strip():
+        return {}
+    data = json.loads(raw)
+    return data if isinstance(data, dict) else {}
+
+
+def _write_json(handler: BaseHTTPRequestHandler, payload: dict[str, Any], status: int = HTTPStatus.OK) -> None:
+    data = json.dumps(payload, default=str).encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(data)))
+    handler.end_headers()
+    handler.wfile.write(data)
+
+
 _install_two_step_return_patch()
+_install_flight_flow_routes()
