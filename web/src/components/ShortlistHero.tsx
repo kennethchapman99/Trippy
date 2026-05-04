@@ -108,7 +108,12 @@ export function deriveTripDateRangeLabel(
   if (lockedEnvelope) {
     const envelopeStart = parseDatePrefix(lockedEnvelope.trip_start_datetime);
     const envelopeEnd = parseDatePrefix(lockedEnvelope.trip_end_datetime);
-    if (envelopeStart && envelopeEnd) return formatDateRange(envelopeStart, envelopeEnd);
+    if (envelopeStart && envelopeEnd) {
+      if (envelopeEnd.getTime() >= envelopeStart.getTime()) {
+        return formatDateRange(envelopeStart, envelopeEnd);
+      }
+      return "Flight dates invalid · reselect return";
+    }
   }
 
   if (selectedFlight && !selectedReturnFlight) {
@@ -148,13 +153,13 @@ function findSelectedFlight(shortlists?: ShortlistState[]): FlightOption | null 
   const flights = shortlists?.find((shortlist) => shortlist.category === "flights");
   if (!flights) return null;
   const outboundId = flights.artifacts?.flight_selection?.selected_outbound_option_id;
-  const outbound = flights.flight_options.find((option) => option.option_id === outboundId);
+  const outbound = flights.flight_options.find((option) => option.option_id === outboundId && option.flight_phase !== "return");
   if (outbound) return outbound;
   const selectedStatuses = new Set(["approved", "booked", "confirmed"]);
   const recommended = flights.flight_options.find((option) => option.option_id === flights.recommended_option_id);
-  if (recommended && selectedStatuses.has(recommended.row_status)) return recommended;
+  if (recommended && selectedStatuses.has(recommended.row_status) && recommended.flight_phase !== "return") return recommended;
   return (
-    flights.flight_options.find((option) => selectedStatuses.has(option.row_status)) ??
+    flights.flight_options.find((option) => selectedStatuses.has(option.row_status) && option.flight_phase !== "return") ??
     null
   );
 }
@@ -163,7 +168,7 @@ function findSelectedReturnFlight(shortlists?: ShortlistState[]): FlightOption |
   const flights = shortlists?.find((shortlist) => shortlist.category === "flights");
   if (!flights) return null;
   const returnId = flights.artifacts?.flight_selection?.selected_return_option_id;
-  return flights.flight_options.find((option) => option.option_id === returnId) ?? null;
+  return flights.flight_options.find((option) => option.option_id === returnId && option.flight_phase === "return") ?? null;
 }
 
 function findExplicitReturnDate(option: FlightOption | null, start: Date): Date | null {

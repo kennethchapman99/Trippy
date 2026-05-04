@@ -20,6 +20,8 @@ TRIP_ENVELOPE_ARTIFACT = "trip_envelope"
 TWO_STEP_FLOW_ARTIFACT = "two_step_flight_flow"
 DOWNSTREAM_LOCK_ARTIFACT = "downstream_planning_lock"
 DOWNSTREAM_CATEGORIES = ("lodging", "cars", "activities", "timeline")
+_RETURN_PHASES = {"return", "inbound", "homebound"}
+_TRANSFER_PHASES = {"inter_location", "interlocation", "transfer", "one_way", "in_trip"}
 _IATA_PATTERN = re.compile(r"^[A-Z]{3}$")
 
 
@@ -68,16 +70,34 @@ def select_flight_for_envelope(
     """
 
     _require_flight_state(state)
-    option = _find_option(state, option_id)
     kind = normalize_selection_kind(selection_kind)
     selection = dict(state.artifacts.get(FLIGHT_SELECTION_ARTIFACT) or {})
+
+    selected_outbound = selected_flight_option(state, "outbound") if kind == "return" else None
     if kind == "return" and not selection.get("selected_outbound_option_id"):
         raise FlightEnvelopeError(
             "Select a departure flight before searching for or selecting return options."
         )
+    if kind == "return" and selected_outbound is None:
+        raise FlightEnvelopeError(
+            "Selected departure flight is missing or invalid. Choose the departure flight again before selecting a return."
+        )
+
+    option = _find_option(
+        state,
+        option_id,
+        selection_kind=kind,
+        selected_outbound=selected_outbound,
+    )
+    if kind == "return" and selected_outbound is not None and not _is_reverse_route(option, selected_outbound):
+        raise FlightEnvelopeError(
+            "Return flight must fly from the selected destination airport back to the selected origin airport."
+        )
 
     selection[f"selected_{kind}_option_id"] = option_id
     selection["trip_envelope_locked"] = False
+    if kind == "outbound":
+        selection.pop("selected_return_option_id", None)
     state.artifacts[FLIGHT_SELECTION_ARTIFACT] = selection
 
     if kind == "outbound":
@@ -159,6 +179,8 @@ def derive_trip_envelope(state: ResearchShortlistState) -> dict[str, object] | N
     return_flight = selected_flight_option(state, "return")
     if outbound is None or return_flight is None:
         return None
+    if not _is_reverse_route(return_flight, outbound):
+        return None
 
     origin_airport = _require_iata(outbound.departure_airport, "origin_airport")
     destination_airport = _require_iata(outbound.arrival_airport, "destination_airport")
@@ -236,7 +258,20 @@ def selected_flight_option(
     option_id = str(selection.get(f"selected_{kind}_option_id") or "")
     if not option_id:
         return None
-    return next((option for option in state.flight_options if option.option_id == option_id), None)
+
+    candidates = [option for option in state.flight_options if option.option_id == option_id]
+    if kind == "return":
+        outbound = selected_flight_option(state, "outbound")
+        if outbound is not None:
+            return next((option for option in candidates if _is_reverse_route(option, outbound)), None)
+    return next(
+        (
+            option
+            for option in candidates
+            if _option_matches_selection_kind(option, kind)
+        ),
+        None,
+    )
 
 
 def split_options_by_phase(state: ResearchShortlistState) -> dict[str, object]:
@@ -251,7 +286,9 @@ def split_options_by_phase(state: ResearchShortlistState) -> dict[str, object]:
     if outbound is None:
         return {
             "phase": "departure_required",
-            "departure_options": state.flight_options,
+            "departure_options": [
+                option for option in state.flight_options if _option_matches_selection_kind(option, "outbound")
+            ],
             "return_options": [],
             "route": None,
         }
@@ -301,11 +338,67 @@ def _require_flight_state(state: ResearchShortlistState) -> None:
         raise FlightEnvelopeError("Flight envelope helpers require a flights shortlist state.")
 
 
-def _find_option(state: ResearchShortlistState, option_id: str) -> FlightOption:
-    option = next((item for item in state.flight_options if item.option_id == option_id), None)
-    if option is None:
-        raise FlightEnvelopeError(f"Flight option {option_id!r} was not found.")
-    return option
+def _find_option(
+    state: ResearchShortlistState,
+    option_id: str,
+    *,
+    selection_kind: FlightSelectionKind,
+    selected_outbound: FlightOption | None = None,
+) -> FlightOption:
+    option = next(
+        (
+            item
+            for item in state.flight_options
+            if item.option_id == option_id
+            and _option_matches_selection_kind(item, selection_kind, selected_outbound=selected_outbound)
+        ),
+        None,
+    )
+    if option is not None:
+        return option
+    if any(item.option_id == option_id for item in state.flight_options):
+        raise FlightEnvelopeError(
+            f"Flight option {option_id!r} exists, but it is not a valid {selection_kind} flight option."
+        )
+    raise FlightEnvelopeError(f"Flight option {option_id!r} was not found.")
+
+
+def _option_matches_selection_kind(
+    option: FlightOption,
+    kind: FlightSelectionKind,
+    *,
+    selected_outbound: FlightOption | None = None,
+) -> bool:
+    if kind == "return":
+        if selected_outbound is not None and _is_reverse_route(option, selected_outbound):
+            return True
+        return _is_return_phase(option)
+    return not _is_return_phase(option) and not _is_transfer_phase(option)
+
+
+def _is_return_phase(option: FlightOption) -> bool:
+    return _option_phase(option) in _RETURN_PHASES
+
+
+def _is_transfer_phase(option: FlightOption) -> bool:
+    return _option_phase(option) in _TRANSFER_PHASES
+
+
+def _option_phase(option: FlightOption) -> str:
+    return str(getattr(option, "flight_phase", "") or "").strip().lower()
+
+
+def _is_reverse_route(candidate: FlightOption, outbound: FlightOption) -> bool:
+    outbound_origin = normalized_iata_or_none(outbound.departure_airport)
+    outbound_destination = normalized_iata_or_none(outbound.arrival_airport)
+    candidate_origin = normalized_iata_or_none(candidate.departure_airport)
+    candidate_destination = normalized_iata_or_none(candidate.arrival_airport)
+    return bool(
+        outbound_origin
+        and outbound_destination
+        and candidate_origin == outbound_destination
+        and candidate_destination == outbound_origin
+    )
 
 
 def _require_iata(value: str, field_name: str) -> str:

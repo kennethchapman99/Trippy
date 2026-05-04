@@ -63,7 +63,8 @@ export default function FlightsFlow() {
     searchReturns.mutate();
   }, [flow?.phase, flow?.selected_departure?.option_id, flow?.return_options.length, autoReturnSearchFor]);
 
-  const title = flow?.phase === "locked" ? "Flights selected." : activePhase === "return" ? "Pick your return flight." : "Pick your departure flight.";
+  const title = flow?.phase === "locked" ? "Flights locked." : activePhase === "return" ? "Pick your return flight." : "Pick your departure flight.";
+  const researchLabel = activePhase === "return" ? "Research returns" : "Research departures";
 
   return (
     <AppShell>
@@ -74,9 +75,11 @@ export default function FlightsFlow() {
           <div><div className="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">Stage 3 · Flights</div><h2 className="font-[Fredoka] text-3xl md:text-4xl font-bold mt-1">{title}</h2></div>
           <button onClick={() => activePhase === "return" ? searchReturns.mutate() : searchDepartures.mutate()} disabled={busy} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-card border-2 border-foreground/15 text-sm font-bold hover:border-foreground/40 transition-colors">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-            {activePhase === "return" ? "Research returns" : "Research departures"}
+            {researchLabel}
           </button>
         </div>
+
+        <FlightGateStatus flow={flow} />
 
         {error && <div className="rounded-2xl border-2 border-destructive/30 bg-destructive/5 p-4 mb-4 text-sm font-bold text-destructive">{(error as Error)?.message || String(error)}</div>}
         {(tripQuery.isLoading || flowQuery.isLoading) && <div className="flex items-center justify-center py-24 text-muted-foreground gap-3"><Loader2 className="h-6 w-6 animate-spin" /><span className="font-bold">Loading...</span></div>}
@@ -86,16 +89,45 @@ export default function FlightsFlow() {
         {flow?.selected_return && <SelectedFlight label="Return selected" option={flow.selected_return} />}
         {flow?.phase === "return_required" && <div className="rounded-2xl border-2 border-foreground/10 bg-card p-4 mb-4 text-sm font-bold text-muted-foreground">Return search: {flow.selected_departure?.arrival_airport} to {flow.selected_departure?.departure_airport}</div>}
 
-        {rows.length === 0 && !flowQuery.isLoading && <EmptyShortlist title={activePhase === "return" ? "No return rows yet" : "No departure options yet"} description={activePhase === "return" ? "Re-run return research. The backend should return live rows or fallback return-search rows." : "Search departure options first."} ctaLabel={activePhase === "return" ? "Research returns" : "Research departures"} onBuild={() => activePhase === "return" ? searchReturns.mutate() : searchDepartures.mutate()} isLoading={busy} isError={Boolean(error)} errorMessage={(error as Error)?.message} />}
+        {rows.length === 0 && !flowQuery.isLoading && <EmptyShortlist title={activePhase === "return" ? "No return rows yet" : "No departure options yet"} description={activePhase === "return" ? "Re-run return research. The backend should return live rows or fallback return-search rows." : "Search departure options first."} ctaLabel={researchLabel} onBuild={() => activePhase === "return" ? searchReturns.mutate() : searchDepartures.mutate()} isLoading={busy} isError={Boolean(error)} errorMessage={(error as Error)?.message} />}
 
         <div className="flex flex-col gap-4">
-          {rows.map((row) => <FlightCard key={row.option_id} option={row} selected={activePhase === "return" ? row.option_id === flow?.selected_return?.option_id : row.option_id === flow?.selected_departure?.option_id} activePhase={activePhase} busy={busy} onSelect={() => activePhase === "return" ? selectReturn.mutate(row.option_id) : selectDeparture.mutate(row.option_id)} />)}
+          {rows.map((row) => <FlightCard key={`${activePhase}-${row.option_id}`} option={row} selected={activePhase === "return" ? row.option_id === flow?.selected_return?.option_id : row.option_id === flow?.selected_departure?.option_id} activePhase={activePhase} busy={busy} onSelect={() => activePhase === "return" ? selectReturn.mutate(row.option_id) : selectDeparture.mutate(row.option_id)} />)}
         </div>
 
         {flow?.can_continue && <div className="mt-6 flex justify-end"><Button onClick={() => navigate(`/trip/${tripId}/stays`)} className="h-12 rounded-2xl bg-gradient-sunset text-primary-foreground font-bold border-2 border-foreground shadow-sticker px-8">Continue to Stays <ArrowRight className="h-4 w-4" /></Button></div>}
       </div>
     </AppShell>
   );
+}
+
+function FlightGateStatus({ flow }: { flow: FlightFlowResponse["flight_flow"] | undefined }) {
+  const departureDone = Boolean(flow?.selected_departure);
+  const returnDone = Boolean(flow?.selected_return);
+  const locked = flow?.phase === "locked" && departureDone && returnDone;
+  const items = [
+    { label: "1. Departure flight", done: departureDone, detail: departureDone ? routeLabel(flow?.selected_departure) : "required to set trip start" },
+    { label: "2. Return flight", done: returnDone, detail: returnDone ? routeLabel(flow?.selected_return) : "required to set trip end" },
+    { label: "3. Trip dates", done: locked, detail: locked ? "locked from selected flights" : "not final yet" },
+  ];
+  return (
+    <div className="rounded-2xl border-2 border-foreground/10 bg-card p-4 mb-4">
+      <div className="font-bold text-foreground mb-3">Trip date lock requires both envelope flights</div>
+      <div className="grid gap-2 md:grid-cols-3">
+        {items.map((item) => (
+          <div key={item.label} className={`rounded-xl border-2 px-3 py-2 ${item.done ? "border-palm/30 bg-palm/5" : "border-foreground/10 bg-background/60"}`}>
+            <div className="text-sm font-bold flex items-center gap-2">{item.done && <Check className="h-4 w-4 text-palm" />}{item.label}</div>
+            <div className="text-xs text-muted-foreground mt-1">{item.detail}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function routeLabel(option: FlightOption | null | undefined): string {
+  if (!option) return "";
+  return `${option.departure_airport} to ${option.arrival_airport}`;
 }
 
 function SelectedFlight({ label, option }: { label: string; option: FlightOption }) {
