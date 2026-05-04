@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import pytest
+
 from trippy.models.shortlists import (
     FlightOption,
     RecommendationGrade,
     ResearchShortlistState,
     ShortlistCategory,
+    ShortlistRowStatus,
 )
 from trippy.services.flight_flow import FlightFlowService
+from trippy.services.flight_trip_envelope import FlightEnvelopeError
 
 
 class _FakeStore:
@@ -61,11 +65,73 @@ def test_flight_flow_repairs_orphan_return_selection() -> None:
     assert [option["option_id"] for option in repaired["flight_options"]] == ["departure-1"]
 
 
+def test_inter_location_search_creates_scanner_handoff_without_fake_flight_data() -> None:
+    state = ResearchShortlistState(
+        trip_id="azores-family-2026",
+        category=ShortlistCategory.FLIGHTS,
+        flight_options=[
+            _option(
+                "departure-1",
+                "departure",
+                "YYZ",
+                "PDL",
+                row_status=ShortlistRowStatus.APPROVED,
+            ),
+        ],
+        artifacts={"flight_selection": {"selected_outbound_option_id": "departure-1"}},
+    )
+
+    service = FlightFlowService(store=_FakeStore(state))
+    response = service.search_inter_location(
+        "azores-family-2026",
+        origin_airport="PDL",
+        destination_airport="LIS",
+        departure_date="2026-08-27",
+    )
+    transfer_options = response["flight_flow"]["inter_location_options"]
+
+    assert len(transfer_options) == 1
+    row = transfer_options[0]
+    assert row["option_id"] == "scanner-inter_location-PDL-LIS"
+    assert row["flight_phase"] == "inter_location"
+    assert row["departure_airport"] == "PDL"
+    assert row["arrival_airport"] == "LIS"
+    assert row["airline"] == "Flight scanner handoff — exact evidence required"
+    assert row["flight_numbers"] == []
+    assert row["fare_estimate_cad"] == "source evidence required"
+    assert row["total_travel_duration"] == "source evidence required"
+    assert row["validation"]["verification_status"] == "manual_required"
+    assert "flight_numbers" in row["validation"]["missing_fields"]
+
+
+def test_scanner_handoff_rows_are_not_selectable() -> None:
+    service = FlightFlowService(store=_FakeStore(None))
+    scanner_row = service._scanner_handoff_option(  # noqa: SLF001 - explicit contract regression
+        "azores-family-2026",
+        phase="departure",
+        origin="YYZ",
+        destination="PDL",
+        departure_date="2026-08-24",
+        rank=1,
+    )
+    state = ResearchShortlistState(
+        trip_id="azores-family-2026",
+        category=ShortlistCategory.FLIGHTS,
+        flight_options=[scanner_row],
+    )
+    service = FlightFlowService(store=_FakeStore(state))
+
+    with pytest.raises(FlightEnvelopeError, match="scanner handoff"):
+        service.select_departure("azores-family-2026", scanner_row.option_id)
+
+
 def _option(
     option_id: str,
     phase: str,
     origin: str,
     destination: str,
+    *,
+    row_status: ShortlistRowStatus = ShortlistRowStatus.RESEARCHED,
 ) -> FlightOption:
     return FlightOption(
         option_id=option_id,
@@ -90,4 +156,5 @@ def _option(
         friction_score=10,
         family_comfort_score=90,
         recommendation_grade=RecommendationGrade.STRONG,
+        row_status=row_status,
     )
