@@ -36,6 +36,7 @@ from trippy.services.activity_shortlist import ActivityShortlistService
 from trippy.services.car_shortlist import CarShortlistService
 from trippy.services.dashboard import DashboardService
 from trippy.services.flight_shortlist import FlightShortlistService
+from trippy.services.flight_flow import FlightFlowService
 from trippy.services.learning import (
     FeedbackRating,
     LearningEventStore,
@@ -328,6 +329,40 @@ class TrippyUIService:
             "draft": draft.model_dump(mode="json"),
             "next_step": "Generate exact shortlists and prepare the workspace.",
         }
+
+    def flight_flow_state(self, trip_id: str) -> dict[str, Any]:
+        return FlightFlowService(self._intakes, self._planner).get_state(trip_id)
+
+    def flight_flow_search_departures(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return FlightFlowService(self._intakes, self._planner).search_departures(
+            _trip_id(payload),
+            validate_live=bool(payload.get("validate_live", True)),
+            deep_research=bool(payload.get("deep_research", True)),
+            adapter_mode=str(payload.get("adapter") or "auto"),
+        )
+
+    def flight_flow_select_departure(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return FlightFlowService(self._intakes, self._planner).select_departure(
+            _trip_id(payload),
+            str(payload.get("option_id") or ""),
+        )
+
+    def flight_flow_search_returns(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return FlightFlowService(self._intakes, self._planner).search_returns(
+            _trip_id(payload),
+            validate_live=bool(payload.get("validate_live", True)),
+            deep_research=bool(payload.get("deep_research", False)),
+            adapter_mode=str(payload.get("adapter") or "auto"),
+        )
+
+    def flight_flow_select_return(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return FlightFlowService(self._intakes, self._planner).select_return(
+            _trip_id(payload),
+            str(payload.get("option_id") or ""),
+        )
+
+    def flight_flow_reset_departure(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return FlightFlowService(self._intakes, self._planner).reset_departure(_trip_id(payload))
 
     def build_shortlist(
         self,
@@ -863,6 +898,14 @@ class TrippyUIHandler(BaseHTTPRequestHandler):
             if path == "/api/state":
                 self._send_json(self._ui.app_state())
                 return
+            if path == "/api/flights/state":
+                query = parse_qs(urlparse(self.path).query)
+                trip_id = query.get("trip_id", [""])[0]
+                if not trip_id:
+                    self._send_error("trip_id is required", HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(self._ui.flight_flow_state(trip_id))
+                return
             if path == "/api/logs":
                 query = parse_qs(urlparse(self.path).query)
                 trip_id = query.get("trip_id", [""])[0] or None
@@ -932,6 +975,21 @@ class TrippyUIHandler(BaseHTTPRequestHandler):
                     self._ui.select_plan(_trip_id(payload), str(payload.get("option_id") or ""))
                 )
                 return
+            if path == "/api/flights/search-departures":
+                self._send_json(self._ui.flight_flow_search_departures(payload))
+                return
+            if path == "/api/flights/select-departure":
+                self._send_json(self._ui.flight_flow_select_departure(payload))
+                return
+            if path == "/api/flights/search-returns":
+                self._send_json(self._ui.flight_flow_search_returns(payload))
+                return
+            if path == "/api/flights/select-return":
+                self._send_json(self._ui.flight_flow_select_return(payload))
+                return
+            if path == "/api/flights/reset-departure":
+                self._send_json(self._ui.flight_flow_reset_departure(payload))
+                return
             if path == "/api/shortlist":
                 self._send_json(
                     self._ui.build_shortlist(
@@ -940,6 +998,7 @@ class TrippyUIHandler(BaseHTTPRequestHandler):
                         validate_live=bool(payload.get("validate_live", False)),
                         deep_research=bool(payload.get("deep_research", False)),
                         adapter=str(payload.get("adapter") or "auto"),
+                        flight_phase=str(payload.get("flight_phase") or "departure"),
                     )
                 )
                 return
