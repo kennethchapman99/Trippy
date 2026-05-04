@@ -83,6 +83,16 @@ def select_flight_for_envelope(
             "Selected departure flight is missing or invalid. Choose the departure flight again before selecting a return."
         )
 
+    if kind == "return" and selected_outbound is not None:
+        for field_name, airport in (
+            ("origin_airport", selected_outbound.departure_airport),
+            ("destination_airport", selected_outbound.arrival_airport),
+        ):
+            if normalized_iata_or_none(airport) is None:
+                raise FlightEnvelopeError(
+                    f"{field_name} must be a normalized IATA airport code before selecting return flight: {airport!r}"
+                )
+
     option = _find_option(
         state,
         option_id,

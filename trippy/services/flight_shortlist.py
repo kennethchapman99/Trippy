@@ -39,6 +39,7 @@ from trippy.services.shortlist_store import (
 )
 from trippy.services.flight_trip_envelope import (
     apply_trip_envelope_artifacts,
+    normalized_iata_or_none,
     select_flight_for_envelope,
     split_options_by_phase,
 )
@@ -239,9 +240,10 @@ class FlightShortlistService:
         state = self._store.load(trip_id, ShortlistCategory.FLIGHTS)
         if state is None:
             state = self.build(trip_id, validate_live=False)
-        option_ids = {option.option_id for option in state.flight_options}
-        if option_id not in option_ids:
+        option = next((option for option in state.flight_options if option.option_id == option_id), None)
+        if option is None:
             raise ValueError(f"Flight option {option_id!r} was not found for trip {trip_id!r}")
+        _prepare_user_return_candidate_for_envelope(state, option, selection_kind)
         state = select_flight_for_envelope(state, option_id, selection_kind=selection_kind)
         kind = _normalize_selection_kind(selection_kind)
         _refresh_flight_recommendations(state, ctx, preserve_selection=True)
@@ -255,6 +257,64 @@ class FlightShortlistService:
             ),
         )
         return self._store.save(state)
+
+
+def _prepare_user_return_candidate_for_envelope(
+    state: ResearchShortlistState,
+    option: FlightOption,
+    selection_kind: str,
+) -> None:
+    """Let explicit user-pasted return candidates enter the return gate safely.
+
+    This does not invent airline, fare, timing, baggage, or availability. It only
+    assigns the return route role from the already-selected departure envelope
+    when the user explicitly selects the candidate as the return flight.
+    """
+    if _normalize_selection_kind(selection_kind) != "return":
+        return
+
+    selection = state.artifacts.get("flight_selection") or {}
+    if not isinstance(selection, dict):
+        return
+
+    outbound_id = str(selection.get("selected_outbound_option_id") or "")
+    if not outbound_id:
+        return
+
+    outbound = next((item for item in state.flight_options if item.option_id == outbound_id), None)
+    if outbound is None:
+        return
+
+    outbound_origin = normalized_iata_or_none(outbound.departure_airport)
+    outbound_destination = normalized_iata_or_none(outbound.arrival_airport)
+    if not outbound_origin or not outbound_destination:
+        return
+
+    candidate_origin = normalized_iata_or_none(option.departure_airport)
+    candidate_destination = normalized_iata_or_none(option.arrival_airport)
+
+    if candidate_origin == outbound_destination and candidate_destination == outbound_origin:
+        option.flight_phase = "return"
+        return
+
+    if not option.option_id.startswith("user-flight-"):
+        return
+
+    option.flight_phase = "return"
+    option.departure_airport = outbound_destination
+    option.arrival_airport = outbound_origin
+
+    note = (
+        "Return route inferred from explicit user return selection and selected departure envelope; "
+        "verify exact source itinerary before booking."
+    )
+    if note not in option.confidence_notes:
+        option.confidence_notes.append(note)
+
+    flag = "Return route inferred from selected departure; verify exact source itinerary"
+    if flag not in option.friction_flags:
+        option.friction_flags.append(flag)
+
 
 
 def _scanner_fallback_option(
