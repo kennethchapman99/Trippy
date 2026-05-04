@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import {
   Sparkles, Send, Calendar, Users, DollarSign, Plane, MapPin,
   ArrowLeft, Wand2, Mountain, UtensilsCrossed, Waves, Building2,
-  TreePine, Snowflake, Check, Loader2, AlertCircle,
+  TreePine, Snowflake, Heart, Check, Loader2, AlertCircle,
 } from "lucide-react";
 import { api, type TripConcept } from "@/lib/api";
 import { useDestinationImage } from "@/lib/destinationImages";
@@ -15,6 +15,7 @@ const vibes = [
   { icon: Waves, label: "Beach + chill", color: "hsl(195 90% 65%)" },
   { icon: Mountain, label: "Adventure", color: "hsl(145 55% 38%)" },
   { icon: UtensilsCrossed, label: "Food + culture", color: "hsl(8 90% 65%)" },
+  { icon: Heart, label: "Romance", color: "hsl(340 82% 60%)" },
   { icon: Building2, label: "City escape", color: "hsl(215 75% 28%)" },
   { icon: TreePine, label: "Nature + wildlife", color: "hsl(178 70% 45%)" },
   { icon: Snowflake, label: "Cold + cozy", color: "hsl(205 88% 48%)" },
