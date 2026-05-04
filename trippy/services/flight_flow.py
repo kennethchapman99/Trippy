@@ -172,6 +172,7 @@ class FlightFlowService:
         state: ResearchShortlistState | None,
     ) -> dict[str, Any]:
         if state is not None:
+            self._repair_orphan_return_state(state)
             self._write_flow_artifact(state)
             apply_trip_envelope_artifacts(state)
             state = self._store.save(state)
@@ -215,6 +216,63 @@ class FlightFlowService:
             "shortlist": state.model_dump(mode="json") if state else None,
         }
 
+    def _repair_orphan_return_state(self, state: ResearchShortlistState) -> None:
+        """Drop stale return state when the selected departure is missing.
+
+        This protects the UI from impossible states such as "Return selected" while
+        the flow is still asking for a departure. Return rows are only valid after a
+        departure route has been selected because they are derived from that route.
+        """
+        if self._selected_departure(state) is not None:
+            return
+
+        artifacts = dict(state.artifacts or {})
+        selection = dict(artifacts.get("flight_selection") or {})
+        changed = False
+
+        if selection.get("selected_return_option_id") or selection.get("trip_envelope_locked"):
+            selection.pop("selected_return_option_id", None)
+            selection["trip_envelope_locked"] = False
+            artifacts["flight_selection"] = selection
+            changed = True
+
+        for key in (
+            "trip_envelope",
+            "two_step_flight_flow",
+            "downstream_planning_lock",
+            "return_search",
+            "inter_location_flights",
+        ):
+            if key in artifacts:
+                artifacts.pop(key, None)
+                changed = True
+
+        kept_options: list[FlightOption] = []
+        for option in state.flight_options:
+            role = self._flight_role(option)
+            if role in {"return", "inter_location"}:
+                changed = True
+                continue
+            if option.row_status == ShortlistRowStatus.APPROVED:
+                option.row_status = ShortlistRowStatus.RESEARCHED
+                changed = True
+            if "selected" in (option.recommendation_label or "").lower():
+                option.recommendation_label = ""
+                changed = True
+            kept_options.append(option)
+
+        if not changed:
+            return
+
+        state.flight_options = kept_options
+        state.artifacts = artifacts
+        state.recommended_option_id = kept_options[0].option_id if kept_options else None
+        state.recommendation_summary = "Choose a departure flight first. Return options come after that selection."
+        state.next_actions = [
+            "Choose a departure flight to start the two-step flight flow.",
+            *[action for action in state.next_actions if "return" not in action.lower()],
+        ]
+
     def _write_flow_artifact(self, state: ResearchShortlistState) -> None:
         artifacts = dict(state.artifacts or {})
         artifacts["flight_flow"] = {
@@ -240,6 +298,8 @@ class FlightFlowService:
 
     def _return_options(self, state: ResearchShortlistState | None) -> list[FlightOption]:
         if state is None:
+            return []
+        if self._selected_departure(state) is None:
             return []
         return [option for option in state.flight_options if self._flight_role(option) == "return"]
 
@@ -276,6 +336,9 @@ class FlightFlowService:
 
     def _selected_return(self, state: ResearchShortlistState | None) -> FlightOption | None:
         if state is None:
+            return None
+        selected_departure = self._selected_departure(state)
+        if selected_departure is None:
             return None
         selection = state.artifacts.get("flight_selection") or {}
         option_id = str(selection.get("selected_return_option_id") or "")
