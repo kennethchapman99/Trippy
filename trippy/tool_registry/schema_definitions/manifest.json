@@ -1,0 +1,65 @@
+{
+  "version": "1.0",
+  "required_envelope_fields": [
+    "tool_id",
+    "source",
+    "mode",
+    "type",
+    "schema_version",
+    "confidence",
+    "last_checked_at",
+    "stale_after_minutes",
+    "summary",
+    "data",
+    "warnings",
+    "risk_flags",
+    "source_urls"
+  ],
+  "schemas": [
+    {
+      "id": "flight_option.v1",
+      "type": "flight_option",
+      "description": "Normalized flight option or flight route search result."
+    },
+    {
+      "id": "lodging_option.v1",
+      "type": "lodging_option",
+      "description": "Normalized lodging option result including family-fit and booking-readiness metadata."
+    },
+    {
+      "id": "restaurant_option.v1",
+      "type": "restaurant_option",
+      "description": "Normalized restaurant discovery result including reservation, open-hours, and fit metadata."
+    },
+    {
+      "id": "activity_option.v1",
+      "type": "activity_option",
+      "description": "Normalized tour/activity result including duration, age-fit, safety, and availability metadata."
+    },
+    {
+      "id": "weather_result.v1",
+      "type": "weather_result",
+      "description": "Normalized weather context for planning and itinerary risk."
+    },
+    {
+      "id": "route_result.v1",
+      "type": "route_result",
+      "description": "Normalized maps/distance/routing result for timeline validation."
+    },
+    {
+      "id": "travel_advisory_result.v1",
+      "type": "travel_advisory_result",
+      "description": "Normalized official travel advisory result."
+    },
+    {
+      "id": "itinerary_validation_result.v1",
+      "type": "itinerary_validation_result",
+      "description": "Normalized itinerary validation output combining freshness, timing, source, and risk checks."
+    },
+    {
+      "id": "tool_error.v1",
+      "type": "tool_error",
+      "description": "Typed tool failure envelope returned instead of prose errors."
+    }
+  ]
+}
