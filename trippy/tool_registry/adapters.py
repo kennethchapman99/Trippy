@@ -12,7 +12,14 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from trippy.tool_registry.schemas import HealthcheckResult, ToolDescription, ToolError, ToolResult, utc_now_iso
+from trippy.tool_registry.schemas import (
+    HealthcheckResult,
+    ToolDescription,
+    ToolError,
+    ToolMode,
+    ToolResult,
+    utc_now_iso,
+)
 
 
 class ToolAdapter(ABC):
@@ -63,7 +70,7 @@ class ToolAdapter(ABC):
     def _result(
         self,
         *,
-        mode: str,
+        mode: ToolMode,
         summary: str,
         data: dict[str, Any],
         confidence: float,
@@ -89,10 +96,11 @@ class ToolAdapter(ABC):
         return self.validate_output(payload).model_dump(mode="json")
 
     def _error(self, code: str, message: str) -> dict[str, Any]:
+        error_mode: ToolMode = "fixture" if self.description.status == "fixture" else "dry_run"
         payload = ToolError(
             tool_id=self.description.id,
             source=self.description.command,
-            mode="fixture" if self.description.status == "fixture" else "dry_run",
+            mode=error_mode,
             last_checked_at=utc_now_iso(),
             summary=message,
             data={"code": code, "message": message},
@@ -124,16 +132,19 @@ class FixtureToolAdapter(ToolAdapter):
     def _fixture(self, input_data: dict[str, Any]) -> dict[str, Any]:
         builder = _FIXTURE_BUILDERS.get(self.description.schema, _generic_fixture_data)
         data = builder(self.description.id, input_data)
+        summary = data.pop("summary")
+        risk_flags = data.pop("risk_flags", [])
+        source_urls = data.pop("source_urls", [])
         return self._result(
             mode="fixture",
-            summary=data.pop("summary"),
+            summary=summary,
             data=data,
             confidence=0.62,
             warnings=[
                 "Fixture/mock mode: this result validates the final interface but is not live inventory."
             ],
-            risk_flags=data.pop("risk_flags", []),
-            source_urls=data.pop("source_urls", []),
+            risk_flags=risk_flags,
+            source_urls=source_urls,
         )
 
 
