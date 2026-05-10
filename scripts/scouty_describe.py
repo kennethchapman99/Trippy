@@ -71,7 +71,7 @@ def main() -> None:
         "healthcheck_command": "python scripts/trippy_tool_gateway.py healthcheck",
         "fixture_mode_command": "python scripts/trippy_tool_gateway.py run flight_search '{\"origin\":\"YYZ\",\"destination\":\"SCL\"}'",
         "dry_run_command": "python scripts/trippy_tool_gateway.py dry-run lodging_search '{\"destination\":\"Valparaiso\"}'",
-        "test_command": "uv run pytest tests/unit/test_tool_registry_gateway.py tests/unit/test_hermes_orchestrtration.py",
+        "test_command": "uv run pytest tests/unit/test_tool_registry_gateway.py tests/unit/test_hermes_orchestration.py",
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
 
