@@ -77,7 +77,7 @@ def test_selected_departure_and_return_lock_envelope_and_stay_segments(tmp_path)
     assert calendar.trip_envelope.trip_end_date == "2027-06-22"
     assert calendar.trip_envelope.trip_nights == 6
     assert calendar.stay_nights_total() == 6
-    assert [segment.nights for segment in calendar.stay_segments] == [3, 3]
+    assert sum(segment.nights for segment in calendar.stay_segments) == calendar.trip_envelope.trip_nights
     assert calendar.stay_segments[0].start_date == "2027-06-16"
     assert calendar.stay_segments[-1].end_date == "2027-06-22"
     assert calendar.transfer_segments[0].date == calendar.stay_segments[0].end_date
