@@ -33,6 +33,7 @@ from trippy.models.shortlists import (
     SourceValidation,
     VerificationStatus,
 )
+from trippy.models.trip_calendar import TripCalendarState
 from trippy.services.destination_profiles import profile_for_intake
 from trippy.services.flight_shortlist import FlightShortlistService
 from trippy.services.flight_trip_envelope import (
@@ -42,6 +43,7 @@ from trippy.services.flight_trip_envelope import (
 )
 from trippy.services.scanner_fallback import run_scanner_fallback, scanner_fallback_available
 from trippy.services.shortlist_store import ShortlistStore
+from trippy.services.trip_calendar import TripCalendarService
 from trippy.services.trip_intake import TripIntakeService
 from trippy.services.trip_planner import TripPlannerService
 
@@ -75,10 +77,15 @@ class FlightFlowService:
         intake_service: TripIntakeService | None = None,
         planner_service: TripPlannerService | None = None,
         store: ShortlistStore | None = None,
+        calendar_service: TripCalendarService | None = None,
     ) -> None:
         self._intakes = intake_service or TripIntakeService()
         self._planner = planner_service or TripPlannerService(self._intakes)
         self._store = store or ShortlistStore()
+        self._calendar = calendar_service or TripCalendarService(
+            intake_service=self._intakes,
+            planner_service=self._planner,
+        )
 
     def get_state(self, trip_id: str) -> dict[str, Any]:
         state = self._store.load(trip_id, ShortlistCategory.FLIGHTS)
@@ -270,6 +277,7 @@ class FlightFlowService:
             apply_trip_envelope_artifacts(state)
             state = self._store.save(state)
 
+        calendar = self._sync_calendar(trip_id, state)
         departure_options = self._departure_options(state)
         return_options = self._return_options(state)
         transfer_options = self._inter_location_options(state)
@@ -290,6 +298,10 @@ class FlightFlowService:
             "selected_departure": self._option_json(selected_departure),
             "selected_return": self._option_json(selected_return),
             "trip_envelope": envelope,
+            "trip_calendar_status": calendar.status.value if calendar else "unavailable",
+            "calendar_version": calendar.calendar_version if calendar else None,
+            "date_dependency_hash": calendar.date_dependency_hash if calendar else "",
+            "calendar_blocking_issues": calendar.integrity.blocking_issues if calendar else [],
             "departure_options": [self._option_json(option) for option in departure_options],
             "return_options": [self._option_json(option) for option in return_options],
             "inter_location_options": [self._option_json(option) for option in transfer_options],
@@ -303,12 +315,42 @@ class FlightFlowService:
                 "inter_location_flights_do_not_define_trip_dates": True,
                 "downstream_finalization_requires_locked_envelope": True,
                 "scanner_handoff_rows_are_not_selectable_until_exact_evidence_exists": True,
+                "canonical_calendar_tracks_booking_integrity": True,
             },
         }
         return {
             "flight_flow": flow,
+            "trip_calendar": calendar.model_dump(mode="json") if calendar else None,
             "shortlist": state.model_dump(mode="json") if state else None,
         }
+
+    def _sync_calendar(
+        self,
+        trip_id: str,
+        state: ResearchShortlistState | None,
+    ) -> TripCalendarState | None:
+        """Synchronize canonical calendar from the current flight flow state.
+
+        The flight flow remains the only writer of envelope-flight selection, but
+        the calendar service becomes the durable source of trip date truth for all
+        downstream booking-sensitive workflows.
+        """
+        intake = self._intakes.load(trip_id)
+        calendar = self._calendar.load(trip_id)
+        if calendar is None and intake is not None:
+            calendar = self._calendar.from_intake(intake)
+        if calendar is None:
+            return None
+        if state is not None:
+            calendar = self._calendar.apply_flight_state(calendar, state)
+            option = self._selected_plan_option(trip_id)
+            if option is not None and calendar.envelope_locked and not calendar.stay_segments:
+                calendar = self._calendar.apply_plan_option(calendar, option)
+        return self._calendar.save(calendar)
+
+    def _selected_plan_option(self, trip_id: str) -> Any | None:
+        draft = self._planner.load_draft(trip_id)
+        return draft.get_option() if draft is not None else None
 
     def _ensure_scanner_handoff(
         self,
@@ -598,6 +640,7 @@ class FlightFlowService:
             "date_constraint_owner": "selected_departure_plus_selected_return",
             "inter_location_flights_are_downstream": True,
             "scanner_handoff_policy": "exact_evidence_required_no_made_up_flight_data",
+            "canonical_calendar_owner": "trippy.services.trip_calendar.TripCalendarService",
         }
         state.artifacts = artifacts
 
