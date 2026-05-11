@@ -34,7 +34,7 @@ access, and a learning loop that persists lessons across trips.
 
 ```
 trippy/
-  agent.py              Hermes agent — streaming, tool-calling, memory-aware
+  agent.py              Transitional custom agent loop; Hermes-native orchestration should move to the Hermes profile
   config.py             Environment config (paths, API keys)
   models/               Canonical Pydantic schemas (source of truth)
     trip.py             Trip, Segment, Stay, Confirmation, RiskFlag, ...
@@ -48,16 +48,17 @@ trippy/
     dashboard.py        Dashboard tiles and export models
     retrospective.py    Post-trip retrospective models
     profile.py          FamilyProfile, TravelerProfile
-  memory/               Hermes memory management
+  memory/               Trippy-local memory store and review-gated proposal support
     store.py            JSON-backed MemoryStore (versioned, categorized)
     preference_writer.py  Extract durable preference candidates from trip evidence
     profile_manager.py  Family profile CRUD
-  mcp/                  MCP server — Google API boundary
+  mcp/                  MCP server — Google tools plus Trippy domain tool boundary
     server.py           FastMCP entry point
     gmail_tools.py      Gmail search/read/attachment tools
     sheets_tools.py     Sheets create/read/write/template tools
     drive_tools.py      Drive search/list tools
-  skills/               Hermes skills (self-improvement surface)
+    trippy_tools.py     Canonical trip, shortlist, friction, sheet sync, and learning tools
+  skills/               Legacy/internal skill definitions and Python runners
     definitions/        Skill .md specs (one per skill)
     runners/            Python skill execution modules
   services/             Core business logic
@@ -87,6 +88,13 @@ trippy/
   importers/            Sheet importing pipeline (Drive → parse → canonical)
   cli.py                Typer CLI (command: trippy)
   thin_slice.py         End-to-end demo of the full flow (no real credentials needed)
+
+hermes-skills/          Source-controlled Hermes-native skill templates
+  trippy-gmail-confirmation-reconciler/
+  trippy-trip-date-guardian/
+  trippy-flight-selection-workflow/
+  trippy-lodging-structure-planner/
+  trippy-friction-auditor/
 ```
 
 **Key design rules:**
@@ -95,6 +103,34 @@ trippy/
 - Memory holds durable truths (preferences, profile). Trip-specific facts stay in trip state.
 - Learning is review-gated: workflows and feedback create proposals; only `trippy learn approve` mutates memory or skill files.
 - Skills are the self-improvement surface, but skill edits remain human-approved.
+
+---
+
+## Hermes-native operating model
+
+Trippy should run as a Hermes-native system, not as a custom agent that merely borrows Hermes patterns.
+
+- Hermes profile `trippy` owns orchestration, durable memory, skill discovery, tool permissions, session continuity, and reviewable self-improvement.
+- Trippy owns deterministic travel logic, canonical state, UI, source evidence, sheet sync, and friction scoring.
+- `uv run python -m trippy.mcp.server` exposes the safe tool boundary Hermes should use.
+- `trippy/agent.py` remains transitional/legacy compatibility. New orchestration should move to the Hermes profile and MCP tools.
+- Source-controlled Hermes skill templates live in `hermes-skills/` and should be copied/synced into the runtime Hermes `trippy` profile.
+
+Important docs:
+- `docs/hermes-native-architecture.md`
+- `docs/hermes-profile-trippy.md`
+
+First Hermes-native thin slice:
+
+```text
+Gmail confirmation → canonical trip update → Google Sheet sync → friction audit → review-gated learning proposal
+```
+
+Critical date guardrail:
+- Departure flight selection sets outbound timing/start constraints.
+- Return flight selection sets trip end constraints.
+- Without a selected return flight or explicit human confirmation, downstream lodging/car/activity dates remain provisional.
+- After any date boundary change, run a friction audit.
 
 ---
 
@@ -156,10 +192,10 @@ uv run trippy retro <trip-id> --worked "..." --friction "..." --hard-rule "..."
 # Run the end-to-end demo (no credentials required)
 uv run python -m trippy.thin_slice
 
-# Start the agent
+# Start the transitional local agent
 uv run trippy agent
 
-# Start the MCP server (for tool access from the agent)
+# Start the MCP server for Hermes / Claude Code / MCP clients
 uv run python -m trippy.mcp.server
 
 # Initialize the database
@@ -266,7 +302,7 @@ python scripts/firecrawl_travel_probe.py \
 
 ## Skills
 
-Six Hermes skills are registered and callable by the agent:
+Legacy/internal Trippy skills remain available to the transitional local agent:
 
 | Skill | Purpose |
 |---|---|
@@ -277,12 +313,14 @@ Six Hermes skills are registered and callable by the agent:
 | `trippy-flight-friction-audit` | Audit a trip for risks (layovers, passports, timing) |
 | `trippy-family-itinerary-builder` | Build a day-by-day draft itinerary |
 
+Hermes-native skill templates are in `hermes-skills/` and should become the runtime skills for the Hermes `trippy` profile.
+
 ---
 
 ## Development
 
 ```bash
-uv run pytest            # 248 passing tests, 5 skipped
+uv run pytest            # test suite
 uv run mypy trippy/      # type checking
 uv run ruff check .      # lint
 uv run ruff format .     # format
@@ -326,16 +364,17 @@ first.
 
 ## Current Status
 
-**Phase 1 — Hermes-native foundation: complete.**
+**Phase 1 — Hermes-native foundation: in progress.**
 
-The full architecture is in place and all CI checks pass:
+The repo now contains the key pieces for a Hermes-native migration:
 
 - [x] Canonical Pydantic models (`Trip`, `Segment`, `Stay`, `Confirmation`, `RiskFlag`, ...)
 - [x] JSON-backed MemoryStore with versioning, categories, and confidence scoring
 - [x] Deterministic `FrictionDetector` (passport expiry, tight connections, missing confirmations, check-in gaps, family bed fit, city/rental fit, pacing, tours, entry/health/cash readiness)
-- [x] All 6 Hermes skills defined and runnable
-- [x] MCP server with Gmail, Sheets, and Drive tools
-- [x] Hermes agent loop (streaming, tool-calling, memory-injection)
+- [x] Legacy/internal skill definitions and runners
+- [x] Hermes-native skill templates under `hermes-skills/`
+- [x] MCP server with Gmail, Sheets, Drive, and Trippy domain tools
+- [x] Transitional local agent loop in `trippy/agent.py`
 - [x] Full Typer CLI (`trippy agent`, `trippy db-init`, `trippy import-drive`, ...)
 - [x] SQLite persistence with Alembic migrations
 - [x] Setup doctor and Google OAuth validator
@@ -343,7 +382,8 @@ The full architecture is in place and all CI checks pass:
 - [x] Country-level priors from historical ratings and notes
 - [x] Past-trip intelligence mining and trip idea comparison
 - [x] Source registry, map artifact generation, dashboard export, and retrospective proposals
-- [x] 248 passing tests, 5 skipped, mypy clean, ruff clean
+- [ ] Runtime Hermes `trippy` profile configured outside the repo
+- [ ] First end-to-end Hermes-native thin slice verified live
 
 ---
 
@@ -367,8 +407,8 @@ Run `trippy-gmail-reconciler` live: fetch new booking confirmations from Gmail, 
 them with Claude, link them to the correct trip, update both JSON state and the Sheet.
 
 ### Phase 6 — Self-improving skills
-After each successful workflow, have the agent assess whether a skill definition should
-be updated based on what it learned. Persist the updated `.md` only after review approval
+After each successful workflow, have the Hermes `trippy` profile assess whether a skill definition should
+be updated based on what it learned. Persist the updated skill only after review approval
 and track skill versions.
 
 ---
