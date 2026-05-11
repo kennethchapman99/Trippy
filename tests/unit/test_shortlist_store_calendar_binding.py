@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from trippy import config
 from trippy.models.shortlists import (
     LodgingOption,
     LiveDataStatus,
@@ -15,10 +16,11 @@ from trippy.services.shortlist_store import ShortlistStore
 from trippy.services.trip_calendar import TripCalendarService
 
 
-def test_shortlist_store_binds_lodging_to_existing_calendar(tmp_path) -> None:
+def test_shortlist_store_binds_lodging_to_existing_calendar(tmp_path, monkeypatch) -> None:
     trip_id = "calendar-bound-trip"
     calendar_dir = tmp_path / "calendars"
     shortlist_dir = tmp_path / "shortlists"
+    monkeypatch.setattr(config, "CALENDARS_PATH", calendar_dir, raising=False)
 
     calendar = TripCalendarState(
         trip_id=trip_id,
