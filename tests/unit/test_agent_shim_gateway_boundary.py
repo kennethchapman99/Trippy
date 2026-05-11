@@ -6,6 +6,10 @@ from typing import Any
 from trippy.agent_shim import TrippyHermesAgent, hermes_tool_definitions
 
 
+class DummyAnthropicClient:
+    pass
+
+
 class RecordingOrchestrator:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any], bool]] = []
@@ -44,7 +48,10 @@ def test_agent_tool_surface_only_exposes_gateway_not_direct_web_tools() -> None:
 
 def test_agent_external_tool_execution_routes_to_orchestrator_gateway() -> None:
     orchestrator: Any = RecordingOrchestrator()
-    agent = TrippyHermesAgent(anthropic_client=None, orchestrator=orchestrator)
+    agent = TrippyHermesAgent(
+        anthropic_client=DummyAnthropicClient(),
+        orchestrator=orchestrator,
+    )
 
     raw = agent.execute_tool(
         "call_trippy_tool",
