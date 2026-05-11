@@ -8,15 +8,24 @@ export interface FlightFlowState {
   selected_departure: FlightOption | null;
   selected_return: FlightOption | null;
   trip_envelope: Record<string, unknown> | null;
+  trip_calendar_status?: string;
+  calendar_version?: number | null;
+  date_dependency_hash?: string;
+  calendar_blocking_issues?: string[];
   departure_options: FlightOption[];
   return_options: FlightOption[];
+  inter_location_options?: FlightOption[];
   return_search: Record<string, unknown> | null;
   can_continue: boolean;
+  downstream_unlocked?: boolean;
+  date_source?: string;
   next_action: string;
+  invariants?: Record<string, boolean>;
 }
 
 export interface FlightFlowResponse {
   flight_flow: FlightFlowState;
+  trip_calendar?: Record<string, unknown> | null;
   shortlist: ShortlistState | null;
 }
 
