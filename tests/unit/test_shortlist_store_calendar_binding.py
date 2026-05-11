@@ -11,7 +11,11 @@ from trippy.models.shortlists import (
     ShortlistCategory,
     VerificationStatus,
 )
-from trippy.models.trip_calendar import StaySegment, TripCalendarState, TripEnvelope
+from trippy.models.trip_calendar import (
+    StaySegment,
+    TripCalendarState,
+    TripEnvelope,
+)
 from trippy.services.shortlist_store import ShortlistStore
 from trippy.services.trip_calendar import TripCalendarService
 
