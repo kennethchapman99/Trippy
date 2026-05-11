@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from trippy.models.shortlists import (
-    LodgingOption,
     LiveDataStatus,
+    LodgingOption,
     RecommendationGrade,
     ResearchShortlistState,
     ShortlistCategory,
