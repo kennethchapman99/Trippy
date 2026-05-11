@@ -95,11 +95,13 @@ class TrippyHermesAgent:
     def __init__(
         self,
         *,
-        anthropic_client: anthropic.Anthropic | None = None,
+        anthropic_client: Any | None = None,
         orchestrator: HermesCompatibilityOrchestrator | None = None,
         trips_dir: Path | None = None,
     ) -> None:
-        self._client = anthropic_client or anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        self._client: Any = anthropic_client or anthropic.Anthropic(
+            api_key=config.ANTHROPIC_API_KEY
+        )
         self._orchestrator = orchestrator or HermesCompatibilityOrchestrator()
         self._trip_state = TripStateService(trips_dir=trips_dir or config.TRIPS_PATH)
         self._history: list[dict[str, Any]] = []
