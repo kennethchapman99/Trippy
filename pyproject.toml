@@ -51,6 +51,8 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501", "B008"]
 
 [tool.ruff.lint.per-file-ignores]
+"tests/unit/test_calendar_binding.py" = ["I001"]
+"tests/unit/test_shortlist_store_calendar_binding.py" = ["I001"]
 "trippy/mcp/trippy_tools.py" = ["SIM108"]
 "trippy/services/flight_shortlist.py" = ["F821", "I001"]
 "trippy/services/flight_trip_envelope.py" = ["I001"]
