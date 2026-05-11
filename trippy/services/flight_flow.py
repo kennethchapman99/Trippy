@@ -34,6 +34,7 @@ from trippy.models.shortlists import (
     VerificationStatus,
 )
 from trippy.models.trip_calendar import TripCalendarState
+from trippy.services.calendar_binding import CalendarBindingService
 from trippy.services.destination_profiles import profile_for_intake
 from trippy.services.flight_shortlist import FlightShortlistService
 from trippy.services.flight_trip_envelope import (
@@ -278,6 +279,9 @@ class FlightFlowService:
             state = self._store.save(state)
 
         calendar = self._sync_calendar(trip_id, state)
+        if state is not None and calendar is not None:
+            state = CalendarBindingService().bind_state(calendar, state)
+            state = self._store.save(state)
         departure_options = self._departure_options(state)
         return_options = self._return_options(state)
         transfer_options = self._inter_location_options(state)
