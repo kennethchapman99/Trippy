@@ -8,7 +8,8 @@ compatible.
 
 from __future__ import annotations
 
-from typing import Iterable, Protocol
+from collections.abc import Iterable
+from typing import Protocol
 
 from trippy.models.shortlists import (
     CalendarDependencyStatus,
