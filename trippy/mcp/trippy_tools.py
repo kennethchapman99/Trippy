@@ -8,7 +8,6 @@ legacy custom agent router in ``trippy.agent``.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -33,10 +32,7 @@ def register_trippy_tools(mcp: FastMCP) -> None:
 
         svc = TripStateService()
         try:
-            if status:
-                trips = svc.find_by_status(TripStatus(status))
-            else:
-                trips = svc.load_all()
+            trips = svc.find_by_status(TripStatus(status)) if status else svc.load_all()
             return {"trips": [trip.summary() for trip in trips]}
         except Exception as exc:
             logger.exception("trippy_list_trips failed")
@@ -67,7 +63,7 @@ def register_trippy_tools(mcp: FastMCP) -> None:
         children: int = 3,
         goals: list[str] | None = None,
         avoidances: list[str] | None = None,
-        trip_id: str | None = None,
+        trip_id: str = "",
     ) -> dict[str, Any]:
         """Create a Trippy trip intake through the deterministic intake service."""
         from trippy.models.trip_planning import (
@@ -81,13 +77,14 @@ def register_trippy_tools(mcp: FastMCP) -> None:
 
         try:
             normalized_party = party_type.strip().lower().replace("-", "_").replace(" ", "_")
+            duration_payload: Any = duration_days
             intake = TripIntake(
                 trip_id=trip_id,
                 mode=TripIntakeMode.SELECTED_DESTINATION,
                 trip_name=trip_name,
                 destination_seeds=destination,
                 travel_window=TravelWindow(label=travel_window or None),
-                duration_days=duration_days,
+                duration_days=duration_payload,
                 travelers=adults + children,
                 party=TripParty(
                     party_type=TripPartyType(normalized_party),
@@ -233,18 +230,20 @@ def register_trippy_tools(mcp: FastMCP) -> None:
         future_learning: bool = False,
     ) -> dict[str, Any]:
         """Record reviewed workflow feedback for the Trippy learning loop."""
-        from trippy.services.learning import LearningEventStore
+        from trippy.services.learning import FeedbackRating, LearningEventStore, UserFeedback
 
         try:
-            store = LearningEventStore(Path(config.LEARNING_PATH), memory_path=config.MEMORY_PATH)
-            event = store.add_feedback(
-                workflow_id=workflow_id,
-                rating=rating,
-                notes=notes,
-                correction=correction,
-                future_learning=future_learning,
+            store = LearningEventStore(config.LEARNING_PATH, memory_path=config.MEMORY_PATH)
+            proposals = store.add_feedback(
+                UserFeedback(
+                    workflow_id=workflow_id,
+                    rating=FeedbackRating(rating),
+                    notes=notes,
+                    correction=correction or None,
+                    future_learning=future_learning,
+                )
             )
-            return event.model_dump(mode="json")
+            return {"ok": True, "proposal_ids": [proposal.id for proposal in proposals]}
         except Exception as exc:
             logger.exception("trippy_record_learning_event failed")
             return {"error": str(exc), "workflow_id": workflow_id}
@@ -264,11 +263,11 @@ def register_trippy_tools(mcp: FastMCP) -> None:
         from trippy.services.learning import LearningEventStore, LearningProposal, ProposalType
 
         try:
-            store = LearningEventStore(Path(config.LEARNING_PATH), memory_path=config.MEMORY_PATH)
+            store = LearningEventStore(config.LEARNING_PATH, memory_path=config.MEMORY_PATH)
             proposals = store.add_proposals(
                 [
                     LearningProposal(
-                        proposal_type=ProposalType.SKILL,
+                        proposal_type=ProposalType.SKILL_PATCH,
                         summary=summary,
                         before={"skill_name": skill_name, "content": before},
                         after={"skill_name": skill_name, "content": after},
