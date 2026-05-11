@@ -167,10 +167,9 @@ class TripCalendarService:
                 "Selected departure and return flights now define the authoritative trip envelope.",
             ]
         )
-        calendar = self._maybe_bump(calendar, previous_hash, "trip_envelope_locked_or_changed")
         if calendar.stay_segments:
             calendar = self._normalize_stay_dates(calendar)
-        return calendar
+        return self._maybe_bump(calendar, previous_hash, "trip_envelope_locked_or_changed")
 
     def apply_plan_option(
         self,
@@ -289,6 +288,11 @@ class TripCalendarService:
         nights_by_region = {
             segment.region: segment.nights for segment in calendar.stay_segments
         }
+        if calendar.trip_envelope.trip_nights is not None:
+            nights_by_region = _rebalance_nights(
+                nights_by_region,
+                calendar.trip_envelope.trip_nights,
+            )
         calendar.stay_segments = _segments_from_nights(calendar, nights_by_region)
         calendar.transfer_segments = _transfer_segments_from_stays(calendar.stay_segments)
         return calendar
