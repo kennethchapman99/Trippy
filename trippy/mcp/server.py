@@ -1,7 +1,7 @@
-"""Trippy Google Tools MCP server.
+"""Trippy MCP server.
 
-Exposes Gmail, Google Sheets, and Google Drive as MCP tools so the Hermes
-agent can call them as first-class tool invocations rather than Python imports.
+Exposes Google Workspace tools and Trippy domain tools so Hermes can call them
+as first-class tool invocations rather than Python imports.
 
 Run with:
     python -m trippy.mcp.server
@@ -19,21 +19,24 @@ from mcp.server.fastmcp import FastMCP
 from trippy.mcp.drive_tools import register_drive_tools
 from trippy.mcp.gmail_tools import register_gmail_tools
 from trippy.mcp.sheets_tools import register_sheets_tools
+from trippy.mcp.trippy_tools import register_trippy_tools
 
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
-    "trippy-google-tools",
+    "trippy-tools",
     instructions=(
-        "Google Workspace tools for the Trippy travel concierge. "
-        "Use these to read Gmail confirmations, manage Google Sheets trip records, "
-        "and search Google Drive for past trip files."
+        "Tools for the Trippy travel concierge. Use Google Workspace tools to read "
+        "Gmail confirmations, manage Google Sheets trip records, and search Drive. "
+        "Use Trippy domain tools for canonical trip state, shortlists, sheet sync, "
+        "friction audits, and review-gated learning proposals."
     ),
 )
 
 register_gmail_tools(mcp)
 register_sheets_tools(mcp)
 register_drive_tools(mcp)
+register_trippy_tools(mcp)
 
 
 def main() -> None:
