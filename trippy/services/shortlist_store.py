@@ -34,6 +34,7 @@ class ShortlistStore:
     def save(self, state: ResearchShortlistState) -> ResearchShortlistState:
         if state.category == ShortlistCategory.FLIGHTS:
             _sanitize_flight_rows(state)
+        state = _bind_calendar_if_available(state)
         self._ensure_dir()
         self.path_for(state.trip_id, state.category).write_text(
             state.model_dump_json(indent=2),
@@ -185,6 +186,26 @@ def _selected_region_terms(selected: list[str]) -> list[str]:
 
 
 USD_TO_CAD_RATE = 1.37
+
+
+def _bind_calendar_if_available(state: ResearchShortlistState) -> ResearchShortlistState:
+    """Stamp shortlist rows with calendar dependency metadata when a calendar exists.
+
+    The calendar is authoritative, but shortlist persistence should not fail merely
+    because a trip is still in early/provisional planning or old local data is
+    missing a calendar file. FlightFlowService performs a second bind after it
+    synchronizes the latest envelope into TripCalendarState.
+    """
+    try:
+        from trippy.services.calendar_binding import CalendarBindingService
+        from trippy.services.trip_calendar import TripCalendarService
+
+        calendar = TripCalendarService().load(state.trip_id)
+        if calendar is None:
+            return state
+        return CalendarBindingService().bind_state(calendar, state)
+    except (FileNotFoundError, ValueError, TypeError, AttributeError):
+        return state
 
 
 def _sanitize_flight_rows(state: ResearchShortlistState) -> None:
