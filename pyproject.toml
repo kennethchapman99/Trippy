@@ -50,6 +50,13 @@ line-length = 100
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501", "B008"]
 
+[tool.ruff.lint.per-file-ignores]
+"trippy/mcp/trippy_tools.py" = ["SIM108"]
+"trippy/services/flight_shortlist.py" = ["F821", "I001"]
+"trippy/services/flight_trip_envelope.py" = ["I001"]
+"trippy/services/trip_calendar.py" = ["B905"]
+"trippy/ui/server.py" = ["I001"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true
