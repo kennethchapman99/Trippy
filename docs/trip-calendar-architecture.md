@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Trip dates are booking guardrails, not display text. Trippy must have one canonical date model that downstream workflows obey.
+Trip dates are booking guardrails, not display text. Trippy needs one canonical date model that downstream workflows obey.
 
-The canonical owner is:
+The canonical owner introduced by this branch is:
 
 ```text
 trippy.services.trip_calendar.TripCalendarService
@@ -17,7 +17,7 @@ trippy.models.trip_calendar.TripCalendarState
 - Selected departure and return flights define the outer trip envelope.
 - Stay segments define the inside of the trip.
 - Transfer segments test whether the stay boundaries are sane.
-- Booking-sensitive shortlist rows must be bound to the current calendar version/hash.
+- Booking-sensitive shortlist rows must eventually be bound to the current calendar version/hash before they can be booking-safe.
 
 ## State progression
 
@@ -85,7 +85,7 @@ This is a hard rule:
 - `trip_nights` is authoritative after the flight envelope is locked
 - lodging/stay structures must sum to `trip_nights`, not `duration_days`
 
-For example:
+Example:
 
 ```text
 arrival: 2027-06-16
@@ -113,30 +113,6 @@ Date-driving changes include:
 - transfer boundary change
 - manual calendar override
 
-## Binding shortlists to the calendar
-
-All booking-sensitive rows now support:
-
-- `calendar_version`
-- `date_dependency_hash`
-- `valid_for_start_date`
-- `valid_for_end_date`
-- `valid_for_segment_id`
-- `dependency_status`
-- `booking_safe`
-- `booking_blockers`
-
-`CalendarBindingService` deterministically marks rows as current/provisional/stale.
-
-Rows are not booking-safe when:
-
-- the trip envelope is not locked
-- the row was generated for a stale calendar hash
-- the row is a scanner handoff
-- the row is search-link only
-- the row lacks exact live evidence
-- the row does not match a current stay segment/date
-
 ## Flight flow integration
 
 `FlightFlowService` now synchronizes `TripCalendarState` from the current flight shortlist state.
@@ -157,22 +133,107 @@ Implemented in this branch:
 
 - canonical calendar models
 - calendar persistence service
-- envelope synchronization from selected flights
+- provisional calendar creation from intake
+- selected outbound state without falsely locking end date
+- envelope synchronization from selected departure + return flights
 - stay segment generation from selected plan options
 - transfer boundary creation from stay segments
 - invariant validation
 - calendar version/hash metadata
-- calendar dependency fields on all shortlist option rows
-- deterministic calendar binding service
-- unit tests for calendar and binding behavior
+- flight-flow payload synchronization
+- unit tests for calendar behavior
 
-## Remaining work
+## Required next slices
 
-The next slices should add:
+### P1 — Shortlist dependency fields
 
-1. UI endpoints for `GET /api/trips/{trip_id}/calendar` and stay-structure updates.
-2. Frontend Calendar Integrity panel.
-3. Lodging/car/activity services calling `CalendarBindingService` before saving.
-4. Boundary optimizer that compares alternate stay splits against transfer cost/friction.
-5. Workspace timeline generation directly from `TripCalendarState`.
-6. Full integration tests for single-location and multi-location flows.
+Extend booking-sensitive options with:
+
+- `calendar_version`
+- `date_dependency_hash`
+- `valid_for_start_date`
+- `valid_for_end_date`
+- `valid_for_segment_id`
+- `dependency_status`
+- `booking_safe`
+- `booking_blockers`
+
+Apply to:
+
+- flights
+- lodging
+- cars
+- activities
+
+### P2 — Calendar binding service
+
+Add a deterministic binding service that marks rows as:
+
+- current
+- provisional_no_envelope
+- stale_calendar_changed
+- missing_dates
+- invalid_region
+
+Rows must not be booking-safe when:
+
+- the trip envelope is not locked
+- the row was generated for a stale calendar hash
+- the row is a scanner handoff
+- the row is search-link only
+- the row lacks exact live evidence
+- the row does not match a current stay segment/date
+
+### P3 — Lodging integration
+
+- Make lodging searches segment-aware.
+- Bind each lodging option to a stay segment.
+- Validate check-in/check-out dates against canonical calendar.
+- Fix any remaining `duration_days` vs `trip_nights` comparisons.
+
+### P4 — Transfer boundary optimizer
+
+Add `trip_boundary_optimizer.py` to compare alternate stay splits.
+
+It should evaluate:
+
+- transfer date
+- transfer cost evidence
+- transfer timing
+- duration
+- family friction
+- lodging impact
+- activity impact
+
+It must never invent prices or availability.
+
+### P5 — Cars and activities
+
+- Cars must bind to envelope or stay segment dates.
+- Activities must bind to region/date windows.
+- Arrival days and transfer days should carry friction warnings.
+
+### P6 — UI
+
+Add a Calendar Integrity panel showing:
+
+- current calendar phase
+- start/end dates
+- trip nights
+- selected departure/return
+- stay split
+- transfer boundaries
+- stale options
+- blocking issues
+- next action
+
+Flight UI must show two separate required steps:
+
+1. Departure flight options
+2. Return flight options
+
+Return must remain disabled until departure is selected.
+
+## Acceptance bar
+
+Trippy is not booking-safe until it can prove that the selected booking options match the current canonical calendar version.
