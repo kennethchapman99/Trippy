@@ -12,7 +12,7 @@ from datetime import date, timedelta
 
 from pydantic import BaseModel, Field, field_validator
 
-from trippy.models.trip_calendar import StaySegment, TripCalendarState
+from trippy.models.trip_calendar import TripCalendarState
 
 
 class TransferEvidence(BaseModel):
@@ -141,9 +141,7 @@ def _candidate_from_nights(
             known_friction.append(evidence.friction_score)
 
     total_cost = sum(known_costs) if known_costs else None
-    average_friction = (
-        sum(known_friction) / len(known_friction) if known_friction else None
-    )
+    average_friction = sum(known_friction) / len(known_friction) if known_friction else None
     if missing_dates:
         warnings.append(
             "Transfer evidence is missing for one or more boundary dates; do not treat this split as booking-safe."
