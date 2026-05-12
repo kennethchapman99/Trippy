@@ -11,7 +11,12 @@ import re
 from datetime import date, datetime
 from typing import Literal
 
-from trippy.models.shortlists import FlightOption, ResearchShortlistState, ShortlistCategory, ShortlistRowStatus
+from trippy.models.shortlists import (
+    FlightOption,
+    ResearchShortlistState,
+    ShortlistCategory,
+    ShortlistRowStatus,
+)
 
 FlightSelectionKind = Literal["outbound", "return"]
 
