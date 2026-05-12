@@ -35,8 +35,8 @@ from trippy.models.trip_planning import (
 from trippy.services.activity_shortlist import ActivityShortlistService
 from trippy.services.car_shortlist import CarShortlistService
 from trippy.services.dashboard import DashboardService
-from trippy.services.flight_shortlist import FlightShortlistService
 from trippy.services.flight_flow import FlightFlowService
+from trippy.services.flight_shortlist import FlightShortlistService
 from trippy.services.learning import (
     FeedbackRating,
     LearningEventStore,
@@ -651,9 +651,9 @@ class TrippyUIService:
             trip_id,
             option_id,
             day=_int_or_none(payload.get("day")),
-            date_value=_optional_str(payload.get("date")),
-            start_time=_optional_str(payload.get("start_time")),
-            end_time=_optional_str(payload.get("end_time")),
+            date_value=_optional_str(payload.get("date")) or "",
+            start_time=_optional_str(payload.get("start_time")) or "",
+            end_time=_optional_str(payload.get("end_time")) or "",
             fixed=bool(payload.get("fixed", False)),
             notes=str(payload.get("notes") or "").strip(),
         )
@@ -908,9 +908,9 @@ class TrippyUIHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/logs":
                 query = parse_qs(urlparse(self.path).query)
-                trip_id = query.get("trip_id", [""])[0] or None
+                trip_id_filter = query.get("trip_id", [""])[0] or None
                 limit = _int(query.get("limit", ["50"])[0], 50)
-                self._send_json(self._ui.logs(trip_id=trip_id, limit=limit))
+                self._send_json(self._ui.logs(trip_id=trip_id_filter, limit=limit))
                 return
             if path == "/api/trip":
                 query = parse_qs(urlparse(self.path).query)
