@@ -48,6 +48,7 @@ from trippy.services.llm_accountant import LLMAccountant
 from trippy.services.lodging_shortlist import LodgingShortlistService
 from trippy.services.planning_advisor import PlanningAdvisorService
 from trippy.services.shortlist_store import ShortlistStore
+from trippy.services.trip_calendar_facade import TripCalendarFacade
 from trippy.services.trip_execution import TripExecutionService
 from trippy.services.trip_ideation import TripIdeationService
 from trippy.services.trip_intake import TripIntakeService
@@ -329,6 +330,18 @@ class TrippyUIService:
             "draft": draft.model_dump(mode="json"),
             "next_step": "Generate exact shortlists and prepare the workspace.",
         }
+
+    def trip_calendar(self, trip_id: str) -> dict[str, Any]:
+        return TripCalendarFacade(
+            intake_service=self._intakes,
+            planner_service=self._planner,
+        ).calendar_payload(trip_id)
+
+    def rebuild_trip_calendar(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return TripCalendarFacade(
+            intake_service=self._intakes,
+            planner_service=self._planner,
+        ).rebuild_calendar_payload(_trip_id(payload))
 
     def flight_flow_state(self, trip_id: str) -> dict[str, Any]:
         return FlightFlowService(self._intakes, self._planner).get_state(trip_id)
@@ -912,6 +925,11 @@ class TrippyUIHandler(BaseHTTPRequestHandler):
                 limit = _int(query.get("limit", ["50"])[0], 50)
                 self._send_json(self._ui.logs(trip_id=trip_id_filter, limit=limit))
                 return
+            if path == "/api/calendar":
+                trip_id = _query_value(query, "trip_id")
+                self._json(self.server.service.trip_calendar(trip_id))
+                return
+
             if path == "/api/trip":
                 query = parse_qs(urlparse(self.path).query)
                 trip_id = query.get("trip_id", [""])[0]
@@ -958,6 +976,10 @@ class TrippyUIHandler(BaseHTTPRequestHandler):
         payload: dict[str, Any] = {}
         try:
             payload = self._read_json()
+            if path == "/api/calendar/rebuild":
+                self._json(self.server.service.rebuild_trip_calendar(payload))
+                return
+
             if path == "/api/intake":
                 self._send_json(self._ui.create_intake(payload))
                 return
@@ -1369,6 +1391,12 @@ def _flight_candidate_notes(payload: dict[str, Any]) -> str:
             parts.append(f"{label}: {value}")
     return ". ".join(parts)
 
+
+def _query_value(query: dict[str, list[str]], key: str) -> str:
+    value = (query.get(key) or [""])[0].strip()
+    if not value:
+        raise ValueError(f"Missing required query parameter: {key}")
+    return value
 
 def _trip_id(payload: dict[str, Any]) -> str:
     trip_id = str(payload.get("trip_id") or "").strip()
