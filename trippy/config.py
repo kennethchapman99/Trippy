@@ -53,6 +53,7 @@ RESEARCH_PATH: Path = _expand("TRIPPY_RESEARCH_PATH", "~/.trippy/research")
 VAULT_PATH: Path = _expand("TRIPPY_VAULT_PATH", "~/.trippy/vault")
 EXPORT_PATH: Path = _expand("TRIPPY_EXPORT_PATH", "~/.trippy/export")
 LEARNING_PATH: Path = _expand("TRIPPY_LEARNING_PATH", "~/.trippy/learning")
+LLM_CACHE_PATH: Path = _expand("TRIPPY_LLM_CACHE_PATH", "~/.trippy/llm-cache")
 
 # Google OAuth
 GMAIL_CREDENTIALS_PATH: Path = _expand("GMAIL_CREDENTIALS_PATH", "~/.trippy/gmail_credentials.json")
@@ -94,6 +95,8 @@ TRIPPY_LODGING_LLM_ENABLED: bool = _bool("TRIPPY_LODGING_LLM_ENABLED", True)
 TRIPPY_GEOGRAPHY_LLM_ENABLED: bool = _bool("TRIPPY_GEOGRAPHY_LLM_ENABLED", True)
 TRIPPY_SOURCE_RESEARCH_LLM_ENABLED: bool = _bool("TRIPPY_SOURCE_RESEARCH_LLM_ENABLED", True)
 TRIPPY_FRICTION_LLM_ENABLED: bool = _bool("TRIPPY_FRICTION_LLM_ENABLED", False)
+LLM_CACHE_ENABLED: bool = _bool("TRIPPY_LLM_CACHE_ENABLED", True)
+LLM_CACHE_TTL_SECONDS: int = int(os.environ.get("TRIPPY_LLM_CACHE_TTL_SECONDS", "86400"))
 
 # Backward-compatible aliases.
 PLANNING_LLM_MODEL: str = TRIPPY_PLANNING_ADVISOR_MODEL
