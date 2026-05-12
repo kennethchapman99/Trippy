@@ -698,10 +698,10 @@ def _looks_like_iata(value: str) -> bool:
 
 def _curated_gateway_hints(values: list[str]) -> list[TravelAirportRef]:
     normalized = " ".join(_normalize_for_gateway_hint(value) for value in values)
-    hints = [
-        {
-            "needles": ("azores", "sao miguel", "ponta delgada"),
-            "airport": TravelAirportRef(
+    hints: list[tuple[tuple[str, ...], TravelAirportRef]] = [
+        (
+            ("azores", "sao miguel", "ponta delgada"),
+            TravelAirportRef(
                 iata_code="PDL",
                 name="Joao Paulo II Airport",
                 city="Ponta Delgada",
@@ -711,12 +711,11 @@ def _curated_gateway_hints(values: list[str]) -> list[TravelAirportRef]:
                 source="curated_gateway_hint",
                 requires_user_confirmation=True,
             ),
-        },
+        ),
     ]
-    for hint in hints:
-        if any(needle in normalized for needle in hint["needles"]):
-            airport = hint["airport"]
-            return [airport] if isinstance(airport, TravelAirportRef) else []
+    for needles, airport in hints:
+        if any(needle in normalized for needle in needles):
+            return [airport]
     return []
 
 

@@ -28,6 +28,12 @@ from trippy.models.shortlists import (
 from trippy.models.sources import TravelSourceCategory
 from trippy.services import serpapi_client
 from trippy.services.destination_profiles import profile_for_intake
+from trippy.services.flight_trip_envelope import (
+    apply_trip_envelope_artifacts,
+    normalized_iata_or_none,
+    select_flight_for_envelope,
+    split_options_by_phase,
+)
 from trippy.services.live_validation import LiveValidationService
 from trippy.services.scanner_fallback import run_scanner_fallback, scanner_fallback_available
 from trippy.services.serpapi_options import flight_options_from_serpapi
@@ -36,12 +42,6 @@ from trippy.services.shortlist_store import (
     ShortlistStore,
     source_plan,
     source_plan_payload,
-)
-from trippy.services.flight_trip_envelope import (
-    apply_trip_envelope_artifacts,
-    normalized_iata_or_none,
-    select_flight_for_envelope,
-    split_options_by_phase,
 )
 from trippy.services.source_research import SourceResearchService
 from trippy.services.trip_intake import TripIntakeService
@@ -115,7 +115,16 @@ class FlightShortlistService:
                 )
         if existing is not None and phase == "return":
             phase_options = split_options_by_phase(existing)
-            departure_options = list(phase_options.get("departure_options") or [])
+            departure_options_raw = phase_options.get("departure_options")
+            departure_options = (
+                [
+                    option
+                    for option in departure_options_raw
+                    if isinstance(option, FlightOption)
+                ]
+                if isinstance(departure_options_raw, list)
+                else []
+            )
             merged_options = [*departure_options, *options]
         else:
             merged_options = options
@@ -383,6 +392,105 @@ def _scanner_fallback_option(
             ],
         ),
     )
+
+
+def _return_search_handoff_options(
+    ctx: ShortlistContext,
+    existing: ResearchShortlistState,
+) -> list[FlightOption]:
+    """Create return-search handoff rows after departure selection.
+
+    This is intentionally not a fake live itinerary. It only creates a
+    source-linked return-search row when the selected departure defines a valid
+    reverse route.
+    """
+    selection = existing.artifacts.get("flight_selection") or {}
+    if not isinstance(selection, dict):
+        return []
+
+    outbound_id = str(selection.get("selected_outbound_option_id") or "")
+    if not outbound_id:
+        return []
+
+    outbound = next(
+        (option for option in existing.flight_options if option.option_id == outbound_id),
+        None,
+    )
+    if outbound is None:
+        return []
+
+    origin = normalized_iata_or_none(outbound.arrival_airport)
+    destination = normalized_iata_or_none(outbound.departure_airport)
+    if origin is None or destination is None:
+        return []
+
+    _, return_date = _flight_dates(ctx)
+    deep_link = _flight_source_url("Google Flights", origin, destination, ctx)
+
+    return [
+        FlightOption(
+            option_id="return-flight-search-1",
+            rank=1,
+            airline="Return flight search handoff",
+            flight_phase="return",
+            flight_numbers=[],
+            departure_date=return_date.isoformat(),
+            arrival_date=return_date.isoformat(),
+            departure_airport=origin,
+            arrival_airport=destination,
+            departure_time="not supplied",
+            arrival_time="not supplied",
+            stops=0,
+            total_travel_duration="source evidence required",
+            timing_fit=(
+                "Return search generated from selected departure route; exact "
+                "flight timing requires live provider or user-supplied evidence."
+            ),
+            fare_estimate_cad="source evidence required",
+            price_band="source evidence required",
+            baggage_cabin_notes="Baggage and fare rules require provider evidence.",
+            booking_source="Return flight search handoff",
+            deep_link=deep_link,
+            traveler_count=ctx.intake.party.total_travelers,
+            traveler_fit=f"Return route search for {ctx.intake.party.total_travelers} traveler(s).",
+            comparison_links=_flight_comparison_links(origin, destination, ctx),
+            friction_score=60,
+            family_comfort_score=45,
+            recommendation_grade=RecommendationGrade.CONDITIONAL,
+            tradeoffs=[
+                "This is a return-search handoff row, not a verified itinerary.",
+                "Use it to find exact return flight options before locking the trip envelope.",
+            ],
+            friction_flags=[
+                "return flight not selected",
+                "exact return itinerary requires source evidence",
+            ],
+            confidence_notes=[
+                "Generated from the selected departure flight route.",
+                "Does not prove live availability, fare, baggage, or schedule.",
+            ],
+            live_data_status=LiveDataStatus.HANDOFF_REQUIRED,
+            validation=SourceValidation(
+                source_name="Return flight search handoff",
+                source_type=SourceType.LIVE_SEARCH,
+                verification_status=VerificationStatus.MANUAL_REQUIRED,
+                confidence=0.2,
+                evidence_url=deep_link,
+                missing_fields=[
+                    "flight_numbers",
+                    "exact_departure_time",
+                    "exact_arrival_time",
+                    "total_duration",
+                    "exact_fare",
+                    "fare_rules",
+                    "baggage_terms",
+                ],
+                notes=[
+                    "Generated only because no exact live return offers were available."
+                ],
+            ),
+        )
+    ]
 
 
 def _normalize_flight_phase(value: str) -> str:
