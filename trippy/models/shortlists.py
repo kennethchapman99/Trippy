@@ -86,6 +86,33 @@ class LodgingFitCategory(StrEnum):
     WEAK = "weak_fit"
 
 
+class CalendarDependencyStatus(StrEnum):
+    UNKNOWN = "unknown"
+    CURRENT = "current"
+    STALE_CALENDAR_CHANGED = "stale_calendar_changed"
+    PROVISIONAL_NO_ENVELOPE = "provisional_no_envelope"
+    MISSING_DATES = "missing_dates"
+    INVALID_REGION = "invalid_region"
+
+
+class CalendarBinding(BaseModel):
+    """Calendar dependency metadata common to every booking-sensitive row.
+
+    These fields are optional for backward compatibility with existing shortlist JSON.
+    Rows should only become booking_safe when their dates and segment binding match
+    the current TripCalendarState calendar_version/date_dependency_hash.
+    """
+
+    calendar_version: int | None = None
+    date_dependency_hash: str = ""
+    valid_for_start_date: str = ""
+    valid_for_end_date: str = ""
+    valid_for_segment_id: str = ""
+    dependency_status: CalendarDependencyStatus = CalendarDependencyStatus.UNKNOWN
+    booking_safe: bool = False
+    booking_blockers: list[str] = Field(default_factory=list)
+
+
 class SourceValidation(BaseModel):
     source_name: str = ""
     source_type: SourceType = SourceType.SEARCH_HANDOFF
@@ -110,7 +137,7 @@ class SourceValidation(BaseModel):
         return max(0.0, min(1.0, value))
 
 
-class FlightOption(BaseModel):
+class FlightOption(CalendarBinding):
     option_id: str
     rank: int
     airline: str
@@ -158,7 +185,7 @@ class FlightOption(BaseModel):
         return max(0, min(100, value))
 
 
-class LodgingOption(BaseModel):
+class LodgingOption(CalendarBinding):
     option_id: str
     rank: int
     source: str
@@ -209,7 +236,7 @@ class LodgingOption(BaseModel):
         return max(0.0, min(1.0, value))
 
 
-class CarOption(BaseModel):
+class CarOption(CalendarBinding):
     option_id: str
     rank: int
     booking_source: str
@@ -251,7 +278,7 @@ class CarOption(BaseModel):
         return max(0, min(100, value))
 
 
-class ActivityOption(BaseModel):
+class ActivityOption(CalendarBinding):
     option_id: str
     rank: int
     activity_name: str

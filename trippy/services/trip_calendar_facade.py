@@ -27,9 +27,11 @@ class TripCalendarFacade:
         )
 
     def calendar_payload(self, trip_id: str) -> dict[str, Any]:
+        """Return the current calendar, lazily creating it from intake if needed."""
         return self._calendar.ui_payload(trip_id)
 
     def rebuild_calendar_payload(self, trip_id: str) -> dict[str, Any]:
+        """Rebuild calendar from intake, selected flight state, and selected plan."""
         calendar = self._calendar.rebuild_from_current_state(trip_id)
         return {
             "trip_id": trip_id,
